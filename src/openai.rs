@@ -96,6 +96,7 @@ mod tests {
             log_level: "debug".to_string(),
             bot_username: "openai_bot".to_string(),
             poll_interval_seconds: 60,
+            context_repo_path: None,
         }
     }
 

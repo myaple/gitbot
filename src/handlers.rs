@@ -5,6 +5,7 @@ use crate::config::AppSettings;
 use crate::models::{GitlabNoteEvent, OpenAIChatMessage, OpenAIChatRequest};
 use crate::gitlab::GitlabApiClient;
 use crate::openai::OpenAIApiClient;
+use crate::repo_context::RepoContextExtractor;
 
 // Helper function to extract context after bot mention
 fn extract_context_after_mention(note: &str, bot_name: &str) -> Option<String> {
@@ -66,6 +67,9 @@ pub async fn process_mention(
     
     let project_id = event.project.id;
     let is_issue: bool;
+    
+    // Create repo context extractor
+    let _context_extractor = RepoContextExtractor::new(gitlab_client.clone());
 
     match note_attributes.noteable_type.as_str() {
         "Issue" => {
@@ -90,8 +94,8 @@ pub async fn process_mention(
                 prompt_parts.push(format!("Title: {}", issue_details.title));
                 prompt_parts.push(format!("Description: {}", issue_details.description.as_deref().unwrap_or("N/A")));
                 prompt_parts.push(format!("User's specific request: {}", context));
-            } else { // No specific context, summarize
-                llm_task_description = format!("Please summarize this issue for user @{}.", event.user.username);
+            } else { // No specific context, summarize and suggest steps
+                llm_task_description = format!("Please summarize this issue for user @{} and suggest steps to address it.", event.user.username);
                 let issue = gitlab_client.get_issue(project_id, issue_iid).await
                     .map_err(|e| {
                         error!("Failed to get issue details for summary: {}", e);
@@ -103,6 +107,24 @@ pub async fn process_mention(
                 prompt_parts.push(format!("Author: {}", issue.author.name));
                 prompt_parts.push(format!("State: {}", issue.state));
                 if !issue.labels.is_empty() { prompt_parts.push(format!("Labels: {}", issue.labels.join(", "))); }
+                
+                // Add repository context
+                let repo_context_extractor = RepoContextExtractor::new(gitlab_client.clone());
+                match repo_context_extractor.extract_context_for_issue(
+                    &issue, 
+                    &event.project, 
+                    config.context_repo_path.as_deref()
+                ).await {
+                    Ok(context) => {
+                        prompt_parts.push(format!("Repository Context: {}", context));
+                    },
+                    Err(e) => {
+                        warn!("Failed to extract repository context: {}", e);
+                    }
+                }
+                
+                // Add instructions for steps
+                prompt_parts.push("Please provide a summary of the issue and suggest specific steps to address it based on the repository context.".to_string());
             }
         }
         "MergeRequest" => {
@@ -127,8 +149,8 @@ pub async fn process_mention(
                 prompt_parts.push(format!("Title: {}", mr_details.title));
                 prompt_parts.push(format!("Description: {}", mr_details.description.as_deref().unwrap_or("N/A")));
                 prompt_parts.push(format!("User's specific request: {}", context));
-            } else { // No specific context, summarize
-                llm_task_description = format!("Please summarize this merge request for user @{}.", event.user.username);
+            } else { // No specific context, summarize with code diffs
+                llm_task_description = format!("Please review this merge request for user @{} and provide a summary of the changes.", event.user.username);
                 let mr = gitlab_client.get_merge_request(project_id, mr_iid).await
                     .map_err(|e| {
                         error!("Failed to get MR details for summary: {}", e);
@@ -142,6 +164,20 @@ pub async fn process_mention(
                 if !mr.labels.is_empty() { prompt_parts.push(format!("Labels: {}", mr.labels.join(", "))); }
                 prompt_parts.push(format!("Source Branch: {}", mr.source_branch));
                 prompt_parts.push(format!("Target Branch: {}", mr.target_branch));
+                
+                // Add code diff context
+                let repo_context_extractor = RepoContextExtractor::new(gitlab_client.clone());
+                match repo_context_extractor.extract_context_for_mr(&mr, &event.project).await {
+                    Ok(context) => {
+                        prompt_parts.push(format!("Code Changes: {}", context));
+                    },
+                    Err(e) => {
+                        warn!("Failed to extract merge request diff context: {}", e);
+                    }
+                }
+                
+                // Add instructions for review
+                prompt_parts.push("Please provide a summary of the merge request, review the code changes, and provide feedback on the implementation.".to_string());
             }
         }
         other_type => {
@@ -291,6 +327,7 @@ mod tests {
             log_level: "debug".to_string(),
             bot_username: "gitbot".to_string(),
             poll_interval_seconds: 60,
+            context_repo_path: None,
         });
         
         // Create a mock GitLab client
@@ -305,6 +342,7 @@ mod tests {
             log_level: "debug".to_string(),
             bot_username: "gitbot".to_string(),
             poll_interval_seconds: 60,
+            context_repo_path: None,
         };
         let gitlab_client = Arc::new(GitlabApiClient::new(&settings).unwrap());
         
@@ -331,6 +369,7 @@ mod tests {
             log_level: "debug".to_string(),
             bot_username: "gitbot".to_string(),
             poll_interval_seconds: 60,
+            context_repo_path: None,
         });
         
         // Create a mock GitLab client
@@ -345,6 +384,7 @@ mod tests {
             log_level: "debug".to_string(),
             bot_username: "gitbot".to_string(),
             poll_interval_seconds: 60,
+            context_repo_path: None,
         };
         let gitlab_client = Arc::new(GitlabApiClient::new(&settings).unwrap());
         

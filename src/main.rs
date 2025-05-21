@@ -4,14 +4,16 @@ use crate::config::load_config;
 use crate::gitlab::GitlabApiClient;
 use crate::polling::PollingService;
 use tracing_subscriber::EnvFilter;
-use tracing::{info, error};
+use tracing::info;
 
 mod config;
 mod gitlab;
+mod gitlab_ext;
 mod handlers;
 mod models;
 mod openai;
 mod polling;
+mod repo_context;
 
 #[tokio::main]
 async fn main() -> Result<()> {

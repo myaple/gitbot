@@ -7,6 +7,8 @@ use tracing::{debug, error, instrument};
 use url::Url;
 use crate::models::{GitlabIssue, GitlabMergeRequest, GitlabNoteAttributes, GitlabProject}; 
 use crate::config::AppSettings;
+use crate::repo_context::{GitlabFile, GitlabDiff};
+use urlencoding::encode;
 
 #[derive(Error, Debug)]
 pub enum GitlabClientError {
@@ -39,7 +41,7 @@ impl GitlabApiClient {
     }
 
     #[instrument(skip(self, body), fields(method, path))]
-    async fn send_request<T: DeserializeOwned>(
+    pub async fn send_request<T: DeserializeOwned>(
         &self,
         method: Method,
         path: &str,
@@ -176,6 +178,122 @@ impl GitlabApiClient {
         
         self.send_request(Method::GET, &path, Some(&params), None::<()>).await
     }
+    
+    /// Get the repository file tree
+    #[instrument(skip(self), fields(project_id))]
+    pub async fn get_repository_tree(&self, project_id: i64) -> Result<Vec<String>, GitlabClientError> {
+        let path = format!("/api/v4/projects/{}/repository/tree", project_id);
+        let query = &[("recursive", "true"), ("per_page", "100")];
+        
+        let items: Vec<serde_json::Value> = self.send_request(Method::GET, &path, Some(query), None::<()>).await?;
+        
+        // Extract file paths
+        let file_paths = items.into_iter()
+            .filter(|item| item["type"].as_str().unwrap_or("") == "blob") // Only include files, not directories
+            .filter_map(|item| item["path"].as_str().map(|s| s.to_string()))
+            .collect();
+        
+        Ok(file_paths)
+    }
+    
+    /// Get file content from repository
+    #[instrument(skip(self), fields(project_id, file_path))]
+    pub async fn get_file_content(&self, project_id: i64, file_path: &str) -> Result<GitlabFile, GitlabClientError> {
+        let path = format!("/api/v4/projects/{}/repository/files/{}", project_id, encode(file_path));
+        let query = &[("ref", "main")]; // Default to main branch
+        
+        let mut file: GitlabFile = self.send_request(Method::GET, &path, Some(query), None::<()>).await?;
+        
+        // If the file is too large, skip content
+        if file.size > 100_000 {
+            debug!("File {} is too large ({} bytes), skipping content", file_path, file.size);
+            return Ok(file);
+        }
+        
+        // Decode content if needed
+        if let Some(content) = &file.content {
+            if let Some(encoding) = &file.encoding {
+                if encoding == "base64" {
+                    if let Ok(decoded) = base64::decode(content) {
+                        if let Ok(text) = String::from_utf8(decoded) {
+                            file.content = Some(text);
+                        }
+                    }
+                }
+            }
+        }
+        
+        Ok(file)
+    }
+    
+    /// Search for files by name
+    #[instrument(skip(self), fields(project_id, query))]
+    pub async fn search_files_by_name(&self, project_id: i64, query: &str) -> Result<Vec<String>, GitlabClientError> {
+        let path = format!("/api/v4/projects/{}/search", project_id);
+        let query_params = &[
+            ("scope", "blobs"),
+            ("search", query),
+            ("ref", "main"),
+            ("per_page", "20"),
+        ];
+        
+        let results: Vec<serde_json::Value> = self.send_request(Method::GET, &path, Some(query_params), None::<()>).await?;
+        
+        let file_paths = results.into_iter()
+            .filter_map(|item| item["path"].as_str().map(|s| s.to_string()))
+            .collect();
+        
+        Ok(file_paths)
+    }
+    
+    /// Search for files by content
+    #[instrument(skip(self), fields(project_id, query))]
+    pub async fn search_files_by_content(&self, project_id: i64, query: &str) -> Result<Vec<String>, GitlabClientError> {
+        let path = format!("/api/v4/projects/{}/search", project_id);
+        let query_params = &[
+            ("scope", "blobs"),
+            ("search", query),
+            ("ref", "main"),
+            ("per_page", "20"),
+        ];
+        
+        let results: Vec<serde_json::Value> = self.send_request(Method::GET, &path, Some(query_params), None::<()>).await?;
+        
+        let file_paths = results.into_iter()
+            .filter_map(|item| item["path"].as_str().map(|s| s.to_string()))
+            .collect();
+        
+        Ok(file_paths)
+    }
+    
+    /// Get changes for a merge request
+    #[instrument(skip(self), fields(project_id, merge_request_iid))]
+    pub async fn get_merge_request_changes(&self, project_id: i64, merge_request_iid: i64) -> Result<Vec<GitlabDiff>, GitlabClientError> {
+        let path = format!("/api/v4/projects/{}/merge_requests/{}/changes", project_id, merge_request_iid);
+        
+        let response: serde_json::Value = self.send_request(Method::GET, &path, None, None::<()>).await?;
+        
+        // Extract changes from the response
+        let changes = response["changes"].as_array()
+            .map(|changes| {
+                changes.iter()
+                    .filter_map(|change| {
+                        let old_path = change["old_path"].as_str()?.to_string();
+                        let new_path = change["new_path"].as_str()?.to_string();
+                        let diff = change["diff"].as_str()?.to_string();
+                        
+                        Some(GitlabDiff {
+                            old_path,
+                            new_path,
+                            diff,
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        
+        Ok(changes)
+    }
 }
 
 #[cfg(test)]
@@ -195,6 +313,7 @@ mod tests {
             log_level: "debug".to_string(),
             bot_username: "gitbot".to_string(),
             poll_interval_seconds: 60,
+            context_repo_path: None,
         }
     }
 
