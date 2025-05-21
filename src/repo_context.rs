@@ -272,6 +272,9 @@ mod tests {
             gitlab_url: "https://gitlab.com".to_string(),
             gitlab_token: "test_token".to_string(),
             openai_api_key: "key".to_string(),
+            openai_model: "gpt-3.5-turbo".to_string(),
+            openai_temperature: 0.7,
+            openai_max_tokens: 1024,
             openai_custom_url: "url".to_string(),
             repos_to_poll: vec!["org/repo1".to_string()],
             log_level: "debug".to_string(),
@@ -305,6 +308,9 @@ mod tests {
     #[test]
     fn test_calculate_relevance_score() {
         let settings = AppSettings {
+            openai_model: "gpt-3.5-turbo".to_string(),
+            openai_temperature: 0.7,
+            openai_max_tokens: 1024,
             gitlab_url: "https://gitlab.com".to_string(),
             gitlab_token: "test_token".to_string(),
             openai_api_key: "key".to_string(),
