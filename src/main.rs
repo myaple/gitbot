@@ -1,19 +1,20 @@
-use actix_web::{web, App, HttpServer};
+use std::sync::Arc;
+use anyhow::{Result, Context};
 use crate::config::load_config;
 use crate::gitlab::GitlabApiClient;
-use crate::openai::OpenAIApiClient;
-use crate::handlers::gitlab_webhook_handler;
+use crate::polling::PollingService;
 use tracing_subscriber::EnvFilter;
-use tracing::info;
+use tracing::{info, error};
 
 mod config;
 mod gitlab;
 mod handlers;
 mod models;
 mod openai;
+mod polling;
 
-#[actix_web::main]
-async fn main() -> std::io::Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     // Initialize Logging (initial basic setup)
     let initial_filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("info"));
@@ -24,16 +25,10 @@ async fn main() -> std::io::Result<()> {
     info!("Starting application...");
 
     // Load Configuration
-    let app_settings = match load_config() {
-        Ok(cfg) => {
-            info!("Configuration loaded successfully.");
-            cfg
-        }
-        Err(e) => {
-            eprintln!("Failed to load configuration: {}", e);
-            std::process::exit(1);
-        }
-    };
+    let app_settings = load_config()
+        .with_context(|| "Failed to load configuration")?;
+    
+    info!("Configuration loaded successfully.");
     
     // Re-initialize logging with level from config if RUST_LOG is not set
     // This ensures that the config's log level is respected.
@@ -45,44 +40,21 @@ async fn main() -> std::io::Result<()> {
 
     info!("Configuration loaded and logger re-initialized with config log level if applicable.");
 
-    let app_settings_data = web::Data::new(app_settings.clone()); // Clone for app_settings ownership by this data wrapper
+    // Initialize GitLab API Client
+    let gitlab_client = GitlabApiClient::new(&app_settings)
+        .with_context(|| "Failed to create GitLab client")?;
+    
+    info!("GitLab API client initialized successfully.");
+    let gitlab_client = Arc::new(gitlab_client);
 
-    // Initialize API Clients
-    let gitlab_client = match GitlabApiClient::new(&app_settings) {
-        Ok(client) => {
-            info!("GitLab API client initialized successfully.");
-            client
-        }
-        Err(e) => {
-            eprintln!("Failed to create GitLab client: {}", e);
-            std::process::exit(1);
-        }
-    };
-    let gitlab_client_data = web::Data::new(gitlab_client);
-
-    let openai_client = match OpenAIApiClient::new(&app_settings) {
-        Ok(client) => {
-            info!("OpenAI API client initialized successfully.");
-            client
-        }
-        Err(e) => {
-            eprintln!("Failed to create OpenAI client: {}", e);
-            std::process::exit(1);
-        }
-    };
-    let openai_client_data = web::Data::new(openai_client);
-
-
-    info!("Starting server on {}...", app_settings.server_address);
-
-    HttpServer::new(move || {
-        App::new()
-            .app_data(app_settings_data.clone())
-            .app_data(gitlab_client_data.clone())
-            .app_data(openai_client_data.clone())
-            .route("/webhook", web::post().to(gitlab_webhook_handler))
-    })
-    .bind(&app_settings.server_address)?
-    .run()
-    .await
+    // Create polling service
+    let config_arc = Arc::new(app_settings);
+    let polling_service = PollingService::new(gitlab_client, config_arc.clone());
+    
+    info!("Starting polling service with interval of {} seconds...", config_arc.poll_interval_seconds);
+    
+    // Start polling (this will run indefinitely)
+    polling_service.start_polling().await?;
+    
+    Ok(())
 }

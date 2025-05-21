@@ -5,7 +5,7 @@ use std::fmt::Debug;
 use thiserror::Error;
 use tracing::{debug, error, instrument};
 use url::Url;
-use crate::models::{GitlabIssue, GitlabMergeRequest, GitlabNoteAttributes}; // Removed unused imports
+use crate::models::{GitlabIssue, GitlabMergeRequest, GitlabNoteAttributes, GitlabProject}; 
 use crate::config::AppSettings;
 
 #[derive(Error, Debug)]
@@ -109,6 +109,73 @@ impl GitlabApiClient {
         let body = serde_json::json!({"body": comment_body});
         self.send_request(Method::POST, &path, None, Some(body)).await
     }
+    
+    #[instrument(skip(self), fields(repo_path))]
+    pub async fn get_project_by_path(&self, repo_path: &str) -> Result<GitlabProject, GitlabClientError> {
+        let encoded_path = urlencoding::encode(repo_path);
+        let path = format!("/api/v4/projects/{}", encoded_path);
+        self.send_request(Method::GET, &path, None, None::<()>).await
+    }
+    
+    #[instrument(skip(self), fields(project_id, since_timestamp))]
+    pub async fn get_issues(&self, project_id: i64, since_timestamp: u64) -> Result<Vec<GitlabIssue>, GitlabClientError> {
+        let path = format!("/api/v4/projects/{}/issues", project_id);
+        let query_params = vec![
+            ("updated_after", format!("{}", since_timestamp)),
+            ("sort", "asc".to_string()),
+            ("per_page", "100".to_string()),
+        ];
+        let params: Vec<(&str, &str)> = query_params.iter()
+            .map(|(k, v)| (*k, v.as_str()))
+            .collect();
+        
+        self.send_request(Method::GET, &path, Some(&params), None::<()>).await
+    }
+    
+    #[instrument(skip(self), fields(project_id, since_timestamp))]
+    pub async fn get_merge_requests(&self, project_id: i64, since_timestamp: u64) -> Result<Vec<GitlabMergeRequest>, GitlabClientError> {
+        let path = format!("/api/v4/projects/{}/merge_requests", project_id);
+        let query_params = vec![
+            ("updated_after", format!("{}", since_timestamp)),
+            ("sort", "asc".to_string()),
+            ("per_page", "100".to_string()),
+        ];
+        let params: Vec<(&str, &str)> = query_params.iter()
+            .map(|(k, v)| (*k, v.as_str()))
+            .collect();
+        
+        self.send_request(Method::GET, &path, Some(&params), None::<()>).await
+    }
+    
+    #[instrument(skip(self), fields(project_id, issue_iid, since_timestamp))]
+    pub async fn get_issue_notes(&self, project_id: i64, issue_iid: i64, since_timestamp: u64) -> Result<Vec<GitlabNoteAttributes>, GitlabClientError> {
+        let path = format!("/api/v4/projects/{}/issues/{}/notes", project_id, issue_iid);
+        let query_params = vec![
+            ("created_after", format!("{}", since_timestamp)),
+            ("sort", "asc".to_string()),
+            ("per_page", "100".to_string()),
+        ];
+        let params: Vec<(&str, &str)> = query_params.iter()
+            .map(|(k, v)| (*k, v.as_str()))
+            .collect();
+        
+        self.send_request(Method::GET, &path, Some(&params), None::<()>).await
+    }
+    
+    #[instrument(skip(self), fields(project_id, mr_iid, since_timestamp))]
+    pub async fn get_merge_request_notes(&self, project_id: i64, mr_iid: i64, since_timestamp: u64) -> Result<Vec<GitlabNoteAttributes>, GitlabClientError> {
+        let path = format!("/api/v4/projects/{}/merge_requests/{}/notes", project_id, mr_iid);
+        let query_params = vec![
+            ("created_after", format!("{}", since_timestamp)),
+            ("sort", "asc".to_string()),
+            ("per_page", "100".to_string()),
+        ];
+        let params: Vec<(&str, &str)> = query_params.iter()
+            .map(|(k, v)| (*k, v.as_str()))
+            .collect();
+        
+        self.send_request(Method::GET, &path, Some(&params), None::<()>).await
+    }
 }
 
 #[cfg(test)]
@@ -122,13 +189,12 @@ mod tests {
         AppSettings {
             gitlab_url: base_url,
             gitlab_token: "test_token".to_string(),
-            gitlab_webhook_secret: "secret".to_string(),
             openai_api_key: "key".to_string(),
             openai_custom_url: "url".to_string(),
-            server_address: "127.0.0.1:8080".to_string(),
-            whitelisted_repos: vec!["org/repo1".to_string()],
+            repos_to_poll: vec!["org/repo1".to_string()],
             log_level: "debug".to_string(),
             bot_username: "gitbot".to_string(),
+            poll_interval_seconds: 60,
         }
     }
 
@@ -253,6 +319,12 @@ mod tests {
             "id": 123,
             "note": comment_body,
             "author_id": 1,
+            "author": {
+                "id": 1,
+                "username": "testuser",
+                "name": "Test User",
+                "avatar_url": null
+            },
             "project_id": 1,
             "noteable_type": "Issue",
             "noteable_id": 101,
@@ -301,5 +373,207 @@ mod tests {
             }
             _ => panic!("Expected ApiError"),
         }
+    }
+    
+    #[tokio::test]
+    async fn test_get_project_by_path() {
+        let mut server = mockito::Server::new_async().await;
+        let base_url = server.url();
+        let settings = create_test_settings(base_url);
+        let client = GitlabApiClient::new(&settings).unwrap();
+        
+        let mock_project_response = serde_json::json!({
+            "id": 1,
+            "path_with_namespace": "org/repo1",
+            "web_url": "https://gitlab.example.com/org/repo1"
+        });
+        
+        let _m = server.mock("GET", "/api/v4/projects/org%2Frepo1")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(mock_project_response.to_string())
+            .create_async().await;
+            
+        let project = client.get_project_by_path("org/repo1").await.unwrap();
+        assert_eq!(project.id, 1);
+        assert_eq!(project.path_with_namespace, "org/repo1");
+    }
+    
+    #[tokio::test]
+    async fn test_get_issues() {
+        let mut server = mockito::Server::new_async().await;
+        let base_url = server.url();
+        let settings = create_test_settings(base_url);
+        let client = GitlabApiClient::new(&settings).unwrap();
+        
+        let mock_issues_response = serde_json::json!([
+            {
+                "id": 1, "iid": 101, "project_id": 1, "title": "Test Issue 1",
+                "description": "A test issue 1", "state": "opened",
+                "author": {"id": 1, "username": "tester", "name": "Test User", "avatar_url": null, "web_url": "url"},
+                "web_url": "http://example.com/issue/1", "labels": []
+            },
+            {
+                "id": 2, "iid": 102, "project_id": 1, "title": "Test Issue 2",
+                "description": "A test issue 2", "state": "opened",
+                "author": {"id": 1, "username": "tester", "name": "Test User", "avatar_url": null, "web_url": "url"},
+                "web_url": "http://example.com/issue/2", "labels": []
+            }
+        ]);
+        
+        let _m = server.mock("GET", "/api/v4/projects/1/issues")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("updated_after".into(), "1620000000".into()),
+                mockito::Matcher::UrlEncoded("sort".into(), "asc".into()),
+                mockito::Matcher::UrlEncoded("per_page".into(), "100".into()),
+            ]))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(mock_issues_response.to_string())
+            .create_async().await;
+            
+        let issues = client.get_issues(1, 1620000000).await.unwrap();
+        assert_eq!(issues.len(), 2);
+        assert_eq!(issues[0].title, "Test Issue 1");
+        assert_eq!(issues[1].title, "Test Issue 2");
+    }
+    
+    #[tokio::test]
+    async fn test_get_merge_requests() {
+        let mut server = mockito::Server::new_async().await;
+        let base_url = server.url();
+        let settings = create_test_settings(base_url);
+        let client = GitlabApiClient::new(&settings).unwrap();
+        
+        let mock_mrs_response = serde_json::json!([
+            {
+                "id": 1, "iid": 5, "project_id": 1, "title": "Test MR 1",
+                "description": "A test merge request 1", "state": "opened",
+                "author": {"id": 1, "username": "mr_tester", "name": "MR Test User", "avatar_url": null, "web_url": "url"},
+                "source_branch": "feature-branch-1", "target_branch": "main",
+                "web_url": "http://example.com/mr/1", "labels": []
+            },
+            {
+                "id": 2, "iid": 6, "project_id": 1, "title": "Test MR 2",
+                "description": "A test merge request 2", "state": "opened",
+                "author": {"id": 1, "username": "mr_tester", "name": "MR Test User", "avatar_url": null, "web_url": "url"},
+                "source_branch": "feature-branch-2", "target_branch": "main",
+                "web_url": "http://example.com/mr/2", "labels": []
+            }
+        ]);
+        
+        let _m = server.mock("GET", "/api/v4/projects/1/merge_requests")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("updated_after".into(), "1620000000".into()),
+                mockito::Matcher::UrlEncoded("sort".into(), "asc".into()),
+                mockito::Matcher::UrlEncoded("per_page".into(), "100".into()),
+            ]))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(mock_mrs_response.to_string())
+            .create_async().await;
+            
+        let mrs = client.get_merge_requests(1, 1620000000).await.unwrap();
+        assert_eq!(mrs.len(), 2);
+        assert_eq!(mrs[0].title, "Test MR 1");
+        assert_eq!(mrs[1].title, "Test MR 2");
+    }
+    
+    #[tokio::test]
+    async fn test_get_issue_notes() {
+        let mut server = mockito::Server::new_async().await;
+        let base_url = server.url();
+        let settings = create_test_settings(base_url);
+        let client = GitlabApiClient::new(&settings).unwrap();
+        
+        let mock_notes_response = serde_json::json!([
+            {
+                "id": 1,
+                "note": "This is a test note 1",
+                "author_id": 1,
+                "author": {"id": 1, "username": "tester", "name": "Test User", "avatar_url": null},
+                "project_id": 1,
+                "noteable_type": "Issue",
+                "noteable_id": 101,
+                "iid": 101,
+                "url": "http://example.com/project/1/issues/101#note_1"
+            },
+            {
+                "id": 2,
+                "note": "This is a test note 2",
+                "author_id": 2,
+                "author": {"id": 2, "username": "tester2", "name": "Test User 2", "avatar_url": null},
+                "project_id": 1,
+                "noteable_type": "Issue",
+                "noteable_id": 101,
+                "iid": 101,
+                "url": "http://example.com/project/1/issues/101#note_2"
+            }
+        ]);
+        
+        let _m = server.mock("GET", "/api/v4/projects/1/issues/101/notes")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("created_after".into(), "1620000000".into()),
+                mockito::Matcher::UrlEncoded("sort".into(), "asc".into()),
+                mockito::Matcher::UrlEncoded("per_page".into(), "100".into()),
+            ]))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(mock_notes_response.to_string())
+            .create_async().await;
+            
+        let notes = client.get_issue_notes(1, 101, 1620000000).await.unwrap();
+        assert_eq!(notes.len(), 2);
+        assert_eq!(notes[0].note, "This is a test note 1");
+        assert_eq!(notes[1].note, "This is a test note 2");
+    }
+    
+    #[tokio::test]
+    async fn test_get_merge_request_notes() {
+        let mut server = mockito::Server::new_async().await;
+        let base_url = server.url();
+        let settings = create_test_settings(base_url);
+        let client = GitlabApiClient::new(&settings).unwrap();
+        
+        let mock_notes_response = serde_json::json!([
+            {
+                "id": 1,
+                "note": "This is a test MR note 1",
+                "author_id": 1,
+                "author": {"id": 1, "username": "tester", "name": "Test User", "avatar_url": null},
+                "project_id": 1,
+                "noteable_type": "MergeRequest",
+                "noteable_id": 5,
+                "iid": 5,
+                "url": "http://example.com/project/1/merge_requests/5#note_1"
+            },
+            {
+                "id": 2,
+                "note": "This is a test MR note 2",
+                "author_id": 2,
+                "author": {"id": 2, "username": "tester2", "name": "Test User 2", "avatar_url": null},
+                "project_id": 1,
+                "noteable_type": "MergeRequest",
+                "noteable_id": 5,
+                "iid": 5,
+                "url": "http://example.com/project/1/merge_requests/5#note_2"
+            }
+        ]);
+        
+        let _m = server.mock("GET", "/api/v4/projects/1/merge_requests/5/notes")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("created_after".into(), "1620000000".into()),
+                mockito::Matcher::UrlEncoded("sort".into(), "asc".into()),
+                mockito::Matcher::UrlEncoded("per_page".into(), "100".into()),
+            ]))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(mock_notes_response.to_string())
+            .create_async().await;
+            
+        let notes = client.get_merge_request_notes(1, 5, 1620000000).await.unwrap();
+        assert_eq!(notes.len(), 2);
+        assert_eq!(notes[0].note, "This is a test MR note 1");
+        assert_eq!(notes[1].note, "This is a test MR note 2");
     }
 }

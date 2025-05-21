@@ -92,11 +92,10 @@ mod tests {
             openai_api_key: "test_api_key".to_string(),
             gitlab_url: "https://gitlab.example.com".to_string(),
             gitlab_token: "gitlab_token".to_string(),
-            gitlab_webhook_secret: "webhook_secret".to_string(),
-            server_address: "127.0.0.1:8080".to_string(),
-            whitelisted_repos: vec!["org/repo1".to_string()],
+            repos_to_poll: vec!["org/repo1".to_string()],
             log_level: "debug".to_string(),
             bot_username: "openai_bot".to_string(),
+            poll_interval_seconds: 60,
         }
     }
 

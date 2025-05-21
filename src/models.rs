@@ -49,6 +49,7 @@ pub struct GitlabNoteAttributes {
     pub id: i64,
     pub note: String, // the content of the comment
     pub author_id: i64,
+    pub author: GitlabUser, // Added for polling model
     pub project_id: i64,
     pub noteable_type: String, // e.g., "Issue", "MergeRequest", "Snippet"
     pub noteable_id: Option<i64>, // The ID of the Issue or MR if noteable_type is Issue or MergeRequest
