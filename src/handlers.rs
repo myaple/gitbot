@@ -202,10 +202,10 @@ pub async fn process_mention(
     // Call OpenAI Client
     let messages = vec![OpenAIChatMessage { role: "user".to_string(), content: final_prompt_text }];
     let openai_request = OpenAIChatRequest { 
-        model: "gpt-3.5-turbo".to_string(), // TODO: Make configurable
+        model: config.openai_model.clone(),
         messages,
-        temperature: Some(0.7), // TODO: Make configurable
-        max_tokens: Some(1024)  // TODO: Make configurable
+        temperature: Some(config.openai_temperature),
+        max_tokens: Some(config.openai_max_tokens)
     };
 
     let openai_response = openai_client.send_chat_completion(&openai_request).await
@@ -323,6 +323,9 @@ mod tests {
             gitlab_token: "test_token".to_string(),
             openai_api_key: "test_key".to_string(),
             openai_custom_url: "https://api.openai.com/v1".to_string(),
+            openai_model: "gpt-3.5-turbo".to_string(),
+            openai_temperature: 0.7,
+            openai_max_tokens: 1024,
             repos_to_poll: vec!["org/repo1".to_string()],
             log_level: "debug".to_string(),
             bot_username: "gitbot".to_string(),
@@ -365,6 +368,9 @@ mod tests {
             gitlab_token: "test_token".to_string(),
             openai_api_key: "test_key".to_string(),
             openai_custom_url: "https://api.openai.com/v1".to_string(),
+            openai_model: "gpt-3.5-turbo".to_string(),
+            openai_temperature: 0.7,
+            openai_max_tokens: 1024,
             repos_to_poll: vec!["org/repo1".to_string()],
             log_level: "debug".to_string(),
             bot_username: "gitbot".to_string(),

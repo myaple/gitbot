@@ -90,6 +90,9 @@ mod tests {
         AppSettings {
             openai_custom_url: base_url,
             openai_api_key: "test_api_key".to_string(),
+            openai_model: "gpt-3.5-turbo".to_string(),
+            openai_temperature: 0.7,
+            openai_max_tokens: 1024,
             gitlab_url: "https://gitlab.example.com".to_string(),
             gitlab_token: "gitlab_token".to_string(),
             repos_to_poll: vec!["org/repo1".to_string()],
