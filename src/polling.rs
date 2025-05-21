@@ -9,6 +9,7 @@ use tokio::sync::Mutex;
 use tokio::time;
 use tracing::{debug, error, info};
 
+#[derive(Clone)]
 pub struct PollingService {
     gitlab_client: Arc<GitlabApiClient>,
     config: Arc<AppSettings>,
@@ -55,9 +56,29 @@ impl PollingService {
         
         info!("Polling repositories since timestamp: {}", *last_checked);
 
+        // Create a vector of futures for parallel execution
+        let mut polling_tasks = Vec::new();
+        
+        // Create a future for each repository
         for repo_path in &self.config.repos_to_poll {
-            if let Err(e) = self.poll_repository(repo_path, *last_checked).await {
-                error!("Error polling repository {}: {}", repo_path, e);
+            let repo_path_clone = repo_path.clone();
+            let timestamp = *last_checked;
+            let self_clone = self.clone();
+            
+            // Create a future that polls a single repository
+            let task = tokio::spawn(async move {
+                if let Err(e) = self_clone.poll_repository(&repo_path_clone, timestamp).await {
+                    error!("Error polling repository {}: {}", repo_path_clone, e);
+                }
+            });
+            
+            polling_tasks.push(task);
+        }
+        
+        // Wait for all polling tasks to complete
+        for task in polling_tasks {
+            if let Err(e) = task.await {
+                error!("Task join error: {}", e);
             }
         }
 
@@ -73,11 +94,35 @@ impl PollingService {
         let project = self.gitlab_client.get_project_by_path(repo_path).await?;
         let project_id = project.id;
         
-        // Poll issues
-        self.poll_issues(project_id, since_timestamp, &project).await?;
+        // Create tasks for polling issues and merge requests in parallel
+        let issues_task = {
+            let self_clone = self.clone();
+            let project_clone = project.clone();
+            tokio::spawn(async move {
+                if let Err(e) = self_clone.poll_issues(project_id, since_timestamp, &project_clone).await {
+                    error!("Error polling issues for project {}: {}", project_id, e);
+                }
+            })
+        };
         
-        // Poll merge requests
-        self.poll_merge_requests(project_id, since_timestamp, &project).await?;
+        let mrs_task = {
+            let self_clone = self.clone();
+            let project_clone = project.clone();
+            tokio::spawn(async move {
+                if let Err(e) = self_clone.poll_merge_requests(project_id, since_timestamp, &project_clone).await {
+                    error!("Error polling merge requests for project {}: {}", project_id, e);
+                }
+            })
+        };
+        
+        // Wait for both tasks to complete
+        if let Err(e) = issues_task.await {
+            error!("Task join error for issues polling: {}", e);
+        }
+        
+        if let Err(e) = mrs_task.await {
+            error!("Task join error for merge requests polling: {}", e);
+        }
         
         Ok(())
     }
