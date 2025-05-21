@@ -1,9 +1,9 @@
 use actix_web::{web, App, HttpServer};
-use crate::config::{load_config, AppSettings};
+use crate::config::load_config;
 use crate::gitlab::GitlabApiClient;
 use crate::openai::OpenAIApiClient;
 use crate::handlers::gitlab_webhook_handler;
-use tracing_subscriber::{fmt, EnvFilter};
+use tracing_subscriber::EnvFilter;
 use tracing::info;
 
 mod config;
@@ -17,7 +17,9 @@ async fn main() -> std::io::Result<()> {
     // Initialize Logging (initial basic setup)
     let initial_filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("info"));
-    fmt::subscriber().with_env_filter(initial_filter).init();
+    tracing_subscriber::fmt()
+        .with_env_filter(initial_filter)
+        .init();
 
     info!("Starting application...");
 
@@ -36,9 +38,10 @@ async fn main() -> std::io::Result<()> {
     // Re-initialize logging with level from config if RUST_LOG is not set
     // This ensures that the config's log level is respected.
     let log_level_from_config = app_settings.log_level.clone();
-    let final_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(log_level_from_config));
-    fmt::subscriber().with_env_filter(final_filter).init(); // Re-init with potentially new level
+    let _final_filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new(log_level_from_config.clone()));
+    // Skip re-initialization as it's not necessary and can cause issues
+    info!("Using log level: {}", log_level_from_config);
 
     info!("Configuration loaded and logger re-initialized with config log level if applicable.");
 
