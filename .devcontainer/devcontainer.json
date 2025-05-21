@@ -17,11 +17,13 @@
             ],
             "settings": {
                 "editor.formatOnSave": true,
-                "rust-analyzer.checkOnSave.command": "clippy"
+                "rust-analyzer.checkOnSave": true
             }
         }
     },
-    "forwardPorts": [8080],
+    "forwardPorts": [
+        8080
+    ],
     "postCreateCommand": "cargo check",
     "remoteUser": "vscode"
 }
