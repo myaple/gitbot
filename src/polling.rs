@@ -531,7 +531,7 @@ mod tests {
             noteable_type: "Issue".to_string(),
             noteable_id: Some(1), // Assuming it's for issue iid 1, adjust if needed per test
             iid: Some(1),         // Assuming it's for issue iid 1
-            url: format!("http://example.com/notes/{}", id),
+            url: Some(format!("http://example.com/notes/{}", id)),
             updated_at: updated_at_str.to_string(),
         }
     }

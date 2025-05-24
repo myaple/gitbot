@@ -570,13 +570,12 @@ mod tests {
                 "Hello @gitbot please help with this {}",
                 noteable_type.to_lowercase()
             ),
-            author_id: 1,
             author: user.clone(),
             project_id: 1,
             noteable_type: noteable_type.to_string(),
             noteable_id: Some(1),
             iid: Some(1),
-            url: "https://gitlab.example.com/org/repo1/-/issues/1#note_1".to_string(),
+            url: Some("https://gitlab.example.com/org/repo1/-/issues/1#note_1".to_string()),
             updated_at: "2023-01-01T00:00:00Z".to_string(), // Added default for tests
         };
 
