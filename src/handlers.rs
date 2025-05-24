@@ -4,6 +4,7 @@ use crate::models::{GitlabNoteEvent, OpenAIChatMessage, OpenAIChatRequest};
 use crate::openai::OpenAIApiClient;
 use crate::repo_context::RepoContextExtractor;
 use anyhow::{anyhow, Result};
+use chrono::{DateTime, Utc};
 use std::sync::Arc;
 use tracing::{debug, error, info, trace, warn};
 
@@ -68,6 +69,146 @@ pub async fn process_mention(
         return Ok(());
     }
     info!("Bot @{} was mentioned.", config.bot_username);
+
+    // --- START: Check if already replied ---
+    let mention_timestamp_str = &event.object_attributes.updated_at;
+    let mention_timestamp_dt = match DateTime::parse_from_rfc3339(mention_timestamp_str) {
+        Ok(dt) => dt.with_timezone(&Utc),
+        Err(e) => {
+            error!(
+                mention_timestamp = %mention_timestamp_str,
+                error = %e,
+                "Failed to parse mention timestamp. Cannot reliably check for previous replies. Aborting."
+            );
+            return Err(anyhow!(
+                "Failed to parse mention timestamp '{}': {}",
+                mention_timestamp_str,
+                e
+            ));
+        }
+    };
+
+    let notes_since_timestamp_u64 = mention_timestamp_dt.timestamp() as u64;
+    let project_id_for_notes = event.project.id;
+    let current_mention_note_id = event.object_attributes.id;
+
+    debug!(
+        mention_id = current_mention_note_id,
+        mention_timestamp = %mention_timestamp_dt,
+        notes_since_unix_ts = notes_since_timestamp_u64,
+        "Preparing to check for subsequent bot replies."
+    );
+
+    let subsequent_notes_result = match event.object_attributes.noteable_type.as_str() {
+        "Issue" => {
+            let issue_iid = match event.issue.as_ref().map(|i| i.iid) {
+                Some(iid) => iid,
+                None => {
+                    error!(event_id = event.object_attributes.id, "Critical: Missing issue details (iid) in note event when checking for subsequent notes.");
+                    return Err(anyhow!(
+                        "Missing issue details (iid) in note event for reply check"
+                    ));
+                }
+            };
+            info!(
+                project_id = project_id_for_notes,
+                issue_iid = issue_iid,
+                notes_since_timestamp_u64 = notes_since_timestamp_u64,
+                "Fetching subsequent notes for issue to check for prior bot replies."
+            );
+            gitlab_client
+                .get_issue_notes(project_id_for_notes, issue_iid, notes_since_timestamp_u64)
+                .await
+        }
+        "MergeRequest" => {
+            let mr_iid = match event.merge_request.as_ref().map(|mr| mr.iid) {
+                Some(iid) => iid,
+                None => {
+                    error!(event_id = event.object_attributes.id, "Critical: Missing merge request details (iid) in note event when checking for subsequent notes.");
+                    return Err(anyhow!(
+                        "Missing MR details (iid) in note event for reply check"
+                    ));
+                }
+            };
+            info!(
+                project_id = project_id_for_notes,
+                mr_iid = mr_iid,
+                notes_since_timestamp_u64 = notes_since_timestamp_u64,
+                "Fetching subsequent notes for merge request to check for prior bot replies."
+            );
+            gitlab_client
+                .get_merge_request_notes(project_id_for_notes, mr_iid, notes_since_timestamp_u64)
+                .await
+        }
+        other_type => {
+            warn!(
+                noteable_type = %other_type,
+                "Unsupported noteable_type for checking subsequent notes. Skipping reply check."
+            );
+            Ok(Vec::new()) // Return an empty vec, so the loop below evaluating notes doesn't run
+        }
+    };
+
+    match subsequent_notes_result {
+        Ok(notes) => {
+            if !notes.is_empty() {
+                debug!("Fetched {} subsequent notes for reply check.", notes.len());
+            }
+            for note in notes {
+                // Skip the current mention note itself. This is vital.
+                if note.id == current_mention_note_id {
+                    trace!(
+                        note_id = note.id,
+                        "Skipping current mention note (self) during reply check."
+                    );
+                    continue;
+                }
+
+                // Parse the fetched note's timestamp
+                match DateTime::parse_from_rfc3339(&note.updated_at) {
+                    Ok(fetched_note_dt_utc) => {
+                        let fetched_note_dt = fetched_note_dt_utc.with_timezone(&Utc);
+
+                        // Check if the note is from the bot and was created strictly after the mention
+                        if note.author.username == config.bot_username
+                            && fetched_note_dt > mention_timestamp_dt
+                        {
+                            info!(
+                               note_id = note.id,
+                               note_author = %note.author.username,
+                               note_timestamp = %fetched_note_dt,
+                               mention_id = current_mention_note_id,
+                               mention_timestamp = %mention_timestamp_dt,
+                               "Bot @{} has already replied (note ID: {}) after this mention (note ID: {}). Ignoring current mention.",
+                               config.bot_username,
+                               note.id,
+                               current_mention_note_id
+                            );
+                            return Ok(()); // Already replied
+                        }
+                    }
+                    Err(e) => {
+                        warn!(
+                            note_id = note.id,
+                            note_timestamp_str = %note.updated_at,
+                            error = %e,
+                            "Failed to parse timestamp for a fetched note. Skipping this note in reply check."
+                        );
+                    }
+                }
+            }
+            // If we've reached this point without returning Ok(()), no relevant bot reply was found.
+            info!("No subsequent bot reply found that meets the criteria for duplicate prevention. Proceeding to process mention.");
+        }
+        Err(e) => {
+            warn!(
+                mention_id = current_mention_note_id,
+                error = %e,
+                "Failed to fetch subsequent notes to check for prior replies. Proceeding with mention processing as a precaution."
+            );
+        }
+    }
+    // --- END: Check if already replied ---
 
     // Prompt Assembly Logic
     let mut prompt_parts: Vec<String> = Vec::new();
