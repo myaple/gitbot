@@ -1,6 +1,7 @@
 use crate::config::AppSettings;
 use crate::models::{GitlabIssue, GitlabMergeRequest, GitlabNoteAttributes, GitlabProject};
 use crate::repo_context::{GitlabDiff, GitlabFile};
+use chrono::{DateTime, TimeZone, Utc};
 use reqwest::{header, Client, Method, StatusCode};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -159,13 +160,22 @@ impl GitlabApiClient {
         since_timestamp: u64,
     ) -> Result<Vec<GitlabIssue>, GitlabError> {
         let path = format!("/api/v4/projects/{}/issues", project_id);
-        let query_params = [
-            ("updated_after", format!("{}", since_timestamp)),
+        let dt = DateTime::from_timestamp(since_timestamp as i64, 0).unwrap_or_else(|| {
+            Utc.timestamp_opt(0, 0)
+                .single()
+                .expect("Fallback timestamp failed for 0")
+        });
+        let formatted_timestamp_string = dt.to_rfc3339();
+
+        let query_params_values = [
+            ("updated_after", formatted_timestamp_string),
             ("sort", "asc".to_string()),
             ("per_page", "100".to_string()),
         ];
-        let params: Vec<(&str, &str)> =
-            query_params.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        let params: Vec<(&str, &str)> = query_params_values
+            .iter()
+            .map(|(k, v)| (*k, v.as_str()))
+            .collect();
 
         self.send_request(Method::GET, &path, Some(&params), None::<()>)
             .await
@@ -178,13 +188,22 @@ impl GitlabApiClient {
         since_timestamp: u64,
     ) -> Result<Vec<GitlabMergeRequest>, GitlabError> {
         let path = format!("/api/v4/projects/{}/merge_requests", project_id);
-        let query_params = [
-            ("updated_after", format!("{}", since_timestamp)),
+        let dt = DateTime::from_timestamp(since_timestamp as i64, 0).unwrap_or_else(|| {
+            Utc.timestamp_opt(0, 0)
+                .single()
+                .expect("Fallback timestamp failed for 0")
+        });
+        let formatted_timestamp_string = dt.to_rfc3339();
+
+        let query_params_values = [
+            ("updated_after", formatted_timestamp_string),
             ("sort", "asc".to_string()),
             ("per_page", "100".to_string()),
         ];
-        let params: Vec<(&str, &str)> =
-            query_params.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        let params: Vec<(&str, &str)> = query_params_values
+            .iter()
+            .map(|(k, v)| (*k, v.as_str()))
+            .collect();
 
         self.send_request(Method::GET, &path, Some(&params), None::<()>)
             .await
@@ -198,13 +217,22 @@ impl GitlabApiClient {
         since_timestamp: u64,
     ) -> Result<Vec<GitlabNoteAttributes>, GitlabError> {
         let path = format!("/api/v4/projects/{}/issues/{}/notes", project_id, issue_iid);
-        let query_params = [
-            ("created_after", format!("{}", since_timestamp)),
+        let dt = DateTime::from_timestamp(since_timestamp as i64, 0).unwrap_or_else(|| {
+            Utc.timestamp_opt(0, 0)
+                .single()
+                .expect("Fallback timestamp failed for 0")
+        });
+        let formatted_timestamp_string = dt.to_rfc3339();
+
+        let query_params_values = [
+            ("created_after", formatted_timestamp_string),
             ("sort", "asc".to_string()),
             ("per_page", "100".to_string()),
         ];
-        let params: Vec<(&str, &str)> =
-            query_params.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        let params: Vec<(&str, &str)> = query_params_values
+            .iter()
+            .map(|(k, v)| (*k, v.as_str()))
+            .collect();
 
         self.send_request(Method::GET, &path, Some(&params), None::<()>)
             .await
@@ -221,13 +249,22 @@ impl GitlabApiClient {
             "/api/v4/projects/{}/merge_requests/{}/notes",
             project_id, mr_iid
         );
-        let query_params = [
-            ("created_after", format!("{}", since_timestamp)),
+        let dt = DateTime::from_timestamp(since_timestamp as i64, 0).unwrap_or_else(|| {
+            Utc.timestamp_opt(0, 0)
+                .single()
+                .expect("Fallback timestamp failed for 0")
+        });
+        let formatted_timestamp_string = dt.to_rfc3339();
+
+        let query_params_values = [
+            ("created_after", formatted_timestamp_string),
             ("sort", "asc".to_string()),
             ("per_page", "100".to_string()),
         ];
-        let params: Vec<(&str, &str)> =
-            query_params.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        let params: Vec<(&str, &str)> = query_params_values
+            .iter()
+            .map(|(k, v)| (*k, v.as_str()))
+            .collect();
 
         self.send_request(Method::GET, &path, Some(&params), None::<()>)
             .await
@@ -564,8 +601,7 @@ mod tests {
 
         let mock_response_body = json!({
             "id": 123,
-            "note": comment_body,
-            "author_id": 1,
+            "body": comment_body,
             "author": {
                 "id": 1,
                 "username": "testuser",
@@ -755,8 +791,7 @@ mod tests {
         let mock_notes_response = serde_json::json!([
             {
                 "id": 1,
-                "note": "This is a test note 1",
-                "author_id": 1,
+                "body": "This is a test note 1",
                 "author": {"id": 1, "username": "tester", "name": "Test User", "avatar_url": null},
                 "project_id": 1,
                 "noteable_type": "Issue",
@@ -767,8 +802,7 @@ mod tests {
             },
             {
                 "id": 2,
-                "note": "This is a test note 2",
-                "author_id": 2,
+                "body": "This is a test note 2",
                 "author": {"id": 2, "username": "tester2", "name": "Test User 2", "avatar_url": null},
                 "project_id": 1,
                 "noteable_type": "Issue",
@@ -810,8 +844,7 @@ mod tests {
         let mock_notes_response = serde_json::json!([
             {
                 "id": 1,
-                "note": "This is a test MR note 1",
-                "author_id": 1,
+                "body": "This is a test MR note 1",
                 "author": {"id": 1, "username": "tester", "name": "Test User", "avatar_url": null},
                 "project_id": 1,
                 "noteable_type": "MergeRequest",
@@ -822,8 +855,7 @@ mod tests {
             },
             {
                 "id": 2,
-                "note": "This is a test MR note 2",
-                "author_id": 2,
+                "body": "This is a test MR note 2",
                 "author": {"id": 2, "username": "tester2", "name": "Test User 2", "avatar_url": null},
                 "project_id": 1,
                 "noteable_type": "MergeRequest",

@@ -49,14 +49,14 @@ pub struct GitlabMergeRequest {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct GitlabNoteAttributes {
     pub id: i64,
-    pub note: String, // the content of the comment
-    pub author_id: i64,
+    #[serde(alias = "body")]
+    pub note: String, // the content of the comment, GitLab API uses "body"
     pub author: GitlabUser, // Added for polling model
     pub project_id: i64,
     pub noteable_type: String, // e.g., "Issue", "MergeRequest", "Snippet"
     pub noteable_id: Option<i64>, // The ID of the Issue or MR if noteable_type is Issue or MergeRequest
     pub iid: Option<i64>,         // The IID of the noteable, e.g. issue iid or mr iid.
-    pub url: String,              // URL to the comment
+    pub url: Option<String>, // URL to the comment - GitLab API for notes might not always provide this directly
     pub updated_at: String,
 }
 

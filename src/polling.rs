@@ -278,7 +278,7 @@ impl PollingService {
     ) -> GitlabNoteEvent {
         // Clone the author data to avoid ownership issues
         let author = GitlabUser {
-            id: note.author_id,
+            id: note.author.id,
             username: note.author.username.clone(),
             name: note.author.name.clone(),
             avatar_url: note.author.avatar_url.clone(),
@@ -310,7 +310,7 @@ impl PollingService {
     ) -> GitlabNoteEvent {
         // Clone the author data to avoid ownership issues
         let author = GitlabUser {
-            id: note.author_id,
+            id: note.author.id,
             username: note.author.username.clone(),
             name: note.author.name.clone(),
             avatar_url: note.author.avatar_url.clone(),
@@ -517,11 +517,6 @@ mod tests {
         GitlabNoteAttributes {
             id,
             note: format!("This is note {}", id),
-            author_id: if author_username == TEST_BOT_USERNAME {
-                50
-            } else {
-                51
-            },
             author: GitlabUser {
                 id: if author_username == TEST_BOT_USERNAME {
                     50

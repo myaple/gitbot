@@ -41,7 +41,7 @@ pub struct AppSettings {
     pub openai_max_tokens: u32,
 
     /// Comma-separated list of repositories to poll (format: group/project)
-    #[arg(long, env = "GITBOT_REPOS_TO_POLL", value_parser = parse_repos_list)]
+    #[arg(long, env = "GITBOT_REPOS_TO_POLL", value_delimiter = ',')]
     pub repos_to_poll: Vec<String>,
 
     /// Log level (trace, debug, info, warn, error)
@@ -65,9 +65,12 @@ pub struct AppSettings {
     pub context_repo_path: Option<String>,
 }
 
-fn parse_repos_list(s: &str) -> Result<Vec<String>, String> {
-    Ok(s.split(',').map(|item| item.trim().to_string()).collect())
-}
+// fn parse_repos_list(s: &str) -> Result<Vec<String>, String> {
+// Ok(s.split(',')
+// .map(|item| item.trim().to_string())
+// .filter(|s| !s.is_empty())
+// .collect())
+// }
 
 pub fn load_config() -> anyhow::Result<AppSettings> {
     // Parse command line arguments and environment variables
@@ -79,15 +82,15 @@ pub fn load_config() -> anyhow::Result<AppSettings> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_parse_repos_list() {
-        let input = "group1/project1,group2/project2, group3/project3";
-        let result = parse_repos_list(input).unwrap();
-        assert_eq!(
-            result,
-            vec!["group1/project1", "group2/project2", "group3/project3"]
-        );
-    }
+    // #[test]
+    // fn test_parse_repos_list() {
+    //     let input = "group1/project1,group2/project2, group3/project3";
+    //     let result = parse_repos_list(input).unwrap();
+    //     assert_eq!(
+    //         result,
+    //         vec!["group1/project1", "group2/project2", "group3/project3"]
+    //     );
+    // }
 
     #[test]
     fn test_create_app_settings() {
