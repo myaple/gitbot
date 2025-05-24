@@ -718,7 +718,10 @@ mod tests {
         let _m = server
             .mock("GET", "/api/v4/projects/1/issues")
             .match_query(mockito::Matcher::AllOf(vec![
-                mockito::Matcher::UrlEncoded("updated_after".into(), "1620000000".into()),
+                mockito::Matcher::UrlEncoded(
+                    "updated_after".into(),
+                    "2021-05-03T00:00:00+00:00".into(),
+                ),
                 mockito::Matcher::UrlEncoded("sort".into(), "asc".into()),
                 mockito::Matcher::UrlEncoded("per_page".into(), "100".into()),
             ]))
@@ -763,7 +766,10 @@ mod tests {
         let _m = server
             .mock("GET", "/api/v4/projects/1/merge_requests")
             .match_query(mockito::Matcher::AllOf(vec![
-                mockito::Matcher::UrlEncoded("updated_after".into(), "1620000000".into()),
+                mockito::Matcher::UrlEncoded(
+                    "updated_after".into(),
+                    "2021-05-03T00:00:00+00:00".into(),
+                ),
                 mockito::Matcher::UrlEncoded("sort".into(), "asc".into()),
                 mockito::Matcher::UrlEncoded("per_page".into(), "100".into()),
             ]))
@@ -816,7 +822,10 @@ mod tests {
         let _m = server
             .mock("GET", "/api/v4/projects/1/issues/101/notes")
             .match_query(mockito::Matcher::AllOf(vec![
-                mockito::Matcher::UrlEncoded("created_after".into(), "1620000000".into()),
+                mockito::Matcher::UrlEncoded(
+                    "created_after".into(),
+                    "2021-05-03T00:00:00+00:00".into(),
+                ),
                 mockito::Matcher::UrlEncoded("sort".into(), "asc".into()),
                 mockito::Matcher::UrlEncoded("per_page".into(), "100".into()),
             ]))
@@ -869,7 +878,10 @@ mod tests {
         let _m = server
             .mock("GET", "/api/v4/projects/1/merge_requests/5/notes")
             .match_query(mockito::Matcher::AllOf(vec![
-                mockito::Matcher::UrlEncoded("created_after".into(), "1620000000".into()),
+                mockito::Matcher::UrlEncoded(
+                    "created_after".into(),
+                    "2021-05-03T00:00:00+00:00".into(),
+                ),
                 mockito::Matcher::UrlEncoded("sort".into(), "asc".into()),
                 mockito::Matcher::UrlEncoded("per_page".into(), "100".into()),
             ]))

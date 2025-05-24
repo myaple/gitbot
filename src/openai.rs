@@ -40,15 +40,23 @@ impl OpenAIApiClient {
         &self,
         request_payload: &OpenAIChatRequest,
     ) -> Result<OpenAIChatResponse, OpenAIClient> {
-        debug!(
-            "Sending chat completion request to: {}",
-            self.openai_custom_url
-        );
+        let mut base_url_string = self.openai_custom_url.to_string();
+        if !base_url_string.ends_with('/') {
+            base_url_string.push('/');
+        }
+
+        let base_for_final_join = Url::parse(&base_url_string).map_err(OpenAIClient::UrlParse)?;
+
+        let request_url = base_for_final_join
+            .join("chat/completions")
+            .map_err(OpenAIClient::UrlParse)?;
+
+        debug!("Sending chat completion request to: {}", request_url);
         debug!("Request payload: {:?}", request_payload);
 
         let response = self
             .client
-            .post(self.openai_custom_url.clone()) // URL for chat completions is usually specific like /v1/chat/completions
+            .post(request_url) // Use the correctly formed URL
             .header(header::AUTHORIZATION, format!("Bearer {}", self.api_key))
             .header(header::CONTENT_TYPE, "application/json")
             .json(request_payload)
@@ -107,8 +115,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_new_openai_api_client_valid_url() {
-        let settings =
-            create_test_settings("http://localhost:1234/v1/chat/completions".to_string());
+        let settings = create_test_settings("http://localhost:1234/v1/".to_string()); // Ensure it's a base URL
         let client = OpenAIApiClient::new(&settings);
         assert!(client.is_ok());
     }
@@ -127,12 +134,10 @@ mod tests {
     #[tokio::test]
     async fn test_send_chat_completion_success() {
         let mut server = mockito::Server::new_async().await;
-        // The client is configured with the full path, so the mock path should be "/"
-        // or the client's URL should be just the base and the path added in send_chat_completion.
-        // For simplicity with current setup, let's assume openai_custom_url is the full endpoint.
-        let full_mock_url = server.url(); // This will be something like http://127.0.0.1:1234
+        // openai_custom_url should be the base URL of the mock server.
+        let base_mock_url = server.url(); // This will be something like http://127.0.0.1:1234
 
-        let settings = create_test_settings(full_mock_url.clone());
+        let settings = create_test_settings(base_mock_url.clone());
         let client = OpenAIApiClient::new(&settings).unwrap();
 
         let request_payload = OpenAIChatRequest {
@@ -165,9 +170,9 @@ mod tests {
             }
         });
 
-        // The mock path should be "/" if the full_mock_url is used for the client.
+        // The mock path should be "/chat/completions" relative to the server's base URL.
         let mock = server
-            .mock("POST", "/")
+            .mock("POST", "/chat/completions")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(mock_response_body.to_string())
@@ -190,11 +195,136 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_send_chat_completion_success_with_path_no_trailing_slash() {
+        let mut server = mockito::Server::new_async().await;
+        // openai_custom_url is the base URL of the mock server + a path segment without a trailing slash
+        let base_mock_url_with_path = format!("{}/v1", server.url()); // e.g., http://127.0.0.1:1234/v1
+
+        let settings = create_test_settings(base_mock_url_with_path.clone());
+        let client = OpenAIApiClient::new(&settings).unwrap();
+
+        let request_payload = OpenAIChatRequest {
+            model: "test-model".to_string(),
+            messages: vec![OpenAIChatMessage {
+                role: "user".to_string(),
+                content: "Hello from /v1".to_string(),
+            }],
+            temperature: Some(0.7),
+            max_tokens: Some(50),
+        };
+
+        let mock_response_body = json!({
+            "id": "chatcmpl-v1-123",
+            "object": "chat.completion",
+            "created": 1677652289,
+            "model": "test-model-v1",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "Hi there from /v1!"
+                },
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 13,
+                "total_tokens": 23
+            }
+        });
+
+        // The mock path should be "/v1/chat/completions"
+        let mock = server
+            .mock("POST", "/v1/chat/completions") // Note the /v1 prefix
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(mock_response_body.to_string())
+            .match_header("Authorization", "Bearer test_api_key")
+            .create_async()
+            .await;
+
+        let response_result = client.send_chat_completion(&request_payload).await;
+
+        mock.assert_async().await; // Verify the mock was called
+        assert!(
+            response_result.is_ok(),
+            "Expected Ok, got Err: {:?}",
+            response_result.err()
+        );
+        let response = response_result.unwrap();
+        assert!(!response.choices.is_empty());
+        assert_eq!(response.choices[0].message.content, "Hi there from /v1!");
+    }
+
+    #[tokio::test]
+    async fn test_send_chat_completion_success_with_path_with_trailing_slash() {
+        let mut server = mockito::Server::new_async().await;
+        // openai_custom_url is the base URL of the mock server + a path segment with a trailing slash
+        let base_mock_url_with_path = format!("{}/v1/", server.url()); // e.g., http://127.0.0.1:1234/v1/
+
+        let settings = create_test_settings(base_mock_url_with_path.clone());
+        let client = OpenAIApiClient::new(&settings).unwrap();
+
+        let request_payload = OpenAIChatRequest {
+            model: "test-model".to_string(),
+            messages: vec![OpenAIChatMessage {
+                role: "user".to_string(),
+                content: "Hello from /v1/".to_string(),
+            }],
+            temperature: Some(0.7),
+            max_tokens: Some(50),
+        };
+
+        let mock_response_body = json!({
+            "id": "chatcmpl-v1slash-123",
+            "object": "chat.completion",
+            "created": 1677652290,
+            "model": "test-model-v1slash",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "Hi there from /v1/!"
+                },
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": 11,
+                "completion_tokens": 14,
+                "total_tokens": 25
+            }
+        });
+
+        // The mock path should still be "/v1/chat/completions"
+        // as the client should correctly handle the existing trailing slash.
+        let mock = server
+            .mock("POST", "/v1/chat/completions") // Note the /v1 prefix
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(mock_response_body.to_string())
+            .match_header("Authorization", "Bearer test_api_key")
+            .create_async()
+            .await;
+
+        let response_result = client.send_chat_completion(&request_payload).await;
+
+        mock.assert_async().await; // Verify the mock was called
+        assert!(
+            response_result.is_ok(),
+            "Expected Ok, got Err: {:?}",
+            response_result.err()
+        );
+        let response = response_result.unwrap();
+        assert!(!response.choices.is_empty());
+        assert_eq!(response.choices[0].message.content, "Hi there from /v1/!");
+    }
+
+    #[tokio::test]
     async fn test_send_chat_completion_api_error() {
         let mut server = mockito::Server::new_async().await;
-        let full_mock_url = server.url();
+        let base_mock_url = server.url(); // Base URL of the mock server
 
-        let settings = create_test_settings(full_mock_url.clone());
+        let settings = create_test_settings(base_mock_url.clone());
         let client = OpenAIApiClient::new(&settings).unwrap();
 
         let request_payload = OpenAIChatRequest {
@@ -210,7 +340,7 @@ mod tests {
         let error_body = json!({"error": {"message": "Invalid API key", "type": "auth_error"}});
 
         let mock = server
-            .mock("POST", "/")
+            .mock("POST", "/chat/completions") // Mock the appended path
             .with_status(401) // Unauthorized
             .with_header("content-type", "application/json")
             .with_body(error_body.to_string())
@@ -234,9 +364,9 @@ mod tests {
     #[tokio::test]
     async fn test_send_chat_completion_empty_choices() {
         let mut server = mockito::Server::new_async().await;
-        let full_mock_url = server.url();
+        let base_mock_url = server.url(); // Base URL of the mock server
 
-        let settings = create_test_settings(full_mock_url.clone());
+        let settings = create_test_settings(base_mock_url.clone());
         let client = OpenAIApiClient::new(&settings).unwrap();
 
         let request_payload = OpenAIChatRequest {
@@ -263,7 +393,7 @@ mod tests {
         });
 
         let mock = server
-            .mock("POST", "/")
+            .mock("POST", "/chat/completions") // Mock the appended path
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(mock_response_body.to_string())
