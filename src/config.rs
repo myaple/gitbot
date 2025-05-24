@@ -9,59 +9,59 @@ use std::fmt::Debug;
 )]
 pub struct AppSettings {
     /// GitLab instance URL
-    #[arg(long, env = "APP_GITLAB_URL", default_value = "https://gitlab.com")]
+    #[arg(long, env = "GITBOT_GITLAB_URL", default_value = "https://gitlab.com")]
     pub gitlab_url: String,
 
     /// GitLab API token
-    #[arg(long, env = "APP_GITLAB_TOKEN")]
+    #[arg(long, env = "GITBOT_GITLAB_TOKEN")]
     pub gitlab_token: String,
 
     /// OpenAI API key
-    #[arg(long, env = "APP_OPENAI_API_KEY")]
+    #[arg(long, env = "GITBOT_OPENAI_API_KEY")]
     pub openai_api_key: String,
 
     /// Custom OpenAI API URL (if using a proxy or alternative endpoint)
     #[arg(
         long,
-        env = "APP_OPENAI_CUSTOM_URL",
+        env = "GITBOT_OPENAI_CUSTOM_URL",
         default_value = "https://api.openai.com/v1"
     )]
     pub openai_custom_url: String,
 
     /// OpenAI model to use
-    #[arg(long, env = "APP_OPENAI_MODEL", default_value = "gpt-3.5-turbo")]
+    #[arg(long, env = "GITBOT_OPENAI_MODEL", default_value = "gpt-3.5-turbo")]
     pub openai_model: String,
 
     /// Temperature parameter for OpenAI API (0.0 to 1.0)
-    #[arg(long, env = "APP_OPENAI_TEMPERATURE", default_value_t = 0.7)]
+    #[arg(long, env = "GITBOT_OPENAI_TEMPERATURE", default_value_t = 0.7)]
     pub openai_temperature: f32,
 
     /// Maximum number of tokens to generate in the response
-    #[arg(long, env = "APP_OPENAI_MAX_TOKENS", default_value_t = 1024)]
+    #[arg(long, env = "GITBOT_OPENAI_MAX_TOKENS", default_value_t = 1024)]
     pub openai_max_tokens: u32,
 
     /// Comma-separated list of repositories to poll (format: group/project)
-    #[arg(long, env = "APP_REPOS_TO_POLL", value_parser = parse_repos_list)]
+    #[arg(long, env = "GITBOT_REPOS_TO_POLL", value_parser = parse_repos_list)]
     pub repos_to_poll: Vec<String>,
 
     /// Log level (trace, debug, info, warn, error)
-    #[arg(long, env = "APP_LOG_LEVEL", default_value = "info")]
+    #[arg(long, env = "GITBOT_LOG_LEVEL", default_value = "info")]
     pub log_level: String,
 
     /// Bot username on GitLab (without @)
-    #[arg(long, env = "APP_BOT_USERNAME")]
+    #[arg(long, env = "GITBOT_BOT_USERNAME")]
     pub bot_username: String,
 
     /// How often to poll for new mentions (in seconds)
-    #[arg(long, env = "APP_POLL_INTERVAL_SECONDS", default_value_t = 60)]
+    #[arg(long, env = "GITBOT_POLL_INTERVAL_SECONDS", default_value_t = 60)]
     pub poll_interval_seconds: u64,
 
     /// Number of days after which an issue is considered stale
-    #[arg(long, env = "APP_STALE_ISSUE_DAYS", default_value_t = 30)]
+    #[arg(long, env = "GITBOT_STALE_ISSUE_DAYS", default_value_t = 30)]
     pub stale_issue_days: u64,
 
     /// Optional repository to use for additional context (format: group/project)
-    #[arg(long, env = "APP_CONTEXT_REPO_PATH")]
+    #[arg(long, env = "GITBOT_CONTEXT_REPO_PATH")]
     pub context_repo_path: Option<String>,
 }
 
@@ -85,11 +85,7 @@ mod tests {
         let result = parse_repos_list(input).unwrap();
         assert_eq!(
             result,
-            vec![
-                "group1/project1".to_string(),
-                "group2/project2".to_string(),
-                "group3/project3".to_string()
-            ]
+            vec!["group1/project1", "group2/project2", "group3/project3"]
         );
     }
 
@@ -119,10 +115,7 @@ mod tests {
         assert_eq!(settings.openai_model, "gpt-3.5-turbo");
         assert_eq!(settings.openai_temperature, 0.7);
         assert_eq!(settings.openai_max_tokens, 1024);
-        assert_eq!(
-            settings.repos_to_poll,
-            vec!["org/repo1".to_string(), "group/project2".to_string()]
-        );
+        assert_eq!(settings.repos_to_poll, vec!["org/repo1", "group/project2"]);
         assert_eq!(settings.log_level, "debug");
         assert_eq!(settings.bot_username, "test_bot");
         assert_eq!(settings.poll_interval_seconds, 300);
