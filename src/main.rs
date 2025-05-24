@@ -17,29 +17,19 @@ mod repo_context;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize Logging (initial basic setup)
-    let initial_filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    tracing_subscriber::fmt()
-        .with_env_filter(initial_filter)
-        .init();
-
-    info!("Starting application...");
-
-    // Load Configuration
+    // Parse command line arguments and load configuration
     let app_settings = load_config().with_context(|| "Failed to load configuration")?;
 
+    // Initialize Logging with level from config
+    let log_level = app_settings.log_level.clone();
+    let env_filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(log_level.clone()));
+
+    tracing_subscriber::fmt().with_env_filter(env_filter).init();
+
+    info!("Starting application...");
+    info!("Using log level: {}", log_level);
     info!("Configuration loaded successfully.");
-
-    // Re-initialize logging with level from config if RUST_LOG is not set
-    // This ensures that the config's log level is respected.
-    let log_level_from_config = app_settings.log_level.clone();
-    let _final_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(log_level_from_config.clone()));
-    // Skip re-initialization as it's not necessary and can cause issues
-    info!("Using log level: {}", log_level_from_config);
-
-    info!("Configuration loaded and logger re-initialized with config log level if applicable.");
 
     // Initialize GitLab API Client
     let gitlab_client =
