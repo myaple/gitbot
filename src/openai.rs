@@ -6,17 +6,15 @@ use tracing::{debug, error, instrument};
 use url::Url;
 
 #[derive(Error, Debug)]
-pub enum OpenAIClientError {
+pub enum OpenAIClient {
     #[error("Request failed: {0}")]
-    RequestError(#[from] reqwest::Error),
+    Request(#[from] reqwest::Error),
     #[error("API error: {status} - {body}")]
-    ApiError { status: StatusCode, body: String },
+    Api { status: StatusCode, body: String },
     #[error("URL parsing error: {0}")]
-    UrlParseError(#[from] url::ParseError),
+    UrlParse(#[from] url::ParseError),
     #[error("Failed to deserialize response: {0}")]
-    DeserializationError(reqwest::Error),
-    #[error("No choices returned from OpenAI")]
-    NoChoicesReturned, // As per instruction, this can be used later if needed.
+    Deserialization(reqwest::Error),
 }
 
 #[derive(Debug)]
@@ -27,7 +25,7 @@ pub struct OpenAIApiClient {
 }
 
 impl OpenAIApiClient {
-    pub fn new(settings: &AppSettings) -> Result<Self, OpenAIClientError> {
+    pub fn new(settings: &AppSettings) -> Result<Self, OpenAIClient> {
         let openai_custom_url = Url::parse(&settings.openai_custom_url)?;
         let client = Client::new();
         Ok(Self {
@@ -41,7 +39,7 @@ impl OpenAIApiClient {
     pub async fn send_chat_completion(
         &self,
         request_payload: &OpenAIChatRequest,
-    ) -> Result<OpenAIChatResponse, OpenAIClientError> {
+    ) -> Result<OpenAIChatResponse, OpenAIClient> {
         debug!(
             "Sending chat completion request to: {}",
             self.openai_custom_url
@@ -56,7 +54,7 @@ impl OpenAIApiClient {
             .json(request_payload)
             .send()
             .await
-            .map_err(OpenAIClientError::RequestError)?;
+            .map_err(OpenAIClient::Request)?;
 
         let status = response.status();
         if !status.is_success() {
@@ -65,17 +63,17 @@ impl OpenAIApiClient {
                 .await
                 .unwrap_or_else(|e| format!("Failed to read error body: {}", e));
             error!("OpenAI API Error: {} - {}", status, body);
-            return Err(OpenAIClientError::ApiError { status, body });
+            return Err(OpenAIClient::Api { status, body });
         }
 
         let parsed_response = response
             .json::<OpenAIChatResponse>()
             .await
-            .map_err(OpenAIClientError::DeserializationError)?;
+            .map_err(OpenAIClient::Deserialization)?;
 
         // Optional: Check for empty choices if that's an error condition
         // if parsed_response.choices.is_empty() {
-        //     return Err(OpenAIClientError::NoChoicesReturned);
+        //     return Err(OpenAIClient::NoChoicesReturned);
         // }
 
         Ok(parsed_response)
@@ -120,8 +118,8 @@ mod tests {
         let client = OpenAIApiClient::new(&settings);
         assert!(client.is_err());
         match client.err().unwrap() {
-            OpenAIClientError::UrlParseError(_) => {} // Expected error
-            e => panic!("Expected UrlParseError, got {:?}", e),
+            OpenAIClient::UrlParse(_) => {} // Expected error
+            e => panic!("Expected UrlParse, got {:?}", e),
         }
     }
 
@@ -224,11 +222,11 @@ mod tests {
         mock.assert_async().await;
         assert!(result.is_err());
         match result.err().unwrap() {
-            OpenAIClientError::ApiError { status, body } => {
+            OpenAIClient::Api { status, body } => {
                 assert_eq!(status, StatusCode::UNAUTHORIZED);
                 assert_eq!(body, error_body.to_string());
             }
-            e => panic!("Expected ApiError, got {:?}", e),
+            e => panic!("Expected Api, got {:?}", e),
         }
     }
 
@@ -276,7 +274,7 @@ mod tests {
 
         mock.assert_async().await;
 
-        // Current implementation does not throw OpenAIClientError::NoChoicesReturned,
+        // Current implementation does not throw OpenAIClient::NoChoicesReturned,
         // it returns the response as is. The caller should handle empty choices.
         // If NoChoicesReturned were to be implemented, this test would change.
         assert!(
@@ -290,7 +288,7 @@ mod tests {
         // Example of how to test for NoChoicesReturned if it were implemented:
         // assert!(result.is_err());
         // match result.err().unwrap() {
-        //     OpenAIClientError::NoChoicesReturned => {} // Expected
+        //     OpenAIClient::NoChoicesReturned => {} // Expected
         //     e => panic!("Expected NoChoicesReturned, got {:?}", e),
         // }
     }

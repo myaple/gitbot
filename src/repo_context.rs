@@ -10,7 +10,7 @@ const MAX_CONTEXT_SIZE: usize = 10000; // Maximum characters of context to inclu
 
 #[derive(Debug, Deserialize)]
 pub struct GitlabFile {
-    pub file_name: String,
+    // pub file_name: String, // Removed unused field
     pub file_path: String,
     pub size: usize,
     pub content: Option<String>,
@@ -19,7 +19,7 @@ pub struct GitlabFile {
 
 #[derive(Debug, Deserialize)]
 pub struct GitlabDiff {
-    pub old_path: String,
+    // pub old_path: String, // Removed unused field
     pub new_path: String,
     pub diff: String,
 }
@@ -180,7 +180,7 @@ impl RepoContextExtractor {
     fn extract_keywords(&self, issue: &GitlabIssue) -> Vec<String> {
         let mut text = issue.title.clone();
         if let Some(desc) = &issue.description {
-            text.push_str(" ");
+            text.push(' ');
             text.push_str(desc);
         }
 

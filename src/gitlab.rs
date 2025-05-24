@@ -11,15 +11,15 @@ use url::Url;
 use urlencoding::encode;
 
 #[derive(Error, Debug)]
-pub enum GitlabClientError {
+pub enum GitlabError {
     #[error("Request failed: {0}")]
-    RequestError(#[from] reqwest::Error),
+    Request(#[from] reqwest::Error),
     #[error("API error: {status} - {body}")]
-    ApiError { status: StatusCode, body: String },
+    Api { status: StatusCode, body: String },
     #[error("URL parsing error: {0}")]
-    UrlParseError(#[from] url::ParseError),
+    UrlParse(#[from] url::ParseError),
     #[error("Failed to deserialize response: {0}")]
-    DeserializationError(reqwest::Error),
+    Deserialization(reqwest::Error),
 }
 
 #[derive(Debug)]
@@ -30,7 +30,7 @@ pub struct GitlabApiClient {
 }
 
 impl GitlabApiClient {
-    pub fn new(settings: &AppSettings) -> Result<Self, GitlabClientError> {
+    pub fn new(settings: &AppSettings) -> Result<Self, GitlabError> {
         let gitlab_url = Url::parse(&settings.gitlab_url)?;
         let client = Client::new();
         Ok(Self {
@@ -47,7 +47,7 @@ impl GitlabApiClient {
         path: &str,
         query_params: Option<&[(&str, &str)]>,
         body: Option<impl Serialize + Debug>, // Added Debug for logging
-    ) -> Result<T, GitlabClientError> {
+    ) -> Result<T, GitlabError> {
         let mut url = self.gitlab_url.join(path)?;
         if let Some(params) = query_params {
             url.query_pairs_mut().extend_pairs(params);
@@ -71,10 +71,7 @@ impl GitlabApiClient {
             request_builder = request_builder.json(&b);
         }
 
-        let response = request_builder
-            .send()
-            .await
-            .map_err(GitlabClientError::RequestError)?;
+        let response = request_builder.send().await.map_err(GitlabError::Request)?;
 
         let status = response.status();
         if !status.is_success() {
@@ -83,7 +80,7 @@ impl GitlabApiClient {
                 .await
                 .unwrap_or_else(|_| "Could not read error body".to_string());
             error!("API Error: {} - {}", status, response_body);
-            return Err(GitlabClientError::ApiError {
+            return Err(GitlabError::Api {
                 status,
                 body: response_body,
             });
@@ -92,7 +89,7 @@ impl GitlabApiClient {
         let parsed_response = response
             .json::<T>()
             .await
-            .map_err(GitlabClientError::DeserializationError)?;
+            .map_err(GitlabError::Deserialization)?;
         Ok(parsed_response)
     }
 
@@ -101,7 +98,7 @@ impl GitlabApiClient {
         &self,
         project_id: i64,
         issue_iid: i64,
-    ) -> Result<GitlabIssue, GitlabClientError> {
+    ) -> Result<GitlabIssue, GitlabError> {
         let path = format!("/api/v4/projects/{}/issues/{}", project_id, issue_iid);
         self.send_request(Method::GET, &path, None, None::<()>)
             .await
@@ -112,7 +109,7 @@ impl GitlabApiClient {
         &self,
         project_id: i64,
         mr_iid: i64,
-    ) -> Result<GitlabMergeRequest, GitlabClientError> {
+    ) -> Result<GitlabMergeRequest, GitlabError> {
         let path = format!("/api/v4/projects/{}/merge_requests/{}", project_id, mr_iid);
         self.send_request(Method::GET, &path, None, None::<()>)
             .await
@@ -124,7 +121,7 @@ impl GitlabApiClient {
         project_id: i64,
         issue_iid: i64,
         comment_body: &str,
-    ) -> Result<GitlabNoteAttributes, GitlabClientError> {
+    ) -> Result<GitlabNoteAttributes, GitlabError> {
         let path = format!("/api/v4/projects/{}/issues/{}/notes", project_id, issue_iid);
         let body = serde_json::json!({"body": comment_body});
         self.send_request(Method::POST, &path, None, Some(body))
@@ -137,7 +134,7 @@ impl GitlabApiClient {
         project_id: i64,
         mr_iid: i64,
         comment_body: &str,
-    ) -> Result<GitlabNoteAttributes, GitlabClientError> {
+    ) -> Result<GitlabNoteAttributes, GitlabError> {
         let path = format!(
             "/api/v4/projects/{}/merge_requests/{}/notes",
             project_id, mr_iid
@@ -148,10 +145,7 @@ impl GitlabApiClient {
     }
 
     #[instrument(skip(self), fields(repo_path))]
-    pub async fn get_project_by_path(
-        &self,
-        repo_path: &str,
-    ) -> Result<GitlabProject, GitlabClientError> {
+    pub async fn get_project_by_path(&self, repo_path: &str) -> Result<GitlabProject, GitlabError> {
         let encoded_path = urlencoding::encode(repo_path);
         let path = format!("/api/v4/projects/{}", encoded_path);
         self.send_request(Method::GET, &path, None, None::<()>)
@@ -163,9 +157,9 @@ impl GitlabApiClient {
         &self,
         project_id: i64,
         since_timestamp: u64,
-    ) -> Result<Vec<GitlabIssue>, GitlabClientError> {
+    ) -> Result<Vec<GitlabIssue>, GitlabError> {
         let path = format!("/api/v4/projects/{}/issues", project_id);
-        let query_params = vec![
+        let query_params = [
             ("updated_after", format!("{}", since_timestamp)),
             ("sort", "asc".to_string()),
             ("per_page", "100".to_string()),
@@ -182,9 +176,9 @@ impl GitlabApiClient {
         &self,
         project_id: i64,
         since_timestamp: u64,
-    ) -> Result<Vec<GitlabMergeRequest>, GitlabClientError> {
+    ) -> Result<Vec<GitlabMergeRequest>, GitlabError> {
         let path = format!("/api/v4/projects/{}/merge_requests", project_id);
-        let query_params = vec![
+        let query_params = [
             ("updated_after", format!("{}", since_timestamp)),
             ("sort", "asc".to_string()),
             ("per_page", "100".to_string()),
@@ -202,9 +196,9 @@ impl GitlabApiClient {
         project_id: i64,
         issue_iid: i64,
         since_timestamp: u64,
-    ) -> Result<Vec<GitlabNoteAttributes>, GitlabClientError> {
+    ) -> Result<Vec<GitlabNoteAttributes>, GitlabError> {
         let path = format!("/api/v4/projects/{}/issues/{}/notes", project_id, issue_iid);
-        let query_params = vec![
+        let query_params = [
             ("created_after", format!("{}", since_timestamp)),
             ("sort", "asc".to_string()),
             ("per_page", "100".to_string()),
@@ -222,12 +216,12 @@ impl GitlabApiClient {
         project_id: i64,
         mr_iid: i64,
         since_timestamp: u64,
-    ) -> Result<Vec<GitlabNoteAttributes>, GitlabClientError> {
+    ) -> Result<Vec<GitlabNoteAttributes>, GitlabError> {
         let path = format!(
             "/api/v4/projects/{}/merge_requests/{}/notes",
             project_id, mr_iid
         );
-        let query_params = vec![
+        let query_params = [
             ("created_after", format!("{}", since_timestamp)),
             ("sort", "asc".to_string()),
             ("per_page", "100".to_string()),
@@ -241,10 +235,7 @@ impl GitlabApiClient {
 
     /// Get the repository file tree
     #[instrument(skip(self), fields(project_id))]
-    pub async fn get_repository_tree(
-        &self,
-        project_id: i64,
-    ) -> Result<Vec<String>, GitlabClientError> {
+    pub async fn get_repository_tree(&self, project_id: i64) -> Result<Vec<String>, GitlabError> {
         let path = format!("/api/v4/projects/{}/repository/tree", project_id);
         let query = &[("recursive", "true"), ("per_page", "100")];
 
@@ -268,7 +259,7 @@ impl GitlabApiClient {
         &self,
         project_id: i64,
         file_path: &str,
-    ) -> Result<GitlabFile, GitlabClientError> {
+    ) -> Result<GitlabFile, GitlabError> {
         let path = format!(
             "/api/v4/projects/{}/repository/files/{}",
             project_id,
@@ -311,7 +302,7 @@ impl GitlabApiClient {
         &self,
         project_id: i64,
         query: &str,
-    ) -> Result<Vec<String>, GitlabClientError> {
+    ) -> Result<Vec<String>, GitlabError> {
         let path = format!("/api/v4/projects/{}/search", project_id);
         let query_params = &[
             ("scope", "blobs"),
@@ -338,7 +329,7 @@ impl GitlabApiClient {
         &self,
         project_id: i64,
         query: &str,
-    ) -> Result<Vec<String>, GitlabClientError> {
+    ) -> Result<Vec<String>, GitlabError> {
         let path = format!("/api/v4/projects/{}/search", project_id);
         let query_params = &[
             ("scope", "blobs"),
@@ -365,7 +356,7 @@ impl GitlabApiClient {
         &self,
         project_id: i64,
         merge_request_iid: i64,
-    ) -> Result<Vec<GitlabDiff>, GitlabClientError> {
+    ) -> Result<Vec<GitlabDiff>, GitlabError> {
         let path = format!(
             "/api/v4/projects/{}/merge_requests/{}/changes",
             project_id, merge_request_iid
@@ -382,15 +373,10 @@ impl GitlabApiClient {
                 changes
                     .iter()
                     .filter_map(|change| {
-                        let old_path = change["old_path"].as_str()?.to_string();
                         let new_path = change["new_path"].as_str()?.to_string();
                         let diff = change["diff"].as_str()?.to_string();
 
-                        Some(GitlabDiff {
-                            old_path,
-                            new_path,
-                            diff,
-                        })
+                        Some(GitlabDiff { new_path, diff })
                     })
                     .collect()
             })
@@ -437,8 +423,8 @@ mod tests {
         let client = GitlabApiClient::new(&settings);
         assert!(client.is_err());
         match client.err().unwrap() {
-            GitlabClientError::UrlParseError(_) => {} // Expected error
-            _ => panic!("Expected UrlParseError"),
+            GitlabError::UrlParse(_) => {} // Expected error
+            _ => panic!("Expected UrlParse"),
         }
     }
 
@@ -494,11 +480,11 @@ mod tests {
         let result = client.get_issue(2, 202).await;
         assert!(result.is_err());
         match result.err().unwrap() {
-            GitlabClientError::ApiError { status, body } => {
+            GitlabError::Api { status, body } => {
                 assert_eq!(status, StatusCode::NOT_FOUND);
                 assert_eq!(body, "{\"message\": \"Issue not found\"}");
             }
-            _ => panic!("Expected ApiError"),
+            _ => panic!("Expected Api"),
         }
     }
 
@@ -605,11 +591,11 @@ mod tests {
         mock.assert_async().await;
         assert!(result.is_err());
         match result.err().unwrap() {
-            GitlabClientError::ApiError { status, body } => {
+            GitlabError::Api { status, body } => {
                 assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
                 assert_eq!(body, "{\"message\": \"Server error processing note\"}");
             }
-            _ => panic!("Expected ApiError"),
+            _ => panic!("Expected Api"),
         }
     }
 

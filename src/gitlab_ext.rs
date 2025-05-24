@@ -97,7 +97,6 @@ mod tests {
             .await;
 
         let file = client.get_file_content(1, "src/main.rs").await.unwrap();
-        assert_eq!(file.file_name, "main.rs");
         assert_eq!(file.file_path, "src/main.rs");
         assert_eq!(file.size, 123);
         assert_eq!(file.encoding, Some("base64".to_string()));
@@ -136,10 +135,8 @@ mod tests {
 
         let changes = client.get_merge_request_changes(1, 5).await.unwrap();
         assert_eq!(changes.len(), 2);
-        assert_eq!(changes[0].old_path, "src/main.rs");
         assert_eq!(changes[0].new_path, "src/main.rs");
         assert!(changes[0].diff.contains("Hello, World!"));
-        assert_eq!(changes[1].old_path, "README.md");
         assert_eq!(changes[1].new_path, "README.md");
         assert!(changes[1].diff.contains("A simple Rust project."));
     }

@@ -315,7 +315,6 @@ impl PollingService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mockito;
 
     fn create_test_settings(base_url: String) -> AppSettings {
         AppSettings {

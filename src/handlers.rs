@@ -292,7 +292,7 @@ pub async fn process_mention(
     // Extract LLM's Reply
     let llm_reply = openai_response
         .choices
-        .get(0)
+        .first()
         .map(|choice| choice.message.content.clone())
         .unwrap_or_else(|| "Sorry, I couldn't get a valid response from the LLM.".to_string());
 
@@ -369,7 +369,6 @@ mod tests {
     use crate::models::{
         GitlabNoteAttributes, GitlabNoteEvent, GitlabNoteObject, GitlabProject, GitlabUser,
     };
-    use mockito;
     use std::sync::Arc;
 
     #[test]
