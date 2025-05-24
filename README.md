@@ -1,7 +1,8 @@
 # gitbot
 
-A brief description of what `gitbot` is and what it does.
-(Placeholder: This project is a bot that interacts with Git repositories.)
+This is a bot that interacts specifically with GitLab repositories
+to provide Copilot-like LLM assistance in the absence of GitLab
+Ultimate licensing.
 
 ## Prerequisites
 
@@ -35,11 +36,11 @@ To run the bot:
 ./target/release/gitbot
 ```
 
-(Placeholder: Add any necessary configuration steps or environment variables needed to run the bot.)
-
 ## Features
 
-(Placeholder: List the key features of `gitbot`.)
+Gitbot comments on issues and merge requests when tagged, providing
+an LLM-powered summary of the issue or MR, including repo context
+and code. 
 
 ## Contributing
 
@@ -47,4 +48,4 @@ Please see [CONTRIBUTING.md](CONTRIBUTING.md) for details on how to contribute t
 
 ## License
 
-(Placeholder: Specify the license for this project, e.g., MIT License. If no license is chosen yet, state that it's under consideration or default to a common open-source license.)
+MIT License.

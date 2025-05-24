@@ -3,9 +3,9 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::gitlab::GitlabApiClient;
     use crate::config::AppSettings;
-    
+    use crate::gitlab::GitlabApiClient;
+
     fn create_test_settings(base_url: String) -> AppSettings {
         AppSettings {
             gitlab_url: base_url,
@@ -22,14 +22,14 @@ mod tests {
             context_repo_path: None,
         }
     }
-    
+
     #[tokio::test]
     async fn test_get_repository_tree() {
         let mut server = mockito::Server::new_async().await;
         let base_url = server.url();
         let settings = create_test_settings(base_url);
         let client = GitlabApiClient::new(&settings).unwrap();
-        
+
         let mock_tree_response = serde_json::json!([
             {
                 "id": "a1b2c3d4e5f6",
@@ -53,8 +53,9 @@ mod tests {
                 "mode": "100644"
             }
         ]);
-        
-        let _m = server.mock("GET", "/api/v4/projects/1/repository/tree")
+
+        let _m = server
+            .mock("GET", "/api/v4/projects/1/repository/tree")
             .match_query(mockito::Matcher::AllOf(vec![
                 mockito::Matcher::UrlEncoded("recursive".into(), "true".into()),
                 mockito::Matcher::UrlEncoded("per_page".into(), "100".into()),
@@ -62,21 +63,22 @@ mod tests {
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(mock_tree_response.to_string())
-            .create_async().await;
-            
+            .create_async()
+            .await;
+
         let files = client.get_repository_tree(1).await.unwrap();
         assert_eq!(files.len(), 2); // Only blobs, not trees
         assert!(files.contains(&"README.md".to_string()));
         assert!(files.contains(&"src/main.rs".to_string()));
     }
-    
+
     #[tokio::test]
     async fn test_get_file_content() {
         let mut server = mockito::Server::new_async().await;
         let base_url = server.url();
         let settings = create_test_settings(base_url);
         let client = GitlabApiClient::new(&settings).unwrap();
-        
+
         let mock_file_response = serde_json::json!({
             "file_name": "main.rs",
             "file_path": "src/main.rs",
@@ -84,14 +86,16 @@ mod tests {
             "encoding": "base64",
             "content": "Zm4gbWFpbigpIHsKICAgIHByaW50bG4hKCJIZWxsbyBXb3JsZCIpOwp9" // base64 for: fn main() { println!("Hello World"); }
         });
-        
-        let _m = server.mock("GET", "/api/v4/projects/1/repository/files/src%2Fmain.rs")
+
+        let _m = server
+            .mock("GET", "/api/v4/projects/1/repository/files/src%2Fmain.rs")
             .match_query(mockito::Matcher::UrlEncoded("ref".into(), "main".into()))
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(mock_file_response.to_string())
-            .create_async().await;
-            
+            .create_async()
+            .await;
+
         let file = client.get_file_content(1, "src/main.rs").await.unwrap();
         assert_eq!(file.file_name, "main.rs");
         assert_eq!(file.file_path, "src/main.rs");
@@ -99,14 +103,14 @@ mod tests {
         assert_eq!(file.encoding, Some("base64".to_string()));
         assert!(file.content.is_some());
     }
-    
+
     #[tokio::test]
     async fn test_get_merge_request_changes() {
         let mut server = mockito::Server::new_async().await;
         let base_url = server.url();
         let settings = create_test_settings(base_url);
         let client = GitlabApiClient::new(&settings).unwrap();
-        
+
         let mock_changes_response = serde_json::json!({
             "changes": [
                 {
@@ -121,13 +125,15 @@ mod tests {
                 }
             ]
         });
-        
-        let _m = server.mock("GET", "/api/v4/projects/1/merge_requests/5/changes")
+
+        let _m = server
+            .mock("GET", "/api/v4/projects/1/merge_requests/5/changes")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(mock_changes_response.to_string())
-            .create_async().await;
-            
+            .create_async()
+            .await;
+
         let changes = client.get_merge_request_changes(1, 5).await.unwrap();
         assert_eq!(changes.len(), 2);
         assert_eq!(changes[0].old_path, "src/main.rs");

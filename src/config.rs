@@ -73,6 +73,9 @@ mod tests {
         assert_eq!(settings.log_level, "debug");
         assert_eq!(settings.bot_username, "test_bot");
         assert_eq!(settings.poll_interval_seconds, 300);
-        assert_eq!(settings.context_repo_path, Some("org/context-repo".to_string()));
+        assert_eq!(
+            settings.context_repo_path,
+            Some("org/context-repo".to_string())
+        );
     }
 }

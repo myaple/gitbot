@@ -53,8 +53,8 @@ pub struct GitlabNoteAttributes {
     pub project_id: i64,
     pub noteable_type: String, // e.g., "Issue", "MergeRequest", "Snippet"
     pub noteable_id: Option<i64>, // The ID of the Issue or MR if noteable_type is Issue or MergeRequest
-    pub iid: Option<i64>, // The IID of the noteable, e.g. issue iid or mr iid.
-    pub url: String, // URL to the comment
+    pub iid: Option<i64>,         // The IID of the noteable, e.g. issue iid or mr iid.
+    pub url: String,              // URL to the comment
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

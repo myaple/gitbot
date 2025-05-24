@@ -1,9 +1,9 @@
-use reqwest::{Client, header, StatusCode};
+use crate::config::AppSettings;
+use crate::models::{OpenAIChatRequest, OpenAIChatResponse};
+use reqwest::{header, Client, StatusCode};
 use thiserror::Error;
 use tracing::{debug, error, instrument};
 use url::Url;
-use crate::models::{OpenAIChatRequest, OpenAIChatResponse};
-use crate::config::AppSettings;
 
 #[derive(Error, Debug)]
 pub enum OpenAIClientError {
@@ -42,7 +42,10 @@ impl OpenAIApiClient {
         &self,
         request_payload: &OpenAIChatRequest,
     ) -> Result<OpenAIChatResponse, OpenAIClientError> {
-        debug!("Sending chat completion request to: {}", self.openai_custom_url);
+        debug!(
+            "Sending chat completion request to: {}",
+            self.openai_custom_url
+        );
         debug!("Request payload: {:?}", request_payload);
 
         let response = self
@@ -69,7 +72,7 @@ impl OpenAIApiClient {
             .json::<OpenAIChatResponse>()
             .await
             .map_err(OpenAIClientError::DeserializationError)?;
-        
+
         // Optional: Check for empty choices if that's an error condition
         // if parsed_response.choices.is_empty() {
         //     return Err(OpenAIClientError::NoChoicesReturned);
@@ -105,7 +108,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_new_openai_api_client_valid_url() {
-        let settings = create_test_settings("http://localhost:1234/v1/chat/completions".to_string());
+        let settings =
+            create_test_settings("http://localhost:1234/v1/chat/completions".to_string());
         let client = OpenAIApiClient::new(&settings);
         assert!(client.is_ok());
     }
@@ -161,20 +165,26 @@ mod tests {
                 "total_tokens": 21
             }
         });
-        
+
         // The mock path should be "/" if the full_mock_url is used for the client.
-        let mock = server.mock("POST", "/")
+        let mock = server
+            .mock("POST", "/")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(mock_response_body.to_string())
             .match_header("Authorization", "Bearer test_api_key")
             // Skip body matching to avoid JSON format issues
-            .create_async().await;
+            .create_async()
+            .await;
 
         let response_result = client.send_chat_completion(&request_payload).await;
-        
+
         mock.assert_async().await; // Verify the mock was called
-        assert!(response_result.is_ok(), "Expected Ok, got Err: {:?}", response_result.err());
+        assert!(
+            response_result.is_ok(),
+            "Expected Ok, got Err: {:?}",
+            response_result.err()
+        );
         let response = response_result.unwrap();
         assert!(!response.choices.is_empty());
         assert_eq!(response.choices[0].message.content, "Hi there!");
@@ -200,12 +210,14 @@ mod tests {
 
         let error_body = json!({"error": {"message": "Invalid API key", "type": "auth_error"}});
 
-        let mock = server.mock("POST", "/")
+        let mock = server
+            .mock("POST", "/")
             .with_status(401) // Unauthorized
             .with_header("content-type", "application/json")
             .with_body(error_body.to_string())
             // Skip body matching to avoid JSON format issues
-            .create_async().await;
+            .create_async()
+            .await;
 
         let result = client.send_chat_completion(&request_payload).await;
 
@@ -219,7 +231,7 @@ mod tests {
             e => panic!("Expected ApiError, got {:?}", e),
         }
     }
-    
+
     #[tokio::test]
     async fn test_send_chat_completion_empty_choices() {
         let mut server = mockito::Server::new_async().await;
@@ -230,7 +242,10 @@ mod tests {
 
         let request_payload = OpenAIChatRequest {
             model: "test-model-empty-choice".to_string(),
-            messages: vec![OpenAIChatMessage { role: "user".to_string(), content: "Hello".to_string() }],
+            messages: vec![OpenAIChatMessage {
+                role: "user".to_string(),
+                content: "Hello".to_string(),
+            }],
             temperature: Some(0.5),
             max_tokens: Some(10),
         };
@@ -248,21 +263,27 @@ mod tests {
             }
         });
 
-        let mock = server.mock("POST", "/")
+        let mock = server
+            .mock("POST", "/")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(mock_response_body.to_string())
             // Skip body matching to avoid JSON format issues
-            .create_async().await;
+            .create_async()
+            .await;
 
         let response_result = client.send_chat_completion(&request_payload).await;
-        
+
         mock.assert_async().await;
-        
+
         // Current implementation does not throw OpenAIClientError::NoChoicesReturned,
         // it returns the response as is. The caller should handle empty choices.
         // If NoChoicesReturned were to be implemented, this test would change.
-        assert!(response_result.is_ok(), "Expected Ok for empty choices, got Err: {:?}", response_result.err());
+        assert!(
+            response_result.is_ok(),
+            "Expected Ok for empty choices, got Err: {:?}",
+            response_result.err()
+        );
         let response = response_result.unwrap();
         assert!(response.choices.is_empty(), "Expected choices to be empty");
 

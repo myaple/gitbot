@@ -1,13 +1,13 @@
-use reqwest::{Client, header, StatusCode, Method};
+use crate::config::AppSettings;
+use crate::models::{GitlabIssue, GitlabMergeRequest, GitlabNoteAttributes, GitlabProject};
+use crate::repo_context::{GitlabDiff, GitlabFile};
+use reqwest::{header, Client, Method, StatusCode};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::fmt::Debug;
 use thiserror::Error;
 use tracing::{debug, error, instrument};
 use url::Url;
-use crate::models::{GitlabIssue, GitlabMergeRequest, GitlabNoteAttributes, GitlabProject}; 
-use crate::config::AppSettings;
-use crate::repo_context::{GitlabFile, GitlabDiff};
 use urlencoding::encode;
 
 #[derive(Error, Debug)]
@@ -58,23 +58,30 @@ impl GitlabApiClient {
             debug!("Request body: {:?}", b);
         }
 
-
-        let mut request_builder = self.client.request(method, url)
+        let mut request_builder = self
+            .client
+            .request(method, url)
             .header("PRIVATE-TOKEN", &self.private_token);
 
         if body.is_some() {
             request_builder = request_builder.header(header::CONTENT_TYPE, "application/json");
         }
-        
+
         if let Some(b) = body {
             request_builder = request_builder.json(&b);
         }
 
-        let response = request_builder.send().await.map_err(GitlabClientError::RequestError)?;
+        let response = request_builder
+            .send()
+            .await
+            .map_err(GitlabClientError::RequestError)?;
 
         let status = response.status();
         if !status.is_success() {
-            let response_body = response.text().await.unwrap_or_else(|_| "Could not read error body".to_string());
+            let response_body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Could not read error body".to_string());
             error!("API Error: {} - {}", status, response_body);
             return Err(GitlabClientError::ApiError {
                 status,
@@ -82,134 +89,206 @@ impl GitlabApiClient {
             });
         }
 
-        let parsed_response = response.json::<T>().await.map_err(GitlabClientError::DeserializationError)?;
+        let parsed_response = response
+            .json::<T>()
+            .await
+            .map_err(GitlabClientError::DeserializationError)?;
         Ok(parsed_response)
     }
-    
+
     #[instrument(skip(self), fields(project_id, issue_iid))]
-    pub async fn get_issue(&self, project_id: i64, issue_iid: i64) -> Result<GitlabIssue, GitlabClientError> {
+    pub async fn get_issue(
+        &self,
+        project_id: i64,
+        issue_iid: i64,
+    ) -> Result<GitlabIssue, GitlabClientError> {
         let path = format!("/api/v4/projects/{}/issues/{}", project_id, issue_iid);
-        self.send_request(Method::GET, &path, None, None::<()>).await
+        self.send_request(Method::GET, &path, None, None::<()>)
+            .await
     }
 
     #[instrument(skip(self), fields(project_id, mr_iid))]
-    pub async fn get_merge_request(&self, project_id: i64, mr_iid: i64) -> Result<GitlabMergeRequest, GitlabClientError> {
+    pub async fn get_merge_request(
+        &self,
+        project_id: i64,
+        mr_iid: i64,
+    ) -> Result<GitlabMergeRequest, GitlabClientError> {
         let path = format!("/api/v4/projects/{}/merge_requests/{}", project_id, mr_iid);
-        self.send_request(Method::GET, &path, None, None::<()>).await
+        self.send_request(Method::GET, &path, None, None::<()>)
+            .await
     }
 
     #[instrument(skip(self), fields(project_id, issue_iid))]
-    pub async fn post_comment_to_issue(&self, project_id: i64, issue_iid: i64, comment_body: &str) -> Result<GitlabNoteAttributes, GitlabClientError> {
+    pub async fn post_comment_to_issue(
+        &self,
+        project_id: i64,
+        issue_iid: i64,
+        comment_body: &str,
+    ) -> Result<GitlabNoteAttributes, GitlabClientError> {
         let path = format!("/api/v4/projects/{}/issues/{}/notes", project_id, issue_iid);
         let body = serde_json::json!({"body": comment_body});
-        self.send_request(Method::POST, &path, None, Some(body)).await
+        self.send_request(Method::POST, &path, None, Some(body))
+            .await
     }
 
     #[instrument(skip(self), fields(project_id, mr_iid))]
-    pub async fn post_comment_to_merge_request(&self, project_id: i64, mr_iid: i64, comment_body: &str) -> Result<GitlabNoteAttributes, GitlabClientError> {
-        let path = format!("/api/v4/projects/{}/merge_requests/{}/notes", project_id, mr_iid);
+    pub async fn post_comment_to_merge_request(
+        &self,
+        project_id: i64,
+        mr_iid: i64,
+        comment_body: &str,
+    ) -> Result<GitlabNoteAttributes, GitlabClientError> {
+        let path = format!(
+            "/api/v4/projects/{}/merge_requests/{}/notes",
+            project_id, mr_iid
+        );
         let body = serde_json::json!({"body": comment_body});
-        self.send_request(Method::POST, &path, None, Some(body)).await
+        self.send_request(Method::POST, &path, None, Some(body))
+            .await
     }
-    
+
     #[instrument(skip(self), fields(repo_path))]
-    pub async fn get_project_by_path(&self, repo_path: &str) -> Result<GitlabProject, GitlabClientError> {
+    pub async fn get_project_by_path(
+        &self,
+        repo_path: &str,
+    ) -> Result<GitlabProject, GitlabClientError> {
         let encoded_path = urlencoding::encode(repo_path);
         let path = format!("/api/v4/projects/{}", encoded_path);
-        self.send_request(Method::GET, &path, None, None::<()>).await
+        self.send_request(Method::GET, &path, None, None::<()>)
+            .await
     }
-    
+
     #[instrument(skip(self), fields(project_id, since_timestamp))]
-    pub async fn get_issues(&self, project_id: i64, since_timestamp: u64) -> Result<Vec<GitlabIssue>, GitlabClientError> {
+    pub async fn get_issues(
+        &self,
+        project_id: i64,
+        since_timestamp: u64,
+    ) -> Result<Vec<GitlabIssue>, GitlabClientError> {
         let path = format!("/api/v4/projects/{}/issues", project_id);
         let query_params = vec![
             ("updated_after", format!("{}", since_timestamp)),
             ("sort", "asc".to_string()),
             ("per_page", "100".to_string()),
         ];
-        let params: Vec<(&str, &str)> = query_params.iter()
-            .map(|(k, v)| (*k, v.as_str()))
-            .collect();
-        
-        self.send_request(Method::GET, &path, Some(&params), None::<()>).await
+        let params: Vec<(&str, &str)> =
+            query_params.iter().map(|(k, v)| (*k, v.as_str())).collect();
+
+        self.send_request(Method::GET, &path, Some(&params), None::<()>)
+            .await
     }
-    
+
     #[instrument(skip(self), fields(project_id, since_timestamp))]
-    pub async fn get_merge_requests(&self, project_id: i64, since_timestamp: u64) -> Result<Vec<GitlabMergeRequest>, GitlabClientError> {
+    pub async fn get_merge_requests(
+        &self,
+        project_id: i64,
+        since_timestamp: u64,
+    ) -> Result<Vec<GitlabMergeRequest>, GitlabClientError> {
         let path = format!("/api/v4/projects/{}/merge_requests", project_id);
         let query_params = vec![
             ("updated_after", format!("{}", since_timestamp)),
             ("sort", "asc".to_string()),
             ("per_page", "100".to_string()),
         ];
-        let params: Vec<(&str, &str)> = query_params.iter()
-            .map(|(k, v)| (*k, v.as_str()))
-            .collect();
-        
-        self.send_request(Method::GET, &path, Some(&params), None::<()>).await
+        let params: Vec<(&str, &str)> =
+            query_params.iter().map(|(k, v)| (*k, v.as_str())).collect();
+
+        self.send_request(Method::GET, &path, Some(&params), None::<()>)
+            .await
     }
-    
+
     #[instrument(skip(self), fields(project_id, issue_iid, since_timestamp))]
-    pub async fn get_issue_notes(&self, project_id: i64, issue_iid: i64, since_timestamp: u64) -> Result<Vec<GitlabNoteAttributes>, GitlabClientError> {
+    pub async fn get_issue_notes(
+        &self,
+        project_id: i64,
+        issue_iid: i64,
+        since_timestamp: u64,
+    ) -> Result<Vec<GitlabNoteAttributes>, GitlabClientError> {
         let path = format!("/api/v4/projects/{}/issues/{}/notes", project_id, issue_iid);
         let query_params = vec![
             ("created_after", format!("{}", since_timestamp)),
             ("sort", "asc".to_string()),
             ("per_page", "100".to_string()),
         ];
-        let params: Vec<(&str, &str)> = query_params.iter()
-            .map(|(k, v)| (*k, v.as_str()))
-            .collect();
-        
-        self.send_request(Method::GET, &path, Some(&params), None::<()>).await
+        let params: Vec<(&str, &str)> =
+            query_params.iter().map(|(k, v)| (*k, v.as_str())).collect();
+
+        self.send_request(Method::GET, &path, Some(&params), None::<()>)
+            .await
     }
-    
+
     #[instrument(skip(self), fields(project_id, mr_iid, since_timestamp))]
-    pub async fn get_merge_request_notes(&self, project_id: i64, mr_iid: i64, since_timestamp: u64) -> Result<Vec<GitlabNoteAttributes>, GitlabClientError> {
-        let path = format!("/api/v4/projects/{}/merge_requests/{}/notes", project_id, mr_iid);
+    pub async fn get_merge_request_notes(
+        &self,
+        project_id: i64,
+        mr_iid: i64,
+        since_timestamp: u64,
+    ) -> Result<Vec<GitlabNoteAttributes>, GitlabClientError> {
+        let path = format!(
+            "/api/v4/projects/{}/merge_requests/{}/notes",
+            project_id, mr_iid
+        );
         let query_params = vec![
             ("created_after", format!("{}", since_timestamp)),
             ("sort", "asc".to_string()),
             ("per_page", "100".to_string()),
         ];
-        let params: Vec<(&str, &str)> = query_params.iter()
-            .map(|(k, v)| (*k, v.as_str()))
-            .collect();
-        
-        self.send_request(Method::GET, &path, Some(&params), None::<()>).await
+        let params: Vec<(&str, &str)> =
+            query_params.iter().map(|(k, v)| (*k, v.as_str())).collect();
+
+        self.send_request(Method::GET, &path, Some(&params), None::<()>)
+            .await
     }
-    
+
     /// Get the repository file tree
     #[instrument(skip(self), fields(project_id))]
-    pub async fn get_repository_tree(&self, project_id: i64) -> Result<Vec<String>, GitlabClientError> {
+    pub async fn get_repository_tree(
+        &self,
+        project_id: i64,
+    ) -> Result<Vec<String>, GitlabClientError> {
         let path = format!("/api/v4/projects/{}/repository/tree", project_id);
         let query = &[("recursive", "true"), ("per_page", "100")];
-        
-        let items: Vec<serde_json::Value> = self.send_request(Method::GET, &path, Some(query), None::<()>).await?;
-        
+
+        let items: Vec<serde_json::Value> = self
+            .send_request(Method::GET, &path, Some(query), None::<()>)
+            .await?;
+
         // Extract file paths
-        let file_paths = items.into_iter()
+        let file_paths = items
+            .into_iter()
             .filter(|item| item["type"].as_str().unwrap_or("") == "blob") // Only include files, not directories
             .filter_map(|item| item["path"].as_str().map(|s| s.to_string()))
             .collect();
-        
+
         Ok(file_paths)
     }
-    
+
     /// Get file content from repository
     #[instrument(skip(self), fields(project_id, file_path))]
-    pub async fn get_file_content(&self, project_id: i64, file_path: &str) -> Result<GitlabFile, GitlabClientError> {
-        let path = format!("/api/v4/projects/{}/repository/files/{}", project_id, encode(file_path));
+    pub async fn get_file_content(
+        &self,
+        project_id: i64,
+        file_path: &str,
+    ) -> Result<GitlabFile, GitlabClientError> {
+        let path = format!(
+            "/api/v4/projects/{}/repository/files/{}",
+            project_id,
+            encode(file_path)
+        );
         let query = &[("ref", "main")]; // Default to main branch
-        
-        let mut file: GitlabFile = self.send_request(Method::GET, &path, Some(query), None::<()>).await?;
-        
+
+        let mut file: GitlabFile = self
+            .send_request(Method::GET, &path, Some(query), None::<()>)
+            .await?;
+
         // If the file is too large, skip content
         if file.size > 100_000 {
-            debug!("File {} is too large ({} bytes), skipping content", file_path, file.size);
+            debug!(
+                "File {} is too large ({} bytes), skipping content",
+                file_path, file.size
+            );
             return Ok(file);
         }
-        
+
         // Decode content if needed
         if let Some(content) = &file.content {
             if let Some(encoding) = &file.encoding {
@@ -222,13 +301,17 @@ impl GitlabApiClient {
                 }
             }
         }
-        
+
         Ok(file)
     }
-    
+
     /// Search for files by name
     #[instrument(skip(self), fields(project_id, query))]
-    pub async fn search_files_by_name(&self, project_id: i64, query: &str) -> Result<Vec<String>, GitlabClientError> {
+    pub async fn search_files_by_name(
+        &self,
+        project_id: i64,
+        query: &str,
+    ) -> Result<Vec<String>, GitlabClientError> {
         let path = format!("/api/v4/projects/{}/search", project_id);
         let query_params = &[
             ("scope", "blobs"),
@@ -236,19 +319,26 @@ impl GitlabApiClient {
             ("ref", "main"),
             ("per_page", "20"),
         ];
-        
-        let results: Vec<serde_json::Value> = self.send_request(Method::GET, &path, Some(query_params), None::<()>).await?;
-        
-        let file_paths = results.into_iter()
+
+        let results: Vec<serde_json::Value> = self
+            .send_request(Method::GET, &path, Some(query_params), None::<()>)
+            .await?;
+
+        let file_paths = results
+            .into_iter()
             .filter_map(|item| item["path"].as_str().map(|s| s.to_string()))
             .collect();
-        
+
         Ok(file_paths)
     }
-    
+
     /// Search for files by content
     #[instrument(skip(self), fields(project_id, query))]
-    pub async fn search_files_by_content(&self, project_id: i64, query: &str) -> Result<Vec<String>, GitlabClientError> {
+    pub async fn search_files_by_content(
+        &self,
+        project_id: i64,
+        query: &str,
+    ) -> Result<Vec<String>, GitlabClientError> {
         let path = format!("/api/v4/projects/{}/search", project_id);
         let query_params = &[
             ("scope", "blobs"),
@@ -256,32 +346,46 @@ impl GitlabApiClient {
             ("ref", "main"),
             ("per_page", "20"),
         ];
-        
-        let results: Vec<serde_json::Value> = self.send_request(Method::GET, &path, Some(query_params), None::<()>).await?;
-        
-        let file_paths = results.into_iter()
+
+        let results: Vec<serde_json::Value> = self
+            .send_request(Method::GET, &path, Some(query_params), None::<()>)
+            .await?;
+
+        let file_paths = results
+            .into_iter()
             .filter_map(|item| item["path"].as_str().map(|s| s.to_string()))
             .collect();
-        
+
         Ok(file_paths)
     }
-    
+
     /// Get changes for a merge request
     #[instrument(skip(self), fields(project_id, merge_request_iid))]
-    pub async fn get_merge_request_changes(&self, project_id: i64, merge_request_iid: i64) -> Result<Vec<GitlabDiff>, GitlabClientError> {
-        let path = format!("/api/v4/projects/{}/merge_requests/{}/changes", project_id, merge_request_iid);
-        
-        let response: serde_json::Value = self.send_request(Method::GET, &path, None, None::<()>).await?;
-        
+    pub async fn get_merge_request_changes(
+        &self,
+        project_id: i64,
+        merge_request_iid: i64,
+    ) -> Result<Vec<GitlabDiff>, GitlabClientError> {
+        let path = format!(
+            "/api/v4/projects/{}/merge_requests/{}/changes",
+            project_id, merge_request_iid
+        );
+
+        let response: serde_json::Value = self
+            .send_request(Method::GET, &path, None, None::<()>)
+            .await?;
+
         // Extract changes from the response
-        let changes = response["changes"].as_array()
+        let changes = response["changes"]
+            .as_array()
             .map(|changes| {
-                changes.iter()
+                changes
+                    .iter()
                     .filter_map(|change| {
                         let old_path = change["old_path"].as_str()?.to_string();
                         let new_path = change["new_path"].as_str()?.to_string();
                         let diff = change["diff"].as_str()?.to_string();
-                        
+
                         Some(GitlabDiff {
                             old_path,
                             new_path,
@@ -291,7 +395,7 @@ impl GitlabApiClient {
                     .collect()
             })
             .unwrap_or_default();
-        
+
         Ok(changes)
     }
 }
@@ -359,11 +463,13 @@ mod tests {
             "task_completion_status": {"count": 0, "completed_count": 0}
         });
 
-        let _m = server.mock("GET", "/api/v4/projects/1/issues/101")
+        let _m = server
+            .mock("GET", "/api/v4/projects/1/issues/101")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(mock_issue_response.to_string())
-            .create_async().await;
+            .create_async()
+            .await;
 
         let issue = client.get_issue(1, 101).await.unwrap();
         assert_eq!(issue.title, "Test Issue");
@@ -378,10 +484,12 @@ mod tests {
         let settings = create_test_settings(base_url.clone());
         let client = GitlabApiClient::new(&settings).unwrap();
 
-        let _m = server.mock("GET", "/api/v4/projects/2/issues/202")
+        let _m = server
+            .mock("GET", "/api/v4/projects/2/issues/202")
             .with_status(404)
             .with_body("{\"message\": \"Issue not found\"}")
-            .create_async().await;
+            .create_async()
+            .await;
 
         let result = client.get_issue(2, 202).await;
         assert!(result.is_err());
@@ -417,18 +525,20 @@ mod tests {
             }
         });
 
-        let _m = server.mock("GET", "/api/v4/projects/1/merge_requests/5")
+        let _m = server
+            .mock("GET", "/api/v4/projects/1/merge_requests/5")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(mock_mr_response.to_string())
-            .create_async().await;
+            .create_async()
+            .await;
 
         let mr = client.get_merge_request(1, 5).await.unwrap();
         assert_eq!(mr.title, "Test MR");
         assert_eq!(mr.author.username, "mr_tester");
         assert_eq!(mr.detailed_merge_status, Some("mergeable".to_string()));
     }
-    
+
     #[tokio::test]
     async fn test_post_comment_to_issue_success() {
         let mut server = mockito::Server::new_async().await;
@@ -453,16 +563,18 @@ mod tests {
             "iid": 101, // Added iid for the noteable itself
             "url": "http://example.com/project/1/issues/101#note_123"
         });
-        
-        let mock = server.mock("POST", "/api/v4/projects/1/issues/101/notes")
+
+        let mock = server
+            .mock("POST", "/api/v4/projects/1/issues/101/notes")
             .with_status(201) // 201 Created
             .with_header("content-type", "application/json")
             .with_body(mock_response_body.to_string())
             // Skip body matching to avoid JSON format issues
-            .create_async().await;
+            .create_async()
+            .await;
 
         let result = client.post_comment_to_issue(1, 101, comment_body).await;
-        
+
         mock.assert_async().await; // Verify the mock was called
         assert!(result.is_ok());
         let note = result.unwrap();
@@ -478,13 +590,17 @@ mod tests {
         let client = GitlabApiClient::new(&settings).unwrap();
         let comment_body = "This comment should fail.";
 
-        let mock = server.mock("POST", "/api/v4/projects/1/merge_requests/5/notes")
+        let mock = server
+            .mock("POST", "/api/v4/projects/1/merge_requests/5/notes")
             .with_status(500) // Internal Server Error
             .with_body("{\"message\": \"Server error processing note\"}")
             // Skip body matching to avoid JSON format issues
-            .create_async().await;
+            .create_async()
+            .await;
 
-        let result = client.post_comment_to_merge_request(1, 5, comment_body).await;
+        let result = client
+            .post_comment_to_merge_request(1, 5, comment_body)
+            .await;
 
         mock.assert_async().await;
         assert!(result.is_err());
@@ -496,38 +612,40 @@ mod tests {
             _ => panic!("Expected ApiError"),
         }
     }
-    
+
     #[tokio::test]
     async fn test_get_project_by_path() {
         let mut server = mockito::Server::new_async().await;
         let base_url = server.url();
         let settings = create_test_settings(base_url);
         let client = GitlabApiClient::new(&settings).unwrap();
-        
+
         let mock_project_response = serde_json::json!({
             "id": 1,
             "path_with_namespace": "org/repo1",
             "web_url": "https://gitlab.example.com/org/repo1"
         });
-        
-        let _m = server.mock("GET", "/api/v4/projects/org%2Frepo1")
+
+        let _m = server
+            .mock("GET", "/api/v4/projects/org%2Frepo1")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(mock_project_response.to_string())
-            .create_async().await;
-            
+            .create_async()
+            .await;
+
         let project = client.get_project_by_path("org/repo1").await.unwrap();
         assert_eq!(project.id, 1);
         assert_eq!(project.path_with_namespace, "org/repo1");
     }
-    
+
     #[tokio::test]
     async fn test_get_issues() {
         let mut server = mockito::Server::new_async().await;
         let base_url = server.url();
         let settings = create_test_settings(base_url);
         let client = GitlabApiClient::new(&settings).unwrap();
-        
+
         let mock_issues_response = serde_json::json!([
             {
                 "id": 1, "iid": 101, "project_id": 1, "title": "Test Issue 1",
@@ -542,8 +660,9 @@ mod tests {
                 "web_url": "http://example.com/issue/2", "labels": []
             }
         ]);
-        
-        let _m = server.mock("GET", "/api/v4/projects/1/issues")
+
+        let _m = server
+            .mock("GET", "/api/v4/projects/1/issues")
             .match_query(mockito::Matcher::AllOf(vec![
                 mockito::Matcher::UrlEncoded("updated_after".into(), "1620000000".into()),
                 mockito::Matcher::UrlEncoded("sort".into(), "asc".into()),
@@ -552,21 +671,22 @@ mod tests {
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(mock_issues_response.to_string())
-            .create_async().await;
-            
+            .create_async()
+            .await;
+
         let issues = client.get_issues(1, 1620000000).await.unwrap();
         assert_eq!(issues.len(), 2);
         assert_eq!(issues[0].title, "Test Issue 1");
         assert_eq!(issues[1].title, "Test Issue 2");
     }
-    
+
     #[tokio::test]
     async fn test_get_merge_requests() {
         let mut server = mockito::Server::new_async().await;
         let base_url = server.url();
         let settings = create_test_settings(base_url);
         let client = GitlabApiClient::new(&settings).unwrap();
-        
+
         let mock_mrs_response = serde_json::json!([
             {
                 "id": 1, "iid": 5, "project_id": 1, "title": "Test MR 1",
@@ -583,8 +703,9 @@ mod tests {
                 "web_url": "http://example.com/mr/2", "labels": []
             }
         ]);
-        
-        let _m = server.mock("GET", "/api/v4/projects/1/merge_requests")
+
+        let _m = server
+            .mock("GET", "/api/v4/projects/1/merge_requests")
             .match_query(mockito::Matcher::AllOf(vec![
                 mockito::Matcher::UrlEncoded("updated_after".into(), "1620000000".into()),
                 mockito::Matcher::UrlEncoded("sort".into(), "asc".into()),
@@ -593,21 +714,22 @@ mod tests {
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(mock_mrs_response.to_string())
-            .create_async().await;
-            
+            .create_async()
+            .await;
+
         let mrs = client.get_merge_requests(1, 1620000000).await.unwrap();
         assert_eq!(mrs.len(), 2);
         assert_eq!(mrs[0].title, "Test MR 1");
         assert_eq!(mrs[1].title, "Test MR 2");
     }
-    
+
     #[tokio::test]
     async fn test_get_issue_notes() {
         let mut server = mockito::Server::new_async().await;
         let base_url = server.url();
         let settings = create_test_settings(base_url);
         let client = GitlabApiClient::new(&settings).unwrap();
-        
+
         let mock_notes_response = serde_json::json!([
             {
                 "id": 1,
@@ -632,8 +754,9 @@ mod tests {
                 "url": "http://example.com/project/1/issues/101#note_2"
             }
         ]);
-        
-        let _m = server.mock("GET", "/api/v4/projects/1/issues/101/notes")
+
+        let _m = server
+            .mock("GET", "/api/v4/projects/1/issues/101/notes")
             .match_query(mockito::Matcher::AllOf(vec![
                 mockito::Matcher::UrlEncoded("created_after".into(), "1620000000".into()),
                 mockito::Matcher::UrlEncoded("sort".into(), "asc".into()),
@@ -642,21 +765,22 @@ mod tests {
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(mock_notes_response.to_string())
-            .create_async().await;
-            
+            .create_async()
+            .await;
+
         let notes = client.get_issue_notes(1, 101, 1620000000).await.unwrap();
         assert_eq!(notes.len(), 2);
         assert_eq!(notes[0].note, "This is a test note 1");
         assert_eq!(notes[1].note, "This is a test note 2");
     }
-    
+
     #[tokio::test]
     async fn test_get_merge_request_notes() {
         let mut server = mockito::Server::new_async().await;
         let base_url = server.url();
         let settings = create_test_settings(base_url);
         let client = GitlabApiClient::new(&settings).unwrap();
-        
+
         let mock_notes_response = serde_json::json!([
             {
                 "id": 1,
@@ -681,8 +805,9 @@ mod tests {
                 "url": "http://example.com/project/1/merge_requests/5#note_2"
             }
         ]);
-        
-        let _m = server.mock("GET", "/api/v4/projects/1/merge_requests/5/notes")
+
+        let _m = server
+            .mock("GET", "/api/v4/projects/1/merge_requests/5/notes")
             .match_query(mockito::Matcher::AllOf(vec![
                 mockito::Matcher::UrlEncoded("created_after".into(), "1620000000".into()),
                 mockito::Matcher::UrlEncoded("sort".into(), "asc".into()),
@@ -691,9 +816,13 @@ mod tests {
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(mock_notes_response.to_string())
-            .create_async().await;
-            
-        let notes = client.get_merge_request_notes(1, 5, 1620000000).await.unwrap();
+            .create_async()
+            .await;
+
+        let notes = client
+            .get_merge_request_notes(1, 5, 1620000000)
+            .await
+            .unwrap();
         assert_eq!(notes.len(), 2);
         assert_eq!(notes[0].note, "This is a test MR note 1");
         assert_eq!(notes[1].note, "This is a test MR note 2");
