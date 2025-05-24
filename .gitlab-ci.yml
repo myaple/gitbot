@@ -1,6 +1,6 @@
 # Use an official Rust image.
 # See https://hub.docker.com/_/rust for available tags.
-image: rust:1.76 # Using a recent stable version
+image: rust:1.86 # Using a recent stable version
 
 variables:
   CARGO_TERM_COLOR: "always"
@@ -16,7 +16,7 @@ build_and_test_job:
   stage: build_test
   # Install clippy and rustfmt, as they might not be in all rust images by default
   # or to ensure specific versions if needed, though dtolnay/rust-toolchain handles this in GH.
-  # For simplicity, we'll assume the base rust:1.76 image has recent enough versions or install them.
+  # For simplicity, we'll assume the base rust:1.86 image has recent enough versions or install them.
   before_script:
     - rustup component add clippy || true # Allow failure if already installed
     - rustup component add rustfmt || true # Allow failure if already installed
@@ -40,7 +40,7 @@ build_and_test_job:
 
 release_job:
   stage: release
-  # The 'image: rust:1.76' is defined globally.
+  # The 'image: rust:1.86' is defined globally.
   # before_script for release might not be strictly necessary if build_and_test_job ensures tools.
   script:
     - cargo build --release --verbose
