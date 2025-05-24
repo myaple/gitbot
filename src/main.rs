@@ -15,6 +15,9 @@ mod openai;
 mod polling;
 mod repo_context;
 
+#[cfg(test)]
+mod polling_test;
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Parse command line arguments and load configuration

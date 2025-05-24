@@ -469,7 +469,8 @@ mod tests {
             log_level: "debug".to_string(),
             bot_username: "gitbot".to_string(),
             poll_interval_seconds: 60,
-            stale_issue_days: 30, // Added based on previous subtask
+            stale_issue_days: 30,
+            max_age_hours: 24,
             context_repo_path: None,
         }
     }

@@ -610,6 +610,7 @@ mod tests {
             bot_username: "gitbot".to_string(),
             poll_interval_seconds: 60,
             stale_issue_days: 30, // Added default for tests
+            max_age_hours: 24,
             context_repo_path: None,
         });
 
@@ -628,6 +629,7 @@ mod tests {
             log_level: "debug".to_string(),
             bot_username: "gitbot".to_string(),
             poll_interval_seconds: 60,
+            max_age_hours: 24,
             stale_issue_days: 30, // Added default for tests
             context_repo_path: None,
         };
@@ -658,6 +660,7 @@ mod tests {
             repos_to_poll: vec!["org/repo1".to_string()],
             log_level: "debug".to_string(),
             bot_username: "gitbot".to_string(),
+            max_age_hours: 24,
             poll_interval_seconds: 60,
             stale_issue_days: 30, // Added default for tests
             context_repo_path: None,
@@ -676,6 +679,7 @@ mod tests {
             openai_custom_url: "https://api.openai.com/v1".to_string(),
             repos_to_poll: vec!["org/repo1".to_string()],
             log_level: "debug".to_string(),
+            max_age_hours: 24,
             bot_username: "gitbot".to_string(),
             poll_interval_seconds: 60,
             stale_issue_days: 30, // Added default for tests

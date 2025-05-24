@@ -60,6 +60,10 @@ pub struct AppSettings {
     #[arg(long, env = "GITBOT_STALE_ISSUE_DAYS", default_value_t = 30)]
     pub stale_issue_days: u64,
 
+    /// Maximum age in hours for issues and merge requests to pull (default: 24 hours)
+    #[arg(long, env = "GITBOT_MAX_AGE_HOURS", default_value_t = 24)]
+    pub max_age_hours: u64,
+
     /// Optional repository to use for additional context (format: group/project)
     #[arg(long, env = "GITBOT_CONTEXT_REPO_PATH")]
     pub context_repo_path: Option<String>,
@@ -108,6 +112,7 @@ mod tests {
             bot_username: "test_bot".to_string(),
             poll_interval_seconds: 300,
             stale_issue_days: 30,
+            max_age_hours: 24,
             context_repo_path: Some("org/context-repo".to_string()),
         };
 
@@ -123,6 +128,7 @@ mod tests {
         assert_eq!(settings.bot_username, "test_bot");
         assert_eq!(settings.poll_interval_seconds, 300);
         assert_eq!(settings.stale_issue_days, 30);
+        assert_eq!(settings.max_age_hours, 24);
         assert_eq!(
             settings.context_repo_path,
             Some("org/context-repo".to_string())

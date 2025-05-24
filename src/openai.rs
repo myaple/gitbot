@@ -109,6 +109,7 @@ mod tests {
             bot_username: "openai_bot".to_string(),
             poll_interval_seconds: 60,
             stale_issue_days: 30, // Added default for tests
+            max_age_hours: 24,
             context_repo_path: None,
         }
     }

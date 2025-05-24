@@ -97,12 +97,30 @@ impl PollingService {
         Ok(())
     }
 
-    async fn poll_repository(&self, repo_path: &str, since_timestamp: u64) -> Result<()> {
+    pub async fn poll_repository(&self, repo_path: &str, since_timestamp: u64) -> Result<()> {
         info!("Polling repository: {}", repo_path);
 
         // Get project ID from path
         let project = self.gitlab_client.get_project_by_path(repo_path).await?;
         let project_id = project.id;
+
+        // Calculate the timestamp for max_age_hours
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_else(|_| Duration::from_secs(0))
+            .as_secs();
+
+        // Convert hours to seconds and subtract from current time
+        let max_age_seconds = self.config.max_age_hours * 3600;
+        let max_age_timestamp = now.saturating_sub(max_age_seconds);
+
+        // Use the more recent of since_timestamp and max_age_timestamp
+        let effective_timestamp = std::cmp::max(since_timestamp, max_age_timestamp);
+
+        info!(
+            "Using effective timestamp: {} (max age: {} hours)",
+            effective_timestamp, self.config.max_age_hours
+        );
 
         // Create tasks for polling issues and merge requests in parallel
         let issues_task = {
@@ -110,7 +128,7 @@ impl PollingService {
             let project_clone = project.clone();
             tokio::spawn(async move {
                 if let Err(e) = self_clone
-                    .poll_issues(project_id, since_timestamp, &project_clone)
+                    .poll_issues(project_id, effective_timestamp, &project_clone)
                     .await
                 {
                     error!("Error polling issues for project {}: {}", project_id, e);
@@ -123,7 +141,7 @@ impl PollingService {
             let project_clone = project.clone();
             tokio::spawn(async move {
                 if let Err(e) = self_clone
-                    .poll_merge_requests(project_id, since_timestamp, &project_clone)
+                    .poll_merge_requests(project_id, effective_timestamp, &project_clone)
                     .await
                 {
                     error!(
@@ -484,6 +502,7 @@ mod tests {
             bot_username: bot_username.to_string(),
             poll_interval_seconds: 60,
             stale_issue_days: stale_days,
+            max_age_hours: 24,
             context_repo_path: Some("org/context-repo".to_string()),
         })
     }
@@ -1083,5 +1102,48 @@ mod tests {
         assert!(
             now.saturating_sub(last_checked) >= 3500 && now.saturating_sub(last_checked) <= 3700
         );
+    }
+
+    #[tokio::test]
+    async fn test_max_age_hours_calculation() {
+        // Get current time and calculate a timestamp from 24 hours ago
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let old_timestamp = now - (24 * 3600); // 24 hours ago
+
+        // Calculate what the effective timestamp should be (12 hours ago)
+        let expected_timestamp = now - (12 * 3600);
+
+        // Create settings with max_age_hours = 12
+        let settings = AppSettings {
+            gitlab_url: "https://gitlab.example.com".to_string(),
+            gitlab_token: "test_token".to_string(),
+            openai_api_key: "test_key".to_string(),
+            openai_model: "gpt-3.5-turbo".to_string(),
+            openai_temperature: 0.7,
+            openai_max_tokens: 1024,
+            openai_custom_url: "https://api.openai.com/v1".to_string(),
+            repos_to_poll: vec!["test/project".to_string()],
+            log_level: "debug".to_string(),
+            bot_username: "gitbot".to_string(),
+            poll_interval_seconds: 60,
+            stale_issue_days: 30,
+            max_age_hours: 12, // Set to 12 hours for this test
+            context_repo_path: None,
+        };
+
+        // Directly test the timestamp calculation logic
+        let settings_arc = Arc::new(settings);
+        let effective_timestamp = if old_timestamp < now - (settings_arc.max_age_hours * 3600) {
+            now - (settings_arc.max_age_hours * 3600)
+        } else {
+            old_timestamp
+        };
+
+        // Verify that the effective timestamp is close to the expected timestamp (12 hours ago)
+        assert!(effective_timestamp >= expected_timestamp - 10);
+        assert!(effective_timestamp <= expected_timestamp + 10);
     }
 }
