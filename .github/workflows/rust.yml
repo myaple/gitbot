@@ -1,0 +1,106 @@
+name: Rust CI/CD
+
+on:
+  push:
+    branches: [ "main" ]
+    tags:
+      - 'v*' # Push events to tags like v1.0, v20.15.10
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  CARGO_TERM_COLOR: always
+  # Assuming the binary name is 'gitbot' based on Cargo.toml package name
+  BINARY_NAME: gitbot 
+
+jobs:
+  build_and_test:
+    name: Build, Format, Lint, and Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build
+        run: cargo build --verbose
+
+      - name: Check formatting (rustfmt)
+        run: cargo fmt -- --check
+
+      - name: Lint (clippy)
+        run: cargo clippy -- -D warnings # Fail on any warnings
+
+      - name: Run tests
+        run: cargo test --verbose
+
+  release:
+    name: Create Release
+    if: startsWith(github.ref, 'refs/tags/v') # Only run for tags starting with 'v'
+    needs: build_and_test # Run after build_and_test job is successful
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Needed to create releases and upload assets
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          # Restore only, no save, as release build artifacts are different
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Build release binary
+        run: cargo build --release --verbose
+
+      - name: Determine Asset Name and Path
+        id: assets
+        run: |
+          TAG_NAME="${{ github.ref_name }}"
+          # Sanitize BINARY_NAME just in case, though it's from env
+          CLEAN_BINARY_NAME=$(echo "$BINARY_NAME" | tr -cd '[:alnum:]._-')
+          ASSET_NAME="${CLEAN_BINARY_NAME}-${TAG_NAME}-${{ runner.os }}.tar.gz"
+          ASSET_PATH="target/release/${CLEAN_BINARY_NAME}"
+          echo "ASSET_NAME=${ASSET_NAME}" >> $GITHUB_OUTPUT
+          echo "ASSET_PATH=${ASSET_PATH}" >> $GITHUB_OUTPUT
+          echo "RELEASE_TAG=${TAG_NAME}" >> $GITHUB_OUTPUT
+
+      - name: Package release binary
+        run: tar -czvf ${{ steps.assets.outputs.ASSET_NAME }} -C target/release ${{ env.BINARY_NAME }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.assets.outputs.RELEASE_TAG }}
+          name: Release ${{ steps.assets.outputs.RELEASE_TAG }}
+          body: |
+            Release of ${{ env.BINARY_NAME }} version ${{ steps.assets.outputs.RELEASE_TAG }}.
+            See [CHANGELOG.md](CHANGELOG.md) for details (if available).
+          files: ${{ steps.assets.outputs.ASSET_NAME }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
