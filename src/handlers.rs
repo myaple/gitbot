@@ -5,7 +5,7 @@ use crate::openai::OpenAIApiClient;
 use crate::repo_context::RepoContextExtractor;
 use anyhow::{anyhow, Result};
 use std::sync::Arc;
-use tracing::{debug, error, info, warn, trace};
+use tracing::{debug, error, info, trace, warn};
 
 // Helper function to extract context after bot mention
 fn extract_context_after_mention(note: &str, bot_name: &str) -> Option<String> {
