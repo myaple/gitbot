@@ -26,6 +26,7 @@ pub struct GitlabIssue {
     pub author: GitlabUser,
     pub web_url: String,
     pub labels: Vec<String>,
+    pub updated_at: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -42,6 +43,7 @@ pub struct GitlabMergeRequest {
     pub web_url: String,
     pub labels: Vec<String>,
     pub detailed_merge_status: Option<String>, // e.g. "mergeable", "broken_status" - sometimes called merge_status
+    pub updated_at: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -55,6 +57,7 @@ pub struct GitlabNoteAttributes {
     pub noteable_id: Option<i64>, // The ID of the Issue or MR if noteable_type is Issue or MergeRequest
     pub iid: Option<i64>,         // The IID of the noteable, e.g. issue iid or mr iid.
     pub url: String,              // URL to the comment
+    pub updated_at: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

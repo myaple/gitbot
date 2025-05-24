@@ -279,6 +279,7 @@ mod tests {
             author: user,
             web_url: "https://gitlab.com/test/project/issues/1".to_string(),
             labels: vec![],
+            updated_at: "2023-01-01T00:00:00Z".to_string(), // Added default for tests
         };
 
         let settings = AppSettings {
@@ -293,6 +294,7 @@ mod tests {
             log_level: "debug".to_string(),
             bot_username: "gitbot".to_string(),
             poll_interval_seconds: 60,
+            stale_issue_days: 30, // Added default for tests (removed duplicate)
             context_repo_path: None,
         };
 
@@ -333,6 +335,7 @@ mod tests {
             log_level: "debug".to_string(),
             bot_username: "gitbot".to_string(),
             poll_interval_seconds: 60,
+            stale_issue_days: 30, // Added default for tests
             context_repo_path: None,
         };
 
