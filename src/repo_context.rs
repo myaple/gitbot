@@ -335,7 +335,7 @@ mod tests {
             log_level: "debug".to_string(),
             bot_username: "gitbot".to_string(),
             poll_interval_seconds: 60,
-            stale_issue_days: 30, // Added default for tests
+            stale_issue_days: 30,
             context_repo_path: None,
         };
 
