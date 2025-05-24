@@ -5,7 +5,7 @@ use crate::openai::OpenAIApiClient;
 use crate::repo_context::RepoContextExtractor;
 use anyhow::{anyhow, Result};
 use std::sync::Arc;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, warn, trace};
 
 // Helper function to extract context after bot mention
 fn extract_context_after_mention(note: &str, bot_name: &str) -> Option<String> {
@@ -282,8 +282,8 @@ pub async fn process_mention(
         llm_task_description,
         prompt_parts.join("\n---\n")
     );
-    info!("Formatted prompt for LLM:\n{}", final_prompt_text);
-    debug!("Full prompt for LLM (debug):\n{}", final_prompt_text);
+    trace!("Formatted prompt for LLM:\n{}", final_prompt_text);
+    trace!("Full prompt for LLM (debug):\n{}", final_prompt_text);
 
     // Create OpenAI client
     let openai_client = OpenAIApiClient::new(&config)
@@ -318,7 +318,7 @@ pub async fn process_mention(
         .map(|choice| choice.message.content.clone())
         .unwrap_or_else(|| "Sorry, I couldn't get a valid response from the LLM.".to_string());
 
-    info!("LLM Reply: {}", llm_reply);
+    trace!("LLM Reply: {}", llm_reply);
 
     let user_who_triggered = &event.user.username;
     let final_comment_body = format!(
