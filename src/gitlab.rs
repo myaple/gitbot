@@ -384,6 +384,32 @@ impl GitlabApiClient {
 
         Ok(changes)
     }
+
+    #[instrument(skip(self), fields(project_id, issue_iid, label_name))]
+    pub async fn add_issue_label(
+        &self,
+        project_id: i64,
+        issue_iid: i64,
+        label_name: &str,
+    ) -> Result<GitlabIssue, GitlabError> {
+        let path = format!("/api/v4/projects/{}/issues/{}", project_id, issue_iid);
+        let body = serde_json::json!({ "add_labels": label_name });
+        self.send_request(Method::PUT, &path, None, Some(body))
+            .await
+    }
+
+    #[instrument(skip(self), fields(project_id, issue_iid, label_name))]
+    pub async fn remove_issue_label(
+        &self,
+        project_id: i64,
+        issue_iid: i64,
+        label_name: &str,
+    ) -> Result<GitlabIssue, GitlabError> {
+        let path = format!("/api/v4/projects/{}/issues/{}", project_id, issue_iid);
+        let body = serde_json::json!({ "remove_labels": label_name });
+        self.send_request(Method::PUT, &path, None, Some(body))
+            .await
+    }
 }
 
 #[cfg(test)]
@@ -406,6 +432,7 @@ mod tests {
             log_level: "debug".to_string(),
             bot_username: "gitbot".to_string(),
             poll_interval_seconds: 60,
+            stale_issue_days: 30, // Added based on previous subtask
             context_repo_path: None,
         }
     }
@@ -439,11 +466,11 @@ mod tests {
         let mock_issue_response = json!({
             "id": 1, "iid": 101, "project_id": 1, "title": "Test Issue",
             "description": "A test issue", "state": "opened",
-            "author": {"id": 1, "username": "tester", "name": "Test User", "avatar_url": null, "web_url": "url"}, // web_url added
-            "web_url": "http://example.com/issue/1", "labels": [], "assignees": [], "type": "ISSUE", // assignees and type added
-            "milestone": null, "closed_at": null, "closed_by": null, "created_at": "date", "updated_at": "date", // more optional fields
+            "author": {"id": 1, "username": "tester", "name": "Test User", "avatar_url": null, "web_url": "url"},
+            "web_url": "http://example.com/issue/1", "labels": [], "assignees": [], "type": "ISSUE",
+            "milestone": null, "closed_at": null, "closed_by": null, "created_at": "2023-01-01T12:00:00Z", "updated_at": "2023-01-02T12:00:00Z",
             "upvotes": 0, "downvotes": 0, "merge_requests_count": 0, "subscriber_count": 0, "user_notes_count": 0,
-            "due_date": null, "confidential": false, "discussion_locked": null, "time_stats": { // time_stats is complex
+            "due_date": null, "confidential": false, "discussion_locked": null, "time_stats": {
                 "time_estimate": 0, "total_time_spent": 0, "human_time_estimate": null, "human_total_time_spent": null
             },
             "task_completion_status": {"count": 0, "completed_count": 0}
@@ -460,6 +487,7 @@ mod tests {
         let issue = client.get_issue(1, 101).await.unwrap();
         assert_eq!(issue.title, "Test Issue");
         assert_eq!(issue.author.username, "tester");
+        assert_eq!(issue.updated_at, "2023-01-02T12:00:00Z");
     }
 
     #[tokio::test]
@@ -500,12 +528,12 @@ mod tests {
             "description": "A test merge request", "state": "opened",
             "author": {"id": 1, "username": "mr_tester", "name": "MR Test User", "avatar_url": null, "web_url": "url"},
             "source_branch": "feature-branch", "target_branch": "main",
-            "web_url": "http://example.com/mr/1", "labels": [], "assignees": [], "reviewers": [], // reviewers added
-            "milestone": null, "closed_at": null, "closed_by": null, "created_at": "date", "updated_at": "date",
-            "upvotes": 0, "downvotes": 0, "user_notes_count": 0, "work_in_progress": false, "draft": false, // work_in_progress renamed to draft
-            "merge_when_pipeline_succeeds": false, "detailed_merge_status": "mergeable", "merge_status": "can_be_merged", // merge_status added
-            "sha": "abc123xyz", "squash": false, "diff_refs": {"base_sha": "def", "head_sha": "abc", "start_sha": "def"}, // diff_refs added
-            "references": {"short": "!5", "relative": "!5", "full": "group/project!5"}, // references added
+            "web_url": "http://example.com/mr/1", "labels": [], "assignees": [], "reviewers": [],
+            "milestone": null, "closed_at": null, "closed_by": null, "created_at": "2023-01-01T10:00:00Z", "updated_at": "2023-01-03T10:00:00Z",
+            "upvotes": 0, "downvotes": 0, "user_notes_count": 0, "work_in_progress": false, "draft": false,
+            "merge_when_pipeline_succeeds": false, "detailed_merge_status": "mergeable", "merge_status": "can_be_merged",
+            "sha": "abc123xyz", "squash": false, "diff_refs": {"base_sha": "def", "head_sha": "abc", "start_sha": "def"},
+            "references": {"short": "!5", "relative": "!5", "full": "group/project!5"},
             "time_stats": {
                 "time_estimate": 0, "total_time_spent": 0, "human_time_estimate": null, "human_total_time_spent": null
             }
@@ -523,6 +551,7 @@ mod tests {
         assert_eq!(mr.title, "Test MR");
         assert_eq!(mr.author.username, "mr_tester");
         assert_eq!(mr.detailed_merge_status, Some("mergeable".to_string()));
+        assert_eq!(mr.updated_at, "2023-01-03T10:00:00Z");
     }
 
     #[tokio::test]
@@ -546,8 +575,10 @@ mod tests {
             "project_id": 1,
             "noteable_type": "Issue",
             "noteable_id": 101,
-            "iid": 101, // Added iid for the noteable itself
-            "url": "http://example.com/project/1/issues/101#note_123"
+            "iid": 101,
+            "url": "http://example.com/project/1/issues/101#note_123",
+            "created_at": "2023-01-04T10:00:00Z",
+            "updated_at": "2023-01-04T11:00:00Z"
         });
 
         let mock = server
@@ -566,6 +597,7 @@ mod tests {
         let note = result.unwrap();
         assert_eq!(note.note, comment_body);
         assert_eq!(note.id, 123);
+        assert_eq!(note.updated_at, "2023-01-04T11:00:00Z");
     }
 
     #[tokio::test]
@@ -637,13 +669,13 @@ mod tests {
                 "id": 1, "iid": 101, "project_id": 1, "title": "Test Issue 1",
                 "description": "A test issue 1", "state": "opened",
                 "author": {"id": 1, "username": "tester", "name": "Test User", "avatar_url": null, "web_url": "url"},
-                "web_url": "http://example.com/issue/1", "labels": []
+                "web_url": "http://example.com/issue/1", "labels": [], "updated_at": "2023-01-02T12:00:00Z"
             },
             {
                 "id": 2, "iid": 102, "project_id": 1, "title": "Test Issue 2",
                 "description": "A test issue 2", "state": "opened",
                 "author": {"id": 1, "username": "tester", "name": "Test User", "avatar_url": null, "web_url": "url"},
-                "web_url": "http://example.com/issue/2", "labels": []
+                "web_url": "http://example.com/issue/2", "labels": [], "updated_at": "2023-01-02T13:00:00Z"
             }
         ]);
 
@@ -663,7 +695,9 @@ mod tests {
         let issues = client.get_issues(1, 1620000000).await.unwrap();
         assert_eq!(issues.len(), 2);
         assert_eq!(issues[0].title, "Test Issue 1");
+        assert_eq!(issues[0].updated_at, "2023-01-02T12:00:00Z");
         assert_eq!(issues[1].title, "Test Issue 2");
+        assert_eq!(issues[1].updated_at, "2023-01-02T13:00:00Z");
     }
 
     #[tokio::test]
@@ -679,14 +713,14 @@ mod tests {
                 "description": "A test merge request 1", "state": "opened",
                 "author": {"id": 1, "username": "mr_tester", "name": "MR Test User", "avatar_url": null, "web_url": "url"},
                 "source_branch": "feature-branch-1", "target_branch": "main",
-                "web_url": "http://example.com/mr/1", "labels": []
+                "web_url": "http://example.com/mr/1", "labels": [], "updated_at": "2023-01-03T10:00:00Z"
             },
             {
                 "id": 2, "iid": 6, "project_id": 1, "title": "Test MR 2",
                 "description": "A test merge request 2", "state": "opened",
                 "author": {"id": 1, "username": "mr_tester", "name": "MR Test User", "avatar_url": null, "web_url": "url"},
                 "source_branch": "feature-branch-2", "target_branch": "main",
-                "web_url": "http://example.com/mr/2", "labels": []
+                "web_url": "http://example.com/mr/2", "labels": [], "updated_at": "2023-01-03T11:00:00Z"
             }
         ]);
 
@@ -706,7 +740,9 @@ mod tests {
         let mrs = client.get_merge_requests(1, 1620000000).await.unwrap();
         assert_eq!(mrs.len(), 2);
         assert_eq!(mrs[0].title, "Test MR 1");
+        assert_eq!(mrs[0].updated_at, "2023-01-03T10:00:00Z");
         assert_eq!(mrs[1].title, "Test MR 2");
+        assert_eq!(mrs[1].updated_at, "2023-01-03T11:00:00Z");
     }
 
     #[tokio::test]
@@ -726,7 +762,8 @@ mod tests {
                 "noteable_type": "Issue",
                 "noteable_id": 101,
                 "iid": 101,
-                "url": "http://example.com/project/1/issues/101#note_1"
+                "url": "http://example.com/project/1/issues/101#note_1",
+                "updated_at": "2023-01-05T10:00:00Z"
             },
             {
                 "id": 2,
@@ -737,7 +774,8 @@ mod tests {
                 "noteable_type": "Issue",
                 "noteable_id": 101,
                 "iid": 101,
-                "url": "http://example.com/project/1/issues/101#note_2"
+                "url": "http://example.com/project/1/issues/101#note_2",
+                "updated_at": "2023-01-05T11:00:00Z"
             }
         ]);
 
@@ -757,7 +795,9 @@ mod tests {
         let notes = client.get_issue_notes(1, 101, 1620000000).await.unwrap();
         assert_eq!(notes.len(), 2);
         assert_eq!(notes[0].note, "This is a test note 1");
+        assert_eq!(notes[0].updated_at, "2023-01-05T10:00:00Z");
         assert_eq!(notes[1].note, "This is a test note 2");
+        assert_eq!(notes[1].updated_at, "2023-01-05T11:00:00Z");
     }
 
     #[tokio::test]
@@ -777,7 +817,8 @@ mod tests {
                 "noteable_type": "MergeRequest",
                 "noteable_id": 5,
                 "iid": 5,
-                "url": "http://example.com/project/1/merge_requests/5#note_1"
+                "url": "http://example.com/project/1/merge_requests/5#note_1",
+                "updated_at": "2023-01-06T10:00:00Z"
             },
             {
                 "id": 2,
@@ -788,7 +829,8 @@ mod tests {
                 "noteable_type": "MergeRequest",
                 "noteable_id": 5,
                 "iid": 5,
-                "url": "http://example.com/project/1/merge_requests/5#note_2"
+                "url": "http://example.com/project/1/merge_requests/5#note_2",
+                "updated_at": "2023-01-06T11:00:00Z"
             }
         ]);
 
@@ -811,6 +853,154 @@ mod tests {
             .unwrap();
         assert_eq!(notes.len(), 2);
         assert_eq!(notes[0].note, "This is a test MR note 1");
+        assert_eq!(notes[0].updated_at, "2023-01-06T10:00:00Z");
         assert_eq!(notes[1].note, "This is a test MR note 2");
+        assert_eq!(notes[1].updated_at, "2023-01-06T11:00:00Z");
+    }
+
+    #[tokio::test]
+    async fn test_add_issue_label_success() {
+        let mut server = mockito::Server::new_async().await;
+        let base_url = server.url();
+        let settings = create_test_settings(base_url);
+        let client = GitlabApiClient::new(&settings).unwrap();
+        let label_to_add = "feature-request";
+
+        let _mock_issue_response_before = json!({ // Prefixed with underscore
+            "id": 1, "iid": 101, "project_id": 1, "title": "Test Issue",
+            "description": "A test issue", "state": "opened",
+            "author": {"id": 1, "username": "tester", "name": "Test User", "avatar_url": null, "web_url": "url"},
+            "web_url": "http://example.com/issue/1", "labels": [],
+            "updated_at": "2023-01-02T12:00:00Z"
+        });
+
+        let mock_issue_response_after = json!({
+            "id": 1, "iid": 101, "project_id": 1, "title": "Test Issue",
+            "description": "A test issue", "state": "opened",
+            "author": {"id": 1, "username": "tester", "name": "Test User", "avatar_url": null, "web_url": "url"},
+            "web_url": "http://example.com/issue/1", "labels": [label_to_add],
+            "updated_at": "2023-01-02T12:05:00Z" // Assume updated_at changes
+        });
+
+        let mock = server
+            .mock("PUT", "/api/v4/projects/1/issues/101")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(mock_issue_response_after.to_string())
+            .match_body(mockito::Matcher::JsonString(
+                json!({"add_labels": label_to_add}).to_string(),
+            ))
+            .create_async()
+            .await;
+
+        let result = client.add_issue_label(1, 101, label_to_add).await;
+
+        mock.assert_async().await;
+        assert!(result.is_ok());
+        let issue = result.unwrap();
+        assert_eq!(issue.labels, vec![label_to_add.to_string()]);
+        assert_eq!(issue.updated_at, "2023-01-02T12:05:00Z");
+    }
+
+    #[tokio::test]
+    async fn test_remove_issue_label_success() {
+        let mut server = mockito::Server::new_async().await;
+        let base_url = server.url();
+        let settings = create_test_settings(base_url);
+        let client = GitlabApiClient::new(&settings).unwrap();
+        let label_to_remove = "bug";
+
+        let _mock_issue_response_before = json!({ // Prefixed with underscore
+            "id": 1, "iid": 101, "project_id": 1, "title": "Test Issue with Bug",
+            "description": "A test issue", "state": "opened",
+            "author": {"id": 1, "username": "tester", "name": "Test User", "avatar_url": null, "web_url": "url"},
+            "web_url": "http://example.com/issue/1", "labels": [label_to_remove, "critical"],
+            "updated_at": "2023-01-02T13:00:00Z"
+        });
+
+        let mock_issue_response_after = json!({
+            "id": 1, "iid": 101, "project_id": 1, "title": "Test Issue with Bug",
+            "description": "A test issue", "state": "opened",
+            "author": {"id": 1, "username": "tester", "name": "Test User", "avatar_url": null, "web_url": "url"},
+            "web_url": "http://example.com/issue/1", "labels": ["critical"], // "bug" label removed
+            "updated_at": "2023-01-02T13:05:00Z" // Assume updated_at changes
+        });
+
+        let mock = server
+            .mock("PUT", "/api/v4/projects/1/issues/101")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(mock_issue_response_after.to_string())
+            .match_body(mockito::Matcher::JsonString(
+                json!({"remove_labels": label_to_remove}).to_string(),
+            ))
+            .create_async()
+            .await;
+
+        let result = client.remove_issue_label(1, 101, label_to_remove).await;
+
+        mock.assert_async().await;
+        assert!(result.is_ok());
+        let issue = result.unwrap();
+        assert_eq!(issue.labels, vec!["critical".to_string()]);
+        assert_eq!(issue.updated_at, "2023-01-02T13:05:00Z");
+    }
+
+    #[tokio::test]
+    async fn test_add_issue_label_not_found() {
+        let mut server = mockito::Server::new_async().await;
+        let base_url = server.url();
+        let settings = create_test_settings(base_url);
+        let client = GitlabApiClient::new(&settings).unwrap();
+        let label_to_add = "enhancement";
+
+        let _m = server
+            .mock("PUT", "/api/v4/projects/99/issues/999")
+            .with_status(404)
+            .with_body("{\"message\": \"Issue not found\"}")
+            .match_body(mockito::Matcher::JsonString(
+                json!({"add_labels": label_to_add}).to_string(),
+            ))
+            .create_async()
+            .await;
+
+        let result = client.add_issue_label(99, 999, label_to_add).await;
+        assert!(result.is_err());
+        match result.err().unwrap() {
+            GitlabError::Api { status, body } => {
+                assert_eq!(status, StatusCode::NOT_FOUND);
+                assert_eq!(body, "{\"message\": \"Issue not found\"}");
+            }
+            _ => panic!("Expected Api Error for not found"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_remove_issue_label_not_found() {
+        let mut server = mockito::Server::new_async().await;
+        let base_url = server.url();
+        let settings = create_test_settings(base_url);
+        let client = GitlabApiClient::new(&settings).unwrap();
+        let label_to_remove = "wontfix";
+
+        let _m = server
+            .mock("PUT", "/api/v4/projects/88/issues/888")
+            .with_status(404)
+            .with_body("{\"message\": \"Issue not found\"}")
+            .match_body(mockito::Matcher::JsonString(
+                json!({"remove_labels": label_to_remove}).to_string(),
+            ))
+            .create_async()
+            .await;
+
+        let result = client.remove_issue_label(88, 888, label_to_remove).await;
+        assert!(result.is_err());
+        match result.err().unwrap() {
+            GitlabError::Api { status, body } => {
+                assert_eq!(status, StatusCode::NOT_FOUND);
+                assert_eq!(body, "{\"message\": \"Issue not found\"}");
+            }
+            _ => panic!("Expected Api Error for not found"),
+        }
     }
 }

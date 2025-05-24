@@ -15,6 +15,7 @@ pub struct AppSettings {
     pub log_level: String,
     pub bot_username: String,
     pub poll_interval_seconds: u64,
+    pub stale_issue_days: u64,
     pub context_repo_path: Option<String>, // Optional repository to use for additional context
 }
 
@@ -56,6 +57,7 @@ mod tests {
             log_level: "debug".to_string(),
             bot_username: "test_bot".to_string(),
             poll_interval_seconds: 300,
+            stale_issue_days: 30,
             context_repo_path: Some("org/context-repo".to_string()),
         };
 
@@ -73,6 +75,7 @@ mod tests {
         assert_eq!(settings.log_level, "debug");
         assert_eq!(settings.bot_username, "test_bot");
         assert_eq!(settings.poll_interval_seconds, 300);
+        assert_eq!(settings.stale_issue_days, 30);
         assert_eq!(
             settings.context_repo_path,
             Some("org/context-repo".to_string())

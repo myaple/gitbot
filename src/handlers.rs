@@ -97,6 +97,28 @@ pub async fn process_mention(
                 issue_iid, project_id
             );
 
+            // Check and remove "stale" label if a user (not the bot) comments on a stale issue
+            if event.user.username != config.bot_username {
+                match gitlab_client.get_issue(project_id, issue_iid).await {
+                    Ok(issue_details_for_stale_check) => {
+                        if issue_details_for_stale_check
+                            .labels
+                            .iter()
+                            .any(|label| label == "stale")
+                        {
+                            info!("Issue #{} has 'stale' label and received a comment from user {}. Attempting to remove 'stale' label.", issue_iid, event.user.username);
+                            match gitlab_client.remove_issue_label(project_id, issue_iid, "stale").await {
+                                Ok(_) => info!("Successfully removed 'stale' label from issue #{}", issue_iid),
+                                Err(e) => warn!("Failed to remove 'stale' label from issue #{}: {}. Processing will continue.", issue_iid, e),
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Failed to fetch issue details for stale check on issue #{}: {}. Stale label check will be skipped.", issue_iid, e);
+                    }
+                }
+            }
+
             if let Some(context) = &user_provided_context {
                 llm_task_description = format!(
                     "The user @{} provided the following request regarding this issue: '{}'.",
@@ -446,6 +468,7 @@ mod tests {
             log_level: "debug".to_string(),
             bot_username: "gitbot".to_string(),
             poll_interval_seconds: 60,
+            stale_issue_days: 30, // Added default for tests
             context_repo_path: None,
         });
 
@@ -464,6 +487,7 @@ mod tests {
             log_level: "debug".to_string(),
             bot_username: "gitbot".to_string(),
             poll_interval_seconds: 60,
+            stale_issue_days: 30, // Added default for tests
             context_repo_path: None,
         };
         let gitlab_client = Arc::new(GitlabApiClient::new(&settings).unwrap());
@@ -494,6 +518,7 @@ mod tests {
             log_level: "debug".to_string(),
             bot_username: "gitbot".to_string(),
             poll_interval_seconds: 60,
+            stale_issue_days: 30, // Added default for tests
             context_repo_path: None,
         });
 
@@ -512,6 +537,7 @@ mod tests {
             log_level: "debug".to_string(),
             bot_username: "gitbot".to_string(),
             poll_interval_seconds: 60,
+            stale_issue_days: 30, // Added default for tests
             context_repo_path: None,
         };
         let gitlab_client = Arc::new(GitlabApiClient::new(&settings).unwrap());
@@ -551,6 +577,7 @@ mod tests {
             noteable_id: Some(1),
             iid: Some(1),
             url: "https://gitlab.example.com/org/repo1/-/issues/1#note_1".to_string(),
+            updated_at: "2023-01-01T00:00:00Z".to_string(), // Added default for tests
         };
 
         let issue = if noteable_type == "Issue" {
