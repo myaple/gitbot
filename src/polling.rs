@@ -504,6 +504,7 @@ mod tests {
             stale_issue_days: stale_days,
             max_age_hours: 24,
             context_repo_path: Some("org/context-repo".to_string()),
+            max_context_size: 60000,
         })
     }
 
@@ -1132,6 +1133,7 @@ mod tests {
             stale_issue_days: 30,
             max_age_hours: 12, // Set to 12 hours for this test
             context_repo_path: None,
+            max_context_size: 60000,
         };
 
         // Directly test the timestamp calculation logic

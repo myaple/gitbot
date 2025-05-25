@@ -18,7 +18,7 @@ async fn test_max_age_hours_calculation() {
         bot_username: "gitbot".to_string(),
         poll_interval_seconds: 60,
         stale_issue_days: 30,
-        max_age_hours: 24,
+        max_age_hours: 12,
         context_repo_path: None,
         max_context_size: 60000,
     };

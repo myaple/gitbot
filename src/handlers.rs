@@ -42,6 +42,12 @@ pub async fn process_mention(
         return Ok(());
     }
 
+    // Initialize variables at the top level
+    let project_id = event.project.id;
+    let mut prompt_parts = Vec::new();
+    let mut commit_history = String::new();
+    let mut is_issue = false;
+
     // Verify Object Kind and Event Type
     if event.object_kind != "note" || event.event_type != "note" {
         warn!(
@@ -101,13 +107,15 @@ pub async fn process_mention(
 
     let subsequent_notes_result = match event.object_attributes.noteable_type.as_str() {
         "Issue" => {
+            is_issue = true;
             let issue_iid = match event.issue.as_ref().map(|i| i.iid) {
                 Some(iid) => iid,
                 None => {
-                    error!(event_id = event.object_attributes.id, "Critical: Missing issue details (iid) in note event when checking for subsequent notes.");
-                    return Err(anyhow!(
-                        "Missing issue details (iid) in note event for reply check"
-                    ));
+                    error!(
+                        "Missing issue details (iid) in note event for an Issue. Event: {:?}",
+                        event
+                    );
+                    return Err(anyhow!("Missing issue details in note event"));
                 }
             };
             info!(
@@ -121,13 +129,12 @@ pub async fn process_mention(
                 .await
         }
         "MergeRequest" => {
+            is_issue = false;
             let mr_iid = match event.merge_request.as_ref().map(|mr| mr.iid) {
                 Some(iid) => iid,
                 None => {
-                    error!(event_id = event.object_attributes.id, "Critical: Missing merge request details (iid) in note event when checking for subsequent notes.");
-                    return Err(anyhow!(
-                        "Missing MR details (iid) in note event for reply check"
-                    ));
+                    error!("Missing merge request details (iid) in note event for a MergeRequest. Event: {:?}", event);
+                    return Err(anyhow!("Missing merge request details in note event"));
                 }
             };
             info!(
@@ -211,15 +218,8 @@ pub async fn process_mention(
     // --- END: Check if already replied ---
 
     // Prompt Assembly Logic
-    let mut prompt_parts: Vec<String> = Vec::new();
-    let llm_task_description: String;
-
-    let project_id = event.project.id;
-    let is_issue: bool;
-
     match note_attributes.noteable_type.as_str() {
         "Issue" => {
-            is_issue = true;
             let issue_iid = match event.issue.as_ref().map(|i| i.iid) {
                 Some(iid) => iid,
                 None => {
@@ -257,11 +257,19 @@ pub async fn process_mention(
                 }
             }
 
+            let issue = gitlab_client
+                .get_issue(project_id, issue_iid)
+                .await
+                .map_err(|e| {
+                    error!("Failed to get issue details for summary: {}", e);
+                    anyhow!("Failed to fetch issue details from GitLab: {}", e)
+                })?;
+
             if let Some(context) = &user_provided_context {
-                llm_task_description = format!(
+                prompt_parts.push(format!(
                     "The user @{} provided the following request regarding this issue: '{}'.",
                     event.user.username, context
-                );
+                ));
                 let issue_details = gitlab_client
                     .get_issue(project_id, issue_iid)
                     .await
@@ -275,21 +283,38 @@ pub async fn process_mention(
                     "Description: {}",
                     issue_details.description.as_deref().unwrap_or("N/A")
                 ));
+
+                prompt_parts.push(format!("State: {}", issue.state));
+                if !issue.labels.is_empty() {
+                    prompt_parts.push(format!("Labels: {}", issue.labels.join(", ")));
+                }
+
+                // Add repository context
+                let repo_context_extractor =
+                    RepoContextExtractor::new(gitlab_client.clone(), config.clone());
+                match repo_context_extractor
+                    .extract_context_for_issue(
+                        &issue,
+                        &event.project,
+                        config.context_repo_path.as_deref(),
+                    )
+                    .await
+                {
+                    Ok(context) => {
+                        prompt_parts.push(format!("Repository Context: {}", context));
+                    }
+                    Err(e) => {
+                        warn!("Failed to extract repository context: {}", e);
+                    }
+                }
+
                 prompt_parts.push(format!("User's specific request: {}", context));
             } else {
                 // No specific context, summarize and suggest steps
-                llm_task_description = format!(
+                prompt_parts.push(format!(
                     "Please summarize this issue for user @{} and suggest steps to address it. Be specific about which files, functions, or modules need to be modified.",
                     event.user.username
-                );
-                let issue = gitlab_client
-                    .get_issue(project_id, issue_iid)
-                    .await
-                    .map_err(|e| {
-                        error!("Failed to get issue details for summary: {}", e);
-                        anyhow!("Failed to fetch issue details from GitLab: {}", e)
-                    })?;
-
+                ));
                 prompt_parts.push(format!("Issue Title: {}", issue.title));
                 prompt_parts.push(format!(
                     "Issue Description: {}",
@@ -330,7 +355,6 @@ pub async fn process_mention(
             }
         }
         "MergeRequest" => {
-            is_issue = false;
             let mr_iid = match event.merge_request.as_ref().map(|mr| mr.iid) {
                 Some(iid) => iid,
                 None => {
@@ -343,33 +367,49 @@ pub async fn process_mention(
                 mr_iid, project_id
             );
 
-            if let Some(context) = &user_provided_context {
-                llm_task_description = format!("The user @{} provided the following request regarding this merge request: '{}'.", event.user.username, context);
-                let mr_details = gitlab_client
-                    .get_merge_request(project_id, mr_iid)
-                    .await
-                    .map_err(|e| {
-                        error!("Failed to get MR details for context: {}", e);
-                        anyhow!("Failed to fetch MR details from GitLab: {}", e)
-                    })?;
+            let mr = gitlab_client
+                .get_merge_request(project_id, mr_iid)
+                .await
+                .map_err(|e| {
+                    error!("Failed to get MR details for summary: {}", e);
+                    anyhow!("Failed to fetch MR details from GitLab: {}", e)
+                })?;
 
-                prompt_parts.push(format!("Title: {}", mr_details.title));
+            if let Some(context) = &user_provided_context {
+                prompt_parts.push(format!("The user @{} provided the following request regarding this merge request: '{}'.", event.user.username, context));
+
+                prompt_parts.push(format!("Title: {}", mr.title));
                 prompt_parts.push(format!(
                     "Description: {}",
-                    mr_details.description.as_deref().unwrap_or("N/A")
+                    mr.description.as_deref().unwrap_or("N/A")
                 ));
+                prompt_parts.push(format!("State: {}", mr.state));
+                if !mr.labels.is_empty() {
+                    prompt_parts.push(format!("Labels: {}", mr.labels.join(", ")));
+                }
+                prompt_parts.push(format!("Source Branch: {}", mr.source_branch));
+                prompt_parts.push(format!("Target Branch: {}", mr.target_branch));
+
+                // Add code diff context
+                let repo_context_extractor =
+                    RepoContextExtractor::new(gitlab_client.clone(), config.clone());
+                match repo_context_extractor
+                    .extract_context_for_mr(&mr, &event.project)
+                    .await
+                {
+                    Ok((context_for_llm, context_for_comment)) => {
+                        prompt_parts.push(format!("Code Changes: {}", context_for_llm));
+                        commit_history = context_for_comment;
+                    }
+                    Err(e) => {
+                        warn!("Failed to extract merge request diff context: {}", e);
+                    }
+                }
+
                 prompt_parts.push(format!("User's specific request: {}", context));
             } else {
                 // No specific context, summarize with code diffs
-                llm_task_description = format!("Please review this merge request for user @{} and provide a summary of the changes.", event.user.username);
-                let mr = gitlab_client
-                    .get_merge_request(project_id, mr_iid)
-                    .await
-                    .map_err(|e| {
-                        error!("Failed to get MR details for summary: {}", e);
-                        anyhow!("Failed to fetch MR details from GitLab: {}", e)
-                    })?;
-
+                prompt_parts.push(format!("Please review this merge request for user @{} and provide a summary of the changes.", event.user.username));
                 prompt_parts.push(format!("Merge Request Title: {}", mr.title));
                 prompt_parts.push(format!(
                     "Merge Request Description: {}",
@@ -390,8 +430,9 @@ pub async fn process_mention(
                     .extract_context_for_mr(&mr, &event.project)
                     .await
                 {
-                    Ok(context) => {
-                        prompt_parts.push(format!("Code Changes: {}", context));
+                    Ok((context_for_llm, context_for_comment)) => {
+                        prompt_parts.push(format!("Code Changes: {}", context_for_llm));
+                        commit_history = context_for_comment;
                     }
                     Err(e) => {
                         warn!("Failed to extract merge request diff context: {}", e);
@@ -411,21 +452,10 @@ pub async fn process_mention(
         }
     };
 
-    let item_type = if is_issue { "issue" } else { "merge request" };
-    if user_provided_context.is_none() {
-        prompt_parts.insert(
-            0,
-            format!(
-                "The user @{} wants a summary of this {}.",
-                event.user.username, item_type
-            ),
-        );
-    }
-
     let final_prompt_text = format!(
         "{}\n\nContext:\n{}",
-        llm_task_description,
-        prompt_parts.join("\n---\n")
+        prompt_parts.join("\n---\n"),
+        commit_history
     );
     trace!("Formatted prompt for LLM:\n{}", final_prompt_text);
     trace!("Full prompt for LLM (debug):\n{}", final_prompt_text);
@@ -460,18 +490,33 @@ pub async fn process_mention(
     let llm_reply = openai_response
         .choices
         .first()
-        .map(|choice| choice.message.content.clone())
-        .unwrap_or_else(|| "Sorry, I couldn't get a valid response from the LLM.".to_string());
+        .ok_or_else(|| anyhow!("No response choices from OpenAI"))?
+        .message
+        .content
+        .clone();
 
-    trace!("LLM Reply: {}", llm_reply);
+    // Format final comment
+    let final_comment_body = if is_issue {
+        format!(
+            "Hey @{}, here's the information you requested:\n\n---\n\n{}",
+            event.user.username, llm_reply
+        )
+    } else {
+        // For merge requests, include commit history only if no user context was provided
+        if user_provided_context.is_none() {
+            format!(
+                "Hey @{}, here's the information you requested:\n\n---\n\n{}\n\n### Commit History\n\n{}",
+                event.user.username, llm_reply, commit_history
+            )
+        } else {
+            format!(
+                "Hey @{}, here's the information you requested:\n\n---\n\n{}",
+                event.user.username, llm_reply
+            )
+        }
+    };
 
-    let user_who_triggered = &event.user.username;
-    let final_comment_body = format!(
-        "Hey @{}, here's the information you requested:\n\n---\n\n{}",
-        user_who_triggered, llm_reply
-    );
-
-    // Post the comment back to GitLab
+    // Post the comment
     if is_issue {
         let issue_iid = event.issue.as_ref().map(|i| i.iid).ok_or_else(|| {
             error!(
@@ -486,14 +531,14 @@ pub async fn process_mention(
             .await
             .map_err(|e| {
                 error!(
-                    "Failed to post comment to issue {}/{}: {}",
+                    "Failed to post comment to issue {}#{}: {}",
                     project_id, issue_iid, e
                 );
                 anyhow!("Failed to post comment to GitLab issue: {}", e)
             })?;
 
         info!(
-            "Successfully posted comment to issue {}/{}",
+            "Successfully posted comment to issue {}#{}",
             project_id, issue_iid
         );
     } else {
@@ -637,6 +682,7 @@ mod tests {
             max_age_hours: 24,
             stale_issue_days: 30, // Added default for tests
             context_repo_path: None,
+            max_context_size: 60000,
         };
         let gitlab_client = Arc::new(GitlabApiClient::new(&settings).unwrap());
 
@@ -669,6 +715,7 @@ mod tests {
             poll_interval_seconds: 60,
             stale_issue_days: 30, // Added default for tests
             context_repo_path: None,
+            max_context_size: 60000,
         });
 
         // Create a mock GitLab client
@@ -689,6 +736,7 @@ mod tests {
             poll_interval_seconds: 60,
             stale_issue_days: 30, // Added default for tests
             context_repo_path: None,
+            max_context_size: 60000,
         };
         let gitlab_client = Arc::new(GitlabApiClient::new(&settings).unwrap());
 

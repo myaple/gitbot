@@ -5,7 +5,7 @@ use crate::models::{GitlabIssue, GitlabMergeRequest, GitlabProject};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::sync::Arc;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 const MAX_SOURCE_FILES: usize = 250; // Maximum number of source files to include in context
 
@@ -46,7 +46,7 @@ impl RepoContextExtractor {
         let source_files: Vec<String> = files
             .into_iter()
             .filter(|path| {
-                let extension = path.split('.').last().unwrap_or("");
+                let extension = path.split('.').next_back().unwrap_or("");
                 matches!(
                     extension,
                     "rs" | "py"
@@ -144,13 +144,14 @@ impl RepoContextExtractor {
         &self,
         mr: &GitlabMergeRequest,
         project: &GitlabProject,
-    ) -> Result<String> {
+    ) -> Result<(String, String)> {
         info!(
             "Extracting diff context for MR !{} in {}",
             mr.iid, project.path_with_namespace
         );
 
-        let mut context = String::new();
+        let mut context_for_llm = String::new();
+        let mut context_for_comment = String::new();
         let mut total_size = 0;
 
         // First add the list of all source files
@@ -161,11 +162,11 @@ impl RepoContextExtractor {
                 MAX_SOURCE_FILES,
                 source_files.join("\n")
             );
-            context.push_str(&files_list);
+            context_for_llm.push_str(&files_list);
             total_size += files_list.len();
         }
 
-        // Then add the diff context
+        // Then add the diff context and file history
         let diffs = self
             .gitlab_client
             .get_merge_request_changes(project.id, mr.iid)
@@ -173,23 +174,73 @@ impl RepoContextExtractor {
             .context("Failed to get merge request changes")?;
 
         for diff in diffs {
-            let diff_context = format!("\n--- Changes in {} ---\n{}\n", diff.new_path, diff.diff);
+            let mut file_context =
+                format!("\n--- Changes in {} ---\n{}\n", diff.new_path, diff.diff);
 
-            // Check if adding this diff would exceed our context limit
-            if total_size + diff_context.len() > self.settings.max_context_size {
-                context.push_str("\n[Additional diffs omitted due to context size limits]\n");
+            // Get commit history for this file
+            match self
+                .gitlab_client
+                .get_file_commits(project.id, &diff.new_path, Some(5))
+                .await
+            {
+                Ok(commits) => {
+                    // Add commit history to LLM context
+                    file_context.push_str("\n--- Recent Commit History ---\n");
+                    for commit in commits.iter() {
+                        file_context.push_str(&format!(
+                            "* {} ({}) - {}\n  {}\n",
+                            commit.short_id, commit.authored_date, commit.author_name, commit.title
+                        ));
+                    }
+                    file_context.push('\n');
+
+                    // Add commit history to comment in a more user-friendly format with hyperlinks
+                    context_for_comment
+                        .push_str(&format!("\n### Recent commits for `{}`:\n", diff.new_path));
+                    context_for_comment.push_str("| Commit | Author | Date | Title |\n");
+                    context_for_comment.push_str("|--------|---------|------|-------|\n");
+                    for commit in commits.iter() {
+                        let commit_url = format!("{}/commit/{}", project.web_url, commit.id);
+                        context_for_comment.push_str(&format!(
+                            "| [{}]({}) | {} | {} | {} |\n",
+                            &commit.short_id,
+                            commit_url,
+                            commit.author_name,
+                            commit
+                                .authored_date
+                                .split('T')
+                                .next()
+                                .unwrap_or(&commit.authored_date),
+                            commit.title
+                        ));
+                    }
+                    context_for_comment.push('\n');
+                }
+                Err(e) => {
+                    warn!("Failed to get commit history for {}: {}", diff.new_path, e);
+                }
+            }
+
+            // Check if adding this context would exceed our context limit
+            if total_size + file_context.len() > self.settings.max_context_size {
+                context_for_llm
+                    .push_str("\n[Additional files omitted due to context size limits]\n");
                 break;
             }
 
-            context.push_str(&diff_context);
-            total_size += diff_context.len();
+            context_for_llm.push_str(&file_context);
+            total_size += file_context.len();
         }
 
-        if context.is_empty() {
-            context = "No source files or changes found in this merge request.".to_string();
+        if context_for_llm.is_empty() {
+            context_for_llm = "No source files or changes found in this merge request.".to_string();
         }
 
-        Ok(context)
+        if context_for_comment.is_empty() {
+            context_for_comment = "No commit history available for the changed files.".to_string();
+        }
+
+        Ok((context_for_llm, context_for_comment))
     }
 
     /// Find files that might be relevant to the issue based on keywords
@@ -239,7 +290,7 @@ impl RepoContextExtractor {
                 .await
             {
                 Ok(file) => files_with_content.push(file),
-                Err(e) => debug!("Failed to get content for file {}: {}", file_path, e),
+                Err(e) => warn!("Failed to get content for file {}: {}", file_path, e),
             }
         }
 
@@ -295,28 +346,34 @@ impl RepoContextExtractor {
         // Calculate score based on keyword matches
         let mut score = 0;
 
-        // Prefer documentation files
-        if path_lower.contains("readme")
-            || path_lower.contains("docs/")
-            || path_lower.ends_with(".md")
-        {
-            score += 5;
-        }
+        // Prefer documentation files, but only if they match keywords
+        let has_keyword_match = keywords
+            .iter()
+            .any(|keyword| path_lower.contains(&keyword.to_lowercase()));
 
-        // Prefer source code files
-        let code_extensions = [
-            ".rs", ".py", ".js", ".ts", ".java", ".c", ".cpp", ".h", ".hpp", ".go", ".rb", ".php",
-            ".cs", ".scala", ".kt", ".swift", ".sh",
-        ];
+        if has_keyword_match {
+            if path_lower.contains("readme")
+                || path_lower.contains("docs/")
+                || path_lower.ends_with(".md")
+            {
+                score += 5;
+            }
 
-        if code_extensions.iter().any(|ext| path_lower.ends_with(ext)) {
-            score += 3;
-        }
+            // Prefer source code files
+            let code_extensions = [
+                ".rs", ".py", ".js", ".ts", ".java", ".c", ".cpp", ".h", ".hpp", ".go", ".rb",
+                ".php", ".cs", ".scala", ".kt", ".swift", ".sh",
+            ];
 
-        // Add points for each keyword match in the file path
-        for keyword in keywords {
-            if path_lower.contains(&keyword.to_lowercase()) {
-                score += 10; // Higher score for direct matches in path
+            if code_extensions.iter().any(|ext| path_lower.ends_with(ext)) {
+                score += 3;
+            }
+
+            // Add points for each keyword match in the file path
+            for keyword in keywords {
+                if path_lower.contains(&keyword.to_lowercase()) {
+                    score += 10; // Higher score for direct matches in path
+                }
             }
         }
 
@@ -367,6 +424,7 @@ mod tests {
             stale_issue_days: 30, // Added default for tests (removed duplicate)
             max_age_hours: 24,
             context_repo_path: None,
+            max_context_size: 60000,
         };
 
         let extractor = RepoContextExtractor::new(
@@ -411,6 +469,7 @@ mod tests {
             stale_issue_days: 30,
             max_age_hours: 24,
             context_repo_path: None,
+            max_context_size: 60000,
         };
 
         let extractor = RepoContextExtractor::new(
@@ -451,10 +510,8 @@ mod tests {
         // Check that relevant files have higher scores
         assert!(scores[0].1 > 0); // auth/login.rs should have high score
         assert!(scores[2].1 > 0); // authentication.md should have high score
-        assert_eq!(scores[4].1, 0); // image.png should have zero score (binary file)
-
-        // Check relative scoring
-        assert!(scores[0].1 > scores[3].1); // login.rs should score higher than utils.rs
-        assert!(scores[2].1 > scores[1].1); // authentication.md should score higher than README.md
+        assert!(scores[1].1 == 0); // README.md should have no score
+        assert!(scores[3].1 == 0); // utils.rs should have no score
+        assert!(scores[4].1 == 0); // image.png should have no score
     }
 }

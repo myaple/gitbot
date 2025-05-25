@@ -1,5 +1,7 @@
 use crate::config::AppSettings;
-use crate::models::{GitlabIssue, GitlabMergeRequest, GitlabNoteAttributes, GitlabProject};
+use crate::models::{
+    GitlabCommit, GitlabIssue, GitlabMergeRequest, GitlabNoteAttributes, GitlabProject,
+};
 use crate::repo_context::{GitlabDiff, GitlabFile};
 use chrono::{DateTime, TimeZone, Utc};
 use reqwest::{header, Client, Method, StatusCode};
@@ -445,6 +447,23 @@ impl GitlabApiClient {
         let path = format!("/api/v4/projects/{}/issues/{}", project_id, issue_iid);
         let body = serde_json::json!({ "remove_labels": label_name });
         self.send_request(Method::PUT, &path, None, Some(body))
+            .await
+    }
+
+    /// Get commit history for a file
+    #[instrument(skip(self), fields(project_id, file_path))]
+    pub async fn get_file_commits(
+        &self,
+        project_id: i64,
+        file_path: &str,
+        limit: Option<usize>,
+    ) -> Result<Vec<GitlabCommit>, GitlabError> {
+        let path = format!("/api/v4/projects/{}/repository/commits", project_id);
+
+        let per_page = limit.unwrap_or(5).to_string();
+        let query_params = vec![("path", file_path), ("per_page", &per_page)];
+
+        self.send_request(Method::GET, &path, Some(&query_params), None::<()>)
             .await
     }
 }
@@ -1048,5 +1067,62 @@ mod tests {
             }
             _ => panic!("Expected Api Error for not found"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_get_file_commits() {
+        let mut server = mockito::Server::new_async().await;
+        let base_url = server.url();
+        let settings = create_test_settings(base_url);
+        let client = GitlabApiClient::new(&settings).unwrap();
+
+        let mock_commits_response = serde_json::json!([
+            {
+                "id": "a1b2c3d4e5f6",
+                "short_id": "a1b2c3d4",
+                "title": "Update file content",
+                "author_name": "John Doe",
+                "author_email": "john@example.com",
+                "authored_date": "2024-03-15T10:00:00Z",
+                "committer_name": "John Doe",
+                "committer_email": "john@example.com",
+                "committed_date": "2024-03-15T10:00:00Z",
+                "message": "Update file content\n\nMade some changes to improve functionality"
+            },
+            {
+                "id": "b2c3d4e5f6a1",
+                "short_id": "b2c3d4e5",
+                "title": "Initial commit",
+                "author_name": "Jane Smith",
+                "author_email": "jane@example.com",
+                "authored_date": "2024-03-14T09:00:00Z",
+                "committer_name": "Jane Smith",
+                "committer_email": "jane@example.com",
+                "committed_date": "2024-03-14T09:00:00Z",
+                "message": "Initial commit\n\nAdded base functionality"
+            }
+        ]);
+
+        let _m = server
+            .mock("GET", "/api/v4/projects/1/repository/commits")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("path".into(), "src/main.rs".into()),
+                mockito::Matcher::UrlEncoded("per_page".into(), "5".into()),
+            ]))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(mock_commits_response.to_string())
+            .create_async()
+            .await;
+
+        let commits = client
+            .get_file_commits(1, "src/main.rs", Some(5))
+            .await
+            .unwrap();
+        assert_eq!(commits.len(), 2);
+        assert_eq!(commits[0].short_id, "a1b2c3d4");
+        assert_eq!(commits[0].author_name, "John Doe");
+        assert_eq!(commits[1].short_id, "b2c3d4e5");
+        assert_eq!(commits[1].author_name, "Jane Smith");
     }
 }
