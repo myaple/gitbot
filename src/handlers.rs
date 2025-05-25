@@ -217,9 +217,6 @@ pub async fn process_mention(
     let project_id = event.project.id;
     let is_issue: bool;
 
-    // Create repo context extractor
-    let _context_extractor = RepoContextExtractor::new(gitlab_client.clone());
-
     match note_attributes.noteable_type.as_str() {
         "Issue" => {
             is_issue = true;
@@ -305,7 +302,8 @@ pub async fn process_mention(
                 }
 
                 // Add repository context
-                let repo_context_extractor = RepoContextExtractor::new(gitlab_client.clone());
+                let repo_context_extractor =
+                    RepoContextExtractor::new(gitlab_client.clone(), config.clone());
                 match repo_context_extractor
                     .extract_context_for_issue(
                         &issue,
@@ -386,7 +384,8 @@ pub async fn process_mention(
                 prompt_parts.push(format!("Target Branch: {}", mr.target_branch));
 
                 // Add code diff context
-                let repo_context_extractor = RepoContextExtractor::new(gitlab_client.clone());
+                let repo_context_extractor =
+                    RepoContextExtractor::new(gitlab_client.clone(), config.clone());
                 match repo_context_extractor
                     .extract_context_for_mr(&mr, &event.project)
                     .await
@@ -610,13 +609,14 @@ mod tests {
             openai_model: "gpt-3.5-turbo".to_string(),
             openai_temperature: 0.7,
             openai_max_tokens: 1024,
-            repos_to_poll: vec!["org/repo1".to_string()],
+            repos_to_poll: vec!["test/repo".to_string()],
             log_level: "debug".to_string(),
             bot_username: "gitbot".to_string(),
             poll_interval_seconds: 60,
-            stale_issue_days: 30, // Added default for tests
+            stale_issue_days: 30,
             max_age_hours: 24,
             context_repo_path: None,
+            max_context_size: 60000,
         });
 
         // Create a mock GitLab client

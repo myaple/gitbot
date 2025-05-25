@@ -1,3 +1,4 @@
+use crate::config::AppSettings;
 use crate::gitlab::GitlabApiClient;
 use crate::models::{GitlabIssue, GitlabMergeRequest, GitlabProject};
 
@@ -6,7 +7,6 @@ use serde::Deserialize;
 use std::sync::Arc;
 use tracing::{debug, info};
 
-const MAX_CONTEXT_SIZE: usize = 60000; // Maximum characters of context to include
 const MAX_SOURCE_FILES: usize = 250; // Maximum number of source files to include in context
 
 #[derive(Debug, Deserialize)]
@@ -27,11 +27,15 @@ pub struct GitlabDiff {
 
 pub struct RepoContextExtractor {
     gitlab_client: Arc<GitlabApiClient>,
+    settings: Arc<AppSettings>,
 }
 
 impl RepoContextExtractor {
-    pub fn new(gitlab_client: Arc<GitlabApiClient>) -> Self {
-        Self { gitlab_client }
+    pub fn new(gitlab_client: Arc<GitlabApiClient>, settings: Arc<AppSettings>) -> Self {
+        Self {
+            gitlab_client,
+            settings,
+        }
     }
 
     /// Get all source code files in the repository, up to MAX_SOURCE_FILES limit
@@ -117,7 +121,7 @@ impl RepoContextExtractor {
                 let file_context = format!("\n--- File: {} ---\n{}\n", file.file_path, content);
 
                 // Check if adding this file would exceed our context limit
-                if total_size + file_context.len() > MAX_CONTEXT_SIZE {
+                if total_size + file_context.len() > self.settings.max_context_size {
                     // If we're about to exceed the limit, add a truncation notice
                     context.push_str("\n[Additional files omitted due to context size limits]\n");
                     break;
@@ -172,7 +176,7 @@ impl RepoContextExtractor {
             let diff_context = format!("\n--- Changes in {} ---\n{}\n", diff.new_path, diff.diff);
 
             // Check if adding this diff would exceed our context limit
-            if total_size + diff_context.len() > MAX_CONTEXT_SIZE {
+            if total_size + diff_context.len() > self.settings.max_context_size {
                 context.push_str("\n[Additional diffs omitted due to context size limits]\n");
                 break;
             }
@@ -365,8 +369,10 @@ mod tests {
             context_repo_path: None,
         };
 
-        let extractor =
-            RepoContextExtractor::new(Arc::new(GitlabApiClient::new(&settings).unwrap()));
+        let extractor = RepoContextExtractor::new(
+            Arc::new(GitlabApiClient::new(&settings).unwrap()),
+            Arc::new(settings.clone()),
+        );
 
         let keywords = extractor.extract_keywords(&issue);
 
@@ -407,8 +413,10 @@ mod tests {
             context_repo_path: None,
         };
 
-        let extractor =
-            RepoContextExtractor::new(Arc::new(GitlabApiClient::new(&settings).unwrap()));
+        let extractor = RepoContextExtractor::new(
+            Arc::new(GitlabApiClient::new(&settings).unwrap()),
+            Arc::new(settings.clone()),
+        );
 
         let keywords = vec![
             "authentication".to_string(),

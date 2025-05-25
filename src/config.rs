@@ -67,6 +67,10 @@ pub struct AppSettings {
     /// Optional repository to use for additional context (format: group/project)
     #[arg(long, env = "GITBOT_CONTEXT_REPO_PATH")]
     pub context_repo_path: Option<String>,
+
+    /// Maximum number of characters of context to include (default: 60000)
+    #[arg(long, env = "GITBOT_MAX_CONTEXT_SIZE", default_value_t = 60000)]
+    pub max_context_size: usize,
 }
 
 // fn parse_repos_list(s: &str) -> Result<Vec<String>, String> {
@@ -114,6 +118,7 @@ mod tests {
             stale_issue_days: 30,
             max_age_hours: 24,
             context_repo_path: Some("org/context-repo".to_string()),
+            max_context_size: 60000,
         };
 
         assert_eq!(settings.gitlab_url, "https://gitlab.example.com");

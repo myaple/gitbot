@@ -13,13 +13,14 @@ async fn test_max_age_hours_calculation() {
         openai_temperature: 0.7,
         openai_max_tokens: 1024,
         openai_custom_url: "https://api.openai.com/v1".to_string(),
-        repos_to_poll: vec!["test/project".to_string()],
+        repos_to_poll: vec!["test/repo".to_string()],
         log_level: "debug".to_string(),
         bot_username: "gitbot".to_string(),
         poll_interval_seconds: 60,
         stale_issue_days: 30,
-        max_age_hours: 12, // Set to 12 hours for this test
+        max_age_hours: 24,
         context_repo_path: None,
+        max_context_size: 60000,
     };
 
     // Get current time and calculate a timestamp from 24 hours ago
