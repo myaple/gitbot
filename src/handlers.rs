@@ -282,7 +282,7 @@ pub async fn process_mention(
             } else {
                 // No specific context, summarize and suggest steps
                 llm_task_description = format!(
-                    "Please summarize this issue for user @{} and suggest steps to address it.",
+                    "Please summarize this issue for user @{} and suggest steps to address it. Be specific about which files, functions, or modules need to be modified.",
                     event.user.username
                 );
                 let issue = gitlab_client
@@ -323,7 +323,12 @@ pub async fn process_mention(
                 }
 
                 // Add instructions for steps
-                prompt_parts.push("Please provide a summary of the issue and suggest specific steps to address it based on the repository context.".to_string());
+                prompt_parts.push(
+                    String::from(
+                        "Please provide a summary of the issue and suggest specific steps to",
+                    ) + "address it based on the repository context. Again, be specific about"
+                        + "which files, functions, or modules need to be modified.",
+                );
             }
         }
         "MergeRequest" => {

@@ -6,7 +6,8 @@ use serde::Deserialize;
 use std::sync::Arc;
 use tracing::{debug, info};
 
-const MAX_CONTEXT_SIZE: usize = 10000; // Maximum characters of context to include
+const MAX_CONTEXT_SIZE: usize = 60000; // Maximum characters of context to include
+const MAX_SOURCE_FILES: usize = 250; // Maximum number of source files to include in context
 
 #[derive(Debug, Deserialize)]
 pub struct GitlabFile {
@@ -31,6 +32,44 @@ pub struct RepoContextExtractor {
 impl RepoContextExtractor {
     pub fn new(gitlab_client: Arc<GitlabApiClient>) -> Self {
         Self { gitlab_client }
+    }
+
+    /// Get all source code files in the repository, up to MAX_SOURCE_FILES limit
+    async fn get_all_source_files(&self, project_id: i64) -> Result<Vec<String>> {
+        let files = self.gitlab_client.get_repository_tree(project_id).await?;
+
+        // Filter for source code files and limit to MAX_SOURCE_FILES
+        let source_files: Vec<String> = files
+            .into_iter()
+            .filter(|path| {
+                let extension = path.split('.').last().unwrap_or("");
+                matches!(
+                    extension,
+                    "rs" | "py"
+                        | "js"
+                        | "ts"
+                        | "java"
+                        | "c"
+                        | "cpp"
+                        | "h"
+                        | "hpp"
+                        | "go"
+                        | "rb"
+                        | "php"
+                        | "cs"
+                        | "scala"
+                        | "kt"
+                        | "swift"
+                        | "sh"
+                        | "jsx"
+                        | "tsx"
+                        | "vue"
+                )
+            })
+            .take(MAX_SOURCE_FILES)
+            .collect();
+
+        Ok(source_files)
     }
 
     /// Extract relevant context from a repository for an issue
@@ -59,6 +98,20 @@ impl RepoContextExtractor {
         let mut context = String::new();
         let mut total_size = 0;
 
+        // First add the list of all source files
+        let project = self.gitlab_client.get_project_by_path(repo_path).await?;
+        let source_files = self.get_all_source_files(project.id).await?;
+        if !source_files.is_empty() {
+            let files_list = format!(
+                "\n--- All Source Files (up to {} files) ---\n{}\n",
+                MAX_SOURCE_FILES,
+                source_files.join("\n")
+            );
+            context.push_str(&files_list);
+            total_size += files_list.len();
+        }
+
+        // Then add relevant file contents
         for file in relevant_files {
             if let Some(content) = file.content {
                 let file_context = format!("\n--- File: {} ---\n{}\n", file.file_path, content);
@@ -76,7 +129,7 @@ impl RepoContextExtractor {
         }
 
         if context.is_empty() {
-            context = "No relevant files found in the repository.".to_string();
+            context = "No source files or relevant files found in the repository.".to_string();
         }
 
         Ok(context)
@@ -93,14 +146,27 @@ impl RepoContextExtractor {
             mr.iid, project.path_with_namespace
         );
 
+        let mut context = String::new();
+        let mut total_size = 0;
+
+        // First add the list of all source files
+        let source_files = self.get_all_source_files(project.id).await?;
+        if !source_files.is_empty() {
+            let files_list = format!(
+                "\n--- All Source Files (up to {} files) ---\n{}\n",
+                MAX_SOURCE_FILES,
+                source_files.join("\n")
+            );
+            context.push_str(&files_list);
+            total_size += files_list.len();
+        }
+
+        // Then add the diff context
         let diffs = self
             .gitlab_client
             .get_merge_request_changes(project.id, mr.iid)
             .await
             .context("Failed to get merge request changes")?;
-
-        let mut context = String::new();
-        let mut total_size = 0;
 
         for diff in diffs {
             let diff_context = format!("\n--- Changes in {} ---\n{}\n", diff.new_path, diff.diff);
@@ -116,7 +182,7 @@ impl RepoContextExtractor {
         }
 
         if context.is_empty() {
-            context = "No changes found in this merge request.".to_string();
+            context = "No source files or changes found in this merge request.".to_string();
         }
 
         Ok(context)
