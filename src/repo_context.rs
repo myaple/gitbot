@@ -46,7 +46,7 @@ impl RepoContextExtractor {
         let source_files: Vec<String> = files
             .into_iter()
             .filter(|path| {
-                let extension = path.split('.').last().unwrap_or("");
+                let extension = path.split('.').next_back().unwrap_or("");
                 matches!(
                     extension,
                     "rs" | "py"
