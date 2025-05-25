@@ -114,8 +114,8 @@ impl PollingService {
         let max_age_seconds = self.config.max_age_hours * 3600;
         let max_age_timestamp = now.saturating_sub(max_age_seconds);
 
-        // Use the more recent of since_timestamp and max_age_timestamp
-        let effective_timestamp = std::cmp::max(since_timestamp, max_age_timestamp);
+        // Use the less recent of since_timestamp and max_age_timestamp
+        let effective_timestamp = std::cmp::min(since_timestamp, max_age_timestamp);
 
         info!(
             "Using effective timestamp: {} (max age: {} hours)",
