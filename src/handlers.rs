@@ -637,6 +637,7 @@ mod tests {
             max_age_hours: 24,
             stale_issue_days: 30, // Added default for tests
             context_repo_path: None,
+            max_context_size: 60000,
         };
         let gitlab_client = Arc::new(GitlabApiClient::new(&settings).unwrap());
 
@@ -669,6 +670,7 @@ mod tests {
             poll_interval_seconds: 60,
             stale_issue_days: 30, // Added default for tests
             context_repo_path: None,
+            max_context_size: 60000,
         });
 
         // Create a mock GitLab client
@@ -689,6 +691,7 @@ mod tests {
             poll_interval_seconds: 60,
             stale_issue_days: 30, // Added default for tests
             context_repo_path: None,
+            max_context_size: 60000,
         };
         let gitlab_client = Arc::new(GitlabApiClient::new(&settings).unwrap());
 

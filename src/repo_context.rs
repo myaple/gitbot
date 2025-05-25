@@ -165,7 +165,7 @@ impl RepoContextExtractor {
             total_size += files_list.len();
         }
 
-        // Then add the diff context
+        // Then add the diff context and file history
         let diffs = self
             .gitlab_client
             .get_merge_request_changes(project.id, mr.iid)
@@ -173,16 +173,36 @@ impl RepoContextExtractor {
             .context("Failed to get merge request changes")?;
 
         for diff in diffs {
-            let diff_context = format!("\n--- Changes in {} ---\n{}\n", diff.new_path, diff.diff);
+            let mut file_context = format!("\n--- Changes in {} ---\n{}\n", diff.new_path, diff.diff);
 
-            // Check if adding this diff would exceed our context limit
-            if total_size + diff_context.len() > self.settings.max_context_size {
-                context.push_str("\n[Additional diffs omitted due to context size limits]\n");
+            // Get commit history for this file
+            match self.gitlab_client.get_file_commits(project.id, &diff.new_path, Some(5)).await {
+                Ok(commits) => {
+                    file_context.push_str("\n--- Recent Commit History ---\n");
+                    for commit in commits {
+                        file_context.push_str(&format!(
+                            "* {} ({}) - {}\n  {}\n",
+                            commit.short_id,
+                            commit.authored_date,
+                            commit.author_name,
+                            commit.title
+                        ));
+                    }
+                    file_context.push('\n');
+                }
+                Err(e) => {
+                    debug!("Failed to get commit history for {}: {}", diff.new_path, e);
+                }
+            }
+
+            // Check if adding this context would exceed our context limit
+            if total_size + file_context.len() > self.settings.max_context_size {
+                context.push_str("\n[Additional files omitted due to context size limits]\n");
                 break;
             }
 
-            context.push_str(&diff_context);
-            total_size += diff_context.len();
+            context.push_str(&file_context);
+            total_size += file_context.len();
         }
 
         if context.is_empty() {
@@ -367,6 +387,7 @@ mod tests {
             stale_issue_days: 30, // Added default for tests (removed duplicate)
             max_age_hours: 24,
             context_repo_path: None,
+            max_context_size: 60000,
         };
 
         let extractor = RepoContextExtractor::new(
@@ -411,6 +432,7 @@ mod tests {
             stale_issue_days: 30,
             max_age_hours: 24,
             context_repo_path: None,
+            max_context_size: 60000,
         };
 
         let extractor = RepoContextExtractor::new(
@@ -451,10 +473,8 @@ mod tests {
         // Check that relevant files have higher scores
         assert!(scores[0].1 > 0); // auth/login.rs should have high score
         assert!(scores[2].1 > 0); // authentication.md should have high score
-        assert_eq!(scores[4].1, 0); // image.png should have zero score (binary file)
-
-        // Check relative scoring
-        assert!(scores[0].1 > scores[3].1); // login.rs should score higher than utils.rs
-        assert!(scores[2].1 > scores[1].1); // authentication.md should score higher than README.md
+        assert!(scores[1].1 == 0); // README.md should have no score
+        assert!(scores[3].1 == 0); // utils.rs should have no score
+        assert!(scores[4].1 == 0); // image.png should have no score
     }
 }

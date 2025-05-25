@@ -116,3 +116,17 @@ pub struct OpenAIChatResponse {
     pub choices: Vec<OpenAIChatChoice>,
     pub usage: Option<OpenAIUsage>,
 }
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct GitlabCommit {
+    pub id: String,
+    pub short_id: String,
+    pub title: String,
+    pub author_name: String,
+    pub author_email: String,
+    pub authored_date: String,
+    pub committer_name: String,
+    pub committer_email: String,
+    pub committed_date: String,
+    pub message: String,
+}
