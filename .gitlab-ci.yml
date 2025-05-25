@@ -38,40 +38,61 @@ build_and_test_job:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"'
     - if: '$CI_COMMIT_TAG =~ /^v.*/' # Run for tags starting with 'v'
 
-release_job:
+build_release_binary:
   stage: release
-  # The 'image: rust:1.86' is defined globally.
-  # before_script for release might not be strictly necessary if build_and_test_job ensures tools.
+  # Use the global rust image for building the binary
   script:
     - cargo build --release --verbose
-    # Determine Asset Name and Path (GitLab CI variables are used here)
-    # CI_COMMIT_TAG is the tag name, e.g., v1.0.0
-    # BINARY_NAME is from the global variables
+    # Determine Asset Name and Path
     - |
       TAG_NAME="$CI_COMMIT_TAG"
       CLEAN_BINARY_NAME=$(echo "$BINARY_NAME" | tr -cd '[:alnum:]._-')
       ASSET_NAME="${CLEAN_BINARY_NAME}-${TAG_NAME}-linux-amd64.tar.gz" 
-      # Assuming Linux AMD64 from the rust docker image, adjust if cross-compiling for other targets.
-      # The GitHub Action uses runner.os, which is ubuntu.
       echo "ASSET_NAME=${ASSET_NAME}"
       echo "RELEASE_TAG=${TAG_NAME}"
       # Package the release binary
       tar -czvf "${ASSET_NAME}" -C target/release "${BINARY_NAME}"
-    # Create GitLab Release using release-cli
-    # The release-cli is usually pre-installed on GitLab runners or can be downloaded.
-    # For simplicity, we assume it's available.
-    - release-cli create --name "Release ${CI_COMMIT_TAG}" --tag-name "${CI_COMMIT_TAG}"       --description "Release of ${BINARY_NAME} version ${CI_COMMIT_TAG}. See CHANGELOG.md for details (if available)."       --assets-link "{\"name\":\"$(echo $ASSET_NAME)\",\"url\":\"./$(echo $ASSET_NAME)\"}"
+    # Upload the asset as a job artifact
+    - mkdir -p release_assets
+    - cp "${ASSET_NAME}" release_assets/
+  artifacts:
+    paths:
+      - release_assets/
+    expire_in: 1 week
   cache:
     key:
       files:
         - Cargo.lock
     paths:
-      - target/ # Specifically target/release will be populated
+      - target/
       - /usr/local/cargo/registry/
       - /usr/local/cargo/git/
-    policy: pull # For release, only pull, don't push cache
+    policy: pull
   rules:
     - if: '$CI_COMMIT_TAG =~ /^v.*/' # Only run for tags starting with 'v'
   needs:
     - job: build_and_test_job
-      artifacts: false # Doesn't need artifacts from build_and_test_job, will rebuild in release mode
+      artifacts: false
+
+create_release:
+  stage: release
+  # Use GitLab's release-cli image which has the tool pre-installed
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  script:
+    - |
+      TAG_NAME="$CI_COMMIT_TAG"
+      CLEAN_BINARY_NAME=$(echo "$BINARY_NAME" | tr -cd '[:alnum:]._-')
+      ASSET_NAME="${CLEAN_BINARY_NAME}-${TAG_NAME}-linux-amd64.tar.gz"
+    - |
+      # Create the release with the asset link
+      # The asset will be available as a job artifact from the build_release_binary job
+      release-cli create \
+        --name "Release ${CI_COMMIT_TAG}" \
+        --tag-name "${CI_COMMIT_TAG}" \
+        --description "Release of ${BINARY_NAME} version ${CI_COMMIT_TAG}. See CHANGELOG.md for details (if available)." \
+        --assets-link "{\"name\":\"${ASSET_NAME}\",\"url\":\"${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_REF_NAME}/raw/release_assets/${ASSET_NAME}?job=build_release_binary\"}"
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v.*/' # Only run for tags starting with 'v'
+  needs:
+    - job: build_release_binary
+      artifacts: true
