@@ -1,5 +1,7 @@
 use crate::config::AppSettings;
-use crate::models::{GitlabCommit, GitlabIssue, GitlabMergeRequest, GitlabNoteAttributes, GitlabProject};
+use crate::models::{
+    GitlabCommit, GitlabIssue, GitlabMergeRequest, GitlabNoteAttributes, GitlabProject,
+};
 use crate::repo_context::{GitlabDiff, GitlabFile};
 use chrono::{DateTime, TimeZone, Utc};
 use reqwest::{header, Client, Method, StatusCode};
@@ -456,16 +458,10 @@ impl GitlabApiClient {
         file_path: &str,
         limit: Option<usize>,
     ) -> Result<Vec<GitlabCommit>, GitlabError> {
-        let path = format!(
-            "/api/v4/projects/{}/repository/commits",
-            project_id
-        );
-        
+        let path = format!("/api/v4/projects/{}/repository/commits", project_id);
+
         let per_page = limit.unwrap_or(5).to_string();
-        let query_params = vec![
-            ("path", file_path),
-            ("per_page", &per_page),
-        ];
+        let query_params = vec![("path", file_path), ("per_page", &per_page)];
 
         self.send_request(Method::GET, &path, Some(&query_params), None::<()>)
             .await
@@ -1119,7 +1115,10 @@ mod tests {
             .create_async()
             .await;
 
-        let commits = client.get_file_commits(1, "src/main.rs", Some(5)).await.unwrap();
+        let commits = client
+            .get_file_commits(1, "src/main.rs", Some(5))
+            .await
+            .unwrap();
         assert_eq!(commits.len(), 2);
         assert_eq!(commits[0].short_id, "a1b2c3d4");
         assert_eq!(commits[0].author_name, "John Doe");

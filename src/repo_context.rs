@@ -173,19 +173,21 @@ impl RepoContextExtractor {
             .context("Failed to get merge request changes")?;
 
         for diff in diffs {
-            let mut file_context = format!("\n--- Changes in {} ---\n{}\n", diff.new_path, diff.diff);
+            let mut file_context =
+                format!("\n--- Changes in {} ---\n{}\n", diff.new_path, diff.diff);
 
             // Get commit history for this file
-            match self.gitlab_client.get_file_commits(project.id, &diff.new_path, Some(5)).await {
+            match self
+                .gitlab_client
+                .get_file_commits(project.id, &diff.new_path, Some(5))
+                .await
+            {
                 Ok(commits) => {
                     file_context.push_str("\n--- Recent Commit History ---\n");
                     for commit in commits {
                         file_context.push_str(&format!(
                             "* {} ({}) - {}\n  {}\n",
-                            commit.short_id,
-                            commit.authored_date,
-                            commit.author_name,
-                            commit.title
+                            commit.short_id, commit.authored_date, commit.author_name, commit.title
                         ));
                     }
                     file_context.push('\n');
