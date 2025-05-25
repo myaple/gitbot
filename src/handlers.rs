@@ -502,11 +502,18 @@ pub async fn process_mention(
             event.user.username, llm_reply
         )
     } else {
-        // For merge requests, include the commit history after the LLM's reply
-        format!(
-            "Hey @{}, here's the information you requested:\n\n---\n\n{}\n\n### Commit History\n\n{}",
-            event.user.username, llm_reply, commit_history
-        )
+        // For merge requests, include commit history only if no user context was provided
+        if user_provided_context.is_none() {
+            format!(
+                "Hey @{}, here's the information you requested:\n\n---\n\n{}\n\n### Commit History\n\n{}",
+                event.user.username, llm_reply, commit_history
+            )
+        } else {
+            format!(
+                "Hey @{}, here's the information you requested:\n\n---\n\n{}",
+                event.user.username, llm_reply
+            )
+        }
     };
 
     // Post the comment
