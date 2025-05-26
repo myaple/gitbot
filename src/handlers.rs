@@ -1,5 +1,5 @@
 use crate::config::AppSettings;
-use crate::gitlab::GitlabApiClient;
+use crate::gitlab::{GitlabApiClient, GitlabError};
 use crate::models::{GitlabNoteEvent, OpenAIChatMessage, OpenAIChatRequest};
 use crate::openai::OpenAIApiClient;
 use crate::repo_context::RepoContextExtractor;
@@ -217,22 +217,6 @@ pub async fn process_mention(
     }
     // --- END: Check if already replied ---
 
-    // Read CONTRIBUTING.md
-    let contributing_md_content: Option<String> = match std::fs::read_to_string("CONTRIBUTING.md") {
-        Ok(content) if !content.is_empty() => Some(content),
-        Ok(_) => {
-            info!("CONTRIBUTING.md is empty, will not use for prompt.");
-            None
-        }
-        Err(e) => {
-            warn!(
-                "Failed to read CONTRIBUTING.md: {}. It will not be used in the prompt.",
-                e
-            );
-            None
-        }
-    };
-
     // Prompt Assembly Logic
     match note_attributes.noteable_type.as_str() {
         "Issue" => {
@@ -390,6 +374,50 @@ pub async fn process_mention(
                     error!("Failed to get MR details for summary: {}", e);
                     anyhow!("Failed to fetch MR details from GitLab: {}", e)
                 })?;
+
+            let mut contributing_md_content: Option<String> = None;
+            match gitlab_client
+                .get_file_content(project_id, "CONTRIBUTING.md")
+                .await
+            {
+                Ok(file_response) => {
+                    if let Some(content) = file_response.content {
+                        if !content.is_empty() {
+                            info!(
+                                "Successfully fetched and decoded CONTRIBUTING.md for project ID {}",
+                                project_id
+                            );
+                            contributing_md_content = Some(content);
+                        } else {
+                            info!(
+                                "CONTRIBUTING.md is empty for project ID {}. Proceeding without it.",
+                                project_id
+                            );
+                        }
+                    } else {
+                        // This case might occur if the API returns a success status but no content field,
+                        // or if get_file_content is changed to return Ok(GitlabFile { content: None }) on 404.
+                        info!(
+                            "CONTRIBUTING.md has no content or content was null for project ID {}. Proceeding without it.",
+                            project_id
+                        );
+                    }
+                }
+                Err(e) => match e {
+                    GitlabError::Api { status, .. } if status == reqwest::StatusCode::NOT_FOUND => {
+                        info!(
+                            "CONTRIBUTING.md not found (404) for project ID {}. Proceeding without it.",
+                            project_id
+                        );
+                    }
+                    _ => {
+                        warn!(
+                            "Failed to fetch CONTRIBUTING.md for project ID {}: {:?}. Proceeding without it.",
+                            project_id, e
+                        );
+                    }
+                },
+            }
 
             if let Some(context) = &user_provided_context {
                 prompt_parts.push(format!("The user @{} provided the following request regarding this merge request: '{}'.", event.user.username, context));
