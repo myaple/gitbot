@@ -564,7 +564,7 @@ pub async fn process_mention(
         // For merge requests, include commit history only if no user context was provided
         if user_provided_context.is_none() {
             format!(
-                "Hey @{}, here's the information you requested:\n\n---\n\n{}\n\n### Commit History\n\n{}",
+                "Hey @{}, here's the information you requested:\n\n---\n\n{}\n\n<details><summary>Additional Commit History</summary>\n\n{}</details>",
                 event.user.username, llm_reply, commit_history
             )
         } else {
