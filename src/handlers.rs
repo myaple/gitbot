@@ -1,5 +1,5 @@
 use crate::config::AppSettings;
-use crate::gitlab::GitlabApiClient;
+use crate::gitlab::{GitlabApiClient, GitlabError};
 use crate::models::{GitlabNoteEvent, OpenAIChatMessage, OpenAIChatRequest};
 use crate::openai::OpenAIApiClient;
 use crate::repo_context::RepoContextExtractor;
@@ -375,6 +375,50 @@ pub async fn process_mention(
                     anyhow!("Failed to fetch MR details from GitLab: {}", e)
                 })?;
 
+            let mut contributing_md_content: Option<String> = None;
+            match gitlab_client
+                .get_file_content(project_id, "CONTRIBUTING.md")
+                .await
+            {
+                Ok(file_response) => {
+                    if let Some(content) = file_response.content {
+                        if !content.is_empty() {
+                            info!(
+                                "Successfully fetched and decoded CONTRIBUTING.md for project ID {}",
+                                project_id
+                            );
+                            contributing_md_content = Some(content);
+                        } else {
+                            info!(
+                                "CONTRIBUTING.md is empty for project ID {}. Proceeding without it.",
+                                project_id
+                            );
+                        }
+                    } else {
+                        // This case might occur if the API returns a success status but no content field,
+                        // or if get_file_content is changed to return Ok(GitlabFile { content: None }) on 404.
+                        info!(
+                            "CONTRIBUTING.md has no content or content was null for project ID {}. Proceeding without it.",
+                            project_id
+                        );
+                    }
+                }
+                Err(e) => match e {
+                    GitlabError::Api { status, .. } if status == reqwest::StatusCode::NOT_FOUND => {
+                        info!(
+                            "CONTRIBUTING.md not found (404) for project ID {}. Proceeding without it.",
+                            project_id
+                        );
+                    }
+                    _ => {
+                        warn!(
+                            "Failed to fetch CONTRIBUTING.md for project ID {}: {:?}. Proceeding without it.",
+                            project_id, e
+                        );
+                    }
+                },
+            }
+
             if let Some(context) = &user_provided_context {
                 prompt_parts.push(format!("The user @{} provided the following request regarding this merge request: '{}'.", event.user.username, context));
 
@@ -440,7 +484,22 @@ pub async fn process_mention(
                 }
 
                 // Add instructions for review
-                prompt_parts.push("Please provide a summary of the merge request, review the code changes, and provide feedback on the implementation.".to_string());
+                if let Some(contributing_content) = &contributing_md_content {
+                    prompt_parts.push(format!(
+                        "The following are the guidelines from CONTRIBUTING.md:\n{}\n\nPlease review how well this MR adheres to these guidelines.",
+                        contributing_content
+                    ));
+                    prompt_parts.push(
+                        "Provide specific examples of good adherence and areas for improvement. \
+                        Offer constructive criticism and praise regarding its adherence. \
+                        Finally, provide an overall summary of the merge request and feedback on the implementation.".to_string()
+                    );
+                } else {
+                    // Fallback if CONTRIBUTING.md is not available
+                    prompt_parts.push(
+                        "Please provide a summary of the merge request, review the code changes, and provide feedback on the implementation.".to_string()
+                    );
+                }
             }
         }
         other_type => {
