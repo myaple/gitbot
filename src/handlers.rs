@@ -217,6 +217,22 @@ pub async fn process_mention(
     }
     // --- END: Check if already replied ---
 
+    // Read CONTRIBUTING.md
+    let contributing_md_content: Option<String> = match std::fs::read_to_string("CONTRIBUTING.md") {
+        Ok(content) if !content.is_empty() => Some(content),
+        Ok(_) => {
+            info!("CONTRIBUTING.md is empty, will not use for prompt.");
+            None
+        }
+        Err(e) => {
+            warn!(
+                "Failed to read CONTRIBUTING.md: {}. It will not be used in the prompt.",
+                e
+            );
+            None
+        }
+    };
+
     // Prompt Assembly Logic
     match note_attributes.noteable_type.as_str() {
         "Issue" => {
@@ -440,7 +456,22 @@ pub async fn process_mention(
                 }
 
                 // Add instructions for review
-                prompt_parts.push("Please provide a summary of the merge request, review the code changes, and provide feedback on the implementation.".to_string());
+                if let Some(contributing_content) = &contributing_md_content {
+                    prompt_parts.push(format!(
+                        "The following are the guidelines from CONTRIBUTING.md:\n{}\n\nPlease review how well this MR adheres to these guidelines.",
+                        contributing_content
+                    ));
+                    prompt_parts.push(
+                        "Provide specific examples of good adherence and areas for improvement. \
+                        Offer constructive criticism and praise regarding its adherence. \
+                        Finally, provide an overall summary of the merge request and feedback on the implementation.".to_string()
+                    );
+                } else {
+                    // Fallback if CONTRIBUTING.md is not available
+                    prompt_parts.push(
+                        "Please provide a summary of the merge request, review the code changes, and provide feedback on the implementation.".to_string()
+                    );
+                }
             }
         }
         other_type => {
