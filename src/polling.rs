@@ -7,6 +7,7 @@ use crate::models::{
 };
 use anyhow::Result;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
@@ -18,6 +19,7 @@ pub struct PollingService {
     gitlab_client: Arc<GitlabApiClient>,
     config: Arc<AppSettings>,
     last_checked: Arc<Mutex<u64>>,
+    processed_mentions_cache: Arc<Mutex<HashSet<i64>>>,
 }
 
 impl PollingService {
@@ -34,6 +36,7 @@ impl PollingService {
             gitlab_client,
             config,
             last_checked: Arc::new(Mutex::new(initial_time)),
+            processed_mentions_cache: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -224,9 +227,13 @@ impl PollingService {
                     let event = self.create_issue_note_event(project.clone(), note, issue.clone());
 
                     // Process the mention
-                    if let Err(e) =
-                        process_mention(event, self.gitlab_client.clone(), self.config.clone())
-                            .await
+                    if let Err(e) = process_mention(
+                        event,
+                        self.gitlab_client.clone(),
+                        self.config.clone(),
+                        self.processed_mentions_cache.clone(),
+                    )
+                    .await
                     {
                         error!("Error processing mention: {}", e);
                     }
@@ -275,9 +282,13 @@ impl PollingService {
                     let event = self.create_mr_note_event(project.clone(), note, mr.clone());
 
                     // Process the mention
-                    if let Err(e) =
-                        process_mention(event, self.gitlab_client.clone(), self.config.clone())
-                            .await
+                    if let Err(e) = process_mention(
+                        event,
+                        self.gitlab_client.clone(),
+                        self.config.clone(),
+                        self.processed_mentions_cache.clone(),
+                    )
+                    .await
                     {
                         error!("Error processing mention: {}", e);
                     }
