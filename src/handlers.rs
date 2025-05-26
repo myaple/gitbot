@@ -1,13 +1,13 @@
 use crate::config::AppSettings;
 use crate::gitlab::{GitlabApiClient, GitlabError};
+use crate::mention_cache::MentionCache; // Added
 use crate::models::{GitlabNoteEvent, OpenAIChatMessage, OpenAIChatRequest};
 use crate::openai::OpenAIApiClient;
 use crate::repo_context::RepoContextExtractor;
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
-use std::collections::HashSet;
 use std::sync::Arc;
-use tokio::sync::Mutex; // Added for Mutex in function signature
+// Removed std::collections::HashSet and tokio::sync::Mutex
 use tracing::{debug, error, info, trace, warn};
 
 // Helper function to extract context after bot mention
@@ -28,7 +28,7 @@ pub async fn process_mention(
     event: GitlabNoteEvent,
     gitlab_client: Arc<GitlabApiClient>,
     config: Arc<AppSettings>,
-    processed_mentions_cache: Arc<Mutex<HashSet<i64>>>,
+    processed_mentions_cache: &MentionCache, // Changed type
 ) -> Result<()> {
     // Log Event Details
     info!(
@@ -47,14 +47,10 @@ pub async fn process_mention(
 
     // Cache Check
     let mention_id = event.object_attributes.id;
-    {
-        let cache = processed_mentions_cache.lock().await;
-        if cache.contains(&mention_id) {
-            info!("Mention ID {} found in cache, skipping.", mention_id);
-            return Ok(());
-        }
-        // Note: Adding to cache will be done after successful processing or a definitive non-retryable outcome.
-        // For now, we only check. If we add here, a temporary failure might prevent future processing.
+    if processed_mentions_cache.check(mention_id).await {
+        // Updated logic
+        info!("Mention ID {} found in cache, skipping.", mention_id);
+        return Ok(());
     }
 
     // Initialize variables at the top level
@@ -207,14 +203,11 @@ pub async fn process_mention(
                                current_mention_note_id
                             );
                             // Add to cache because we've confirmed a prior reply exists
-                            {
-                                let mut cache = processed_mentions_cache.lock().await;
-                                cache.insert(current_mention_note_id);
-                                info!(
-                                    "Mention ID {} (already replied by note ID {}) added to cache.",
-                                    current_mention_note_id, note.id
-                                );
-                            }
+                            processed_mentions_cache.add(current_mention_note_id).await; // Updated logic
+                            info!(
+                                "Mention ID {} (already replied by note ID {}) added to cache.",
+                                current_mention_note_id, note.id
+                            );
                             return Ok(()); // Already replied
                         }
                     }
@@ -656,11 +649,8 @@ pub async fn process_mention(
     }
 
     // Add to cache after successful processing
-    {
-        let mut cache = processed_mentions_cache.lock().await;
-        cache.insert(mention_id);
-        info!("Mention ID {} added to cache.", mention_id);
-    }
+    processed_mentions_cache.add(mention_id).await; // Updated logic
+    info!("Mention ID {} added to cache.", mention_id);
 
     Ok(())
 }
@@ -668,6 +658,7 @@ pub async fn process_mention(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mention_cache::MentionCache; // Added for tests
     use crate::models::{
         GitlabIssue, GitlabNoteAttributes, GitlabNoteEvent, GitlabNoteObject, GitlabProject,
         GitlabUser,
@@ -683,7 +674,7 @@ mod tests {
     const TEST_BOT_USERNAME: &str = "test_bot";
     const TEST_USER_USERNAME: &str = "test_user";
     const TEST_GENERIC_USER_ID: i64 = 2; // For generic users like issue authors
-    const TEST_BOT_USER_ID: i64 = 99;    // For the bot user
+    const TEST_BOT_USER_ID: i64 = 99; // For the bot user
 
     // Helper to create a basic AppSettings for tests
     fn test_app_settings(base_url: String) -> Arc<AppSettings> {
@@ -715,7 +706,11 @@ mod tests {
         updated_at: Option<String>,
     ) -> GitlabNoteEvent {
         let user = GitlabUser {
-            id: if username == TEST_BOT_USERNAME { TEST_BOT_USER_ID } else { TEST_GENERIC_USER_ID },
+            id: if username == TEST_BOT_USERNAME {
+                TEST_BOT_USER_ID
+            } else {
+                TEST_GENERIC_USER_ID
+            },
             username: username.to_string(),
             name: format!("{} User", username),
             avatar_url: None,
@@ -847,14 +842,14 @@ mod tests {
         let server = mockito::Server::new_async().await; // No mocks set on server in this test directly
         let config = test_app_settings(server.url());
         let gitlab_client = Arc::new(GitlabApiClient::new(&config).unwrap());
-        let cache = Arc::new(Mutex::new(HashSet::new()));
+        let cache = MentionCache::new(); // Use new MentionCache
 
         // Create a test event where the bot mentions itself
         let event =
             create_test_note_event_with_id(TEST_BOT_USERNAME, "Issue", TEST_MENTION_ID, None, None);
 
         // Process the mention
-        let result = process_mention(event, gitlab_client, config, cache).await;
+        let result = process_mention(event, gitlab_client, config, &cache).await; // Pass as reference
 
         // Should return Ok since we're ignoring self-mentions
         assert!(result.is_ok());
@@ -865,7 +860,7 @@ mod tests {
         let server = mockito::Server::new_async().await; // No mocks set on server in this test directly
         let config = test_app_settings(server.url());
         let gitlab_client = Arc::new(GitlabApiClient::new(&config).unwrap());
-        let cache = Arc::new(Mutex::new(HashSet::new()));
+        let cache = MentionCache::new(); // Use new MentionCache
 
         // Create a test event with no bot mention
         let event = create_test_note_event_with_id(
@@ -877,7 +872,7 @@ mod tests {
         );
 
         // Process the mention
-        let result = process_mention(event, gitlab_client, config, cache).await;
+        let result = process_mention(event, gitlab_client, config, &cache).await; // Pass as reference
 
         // Should return Ok since we're ignoring comments without mentions
         assert!(result.is_ok());
@@ -889,7 +884,7 @@ mod tests {
         let mut server = mockito::Server::new_async().await;
         let config = test_app_settings(server.url());
         let gitlab_client = Arc::new(GitlabApiClient::new(&config).unwrap());
-        let cache = Arc::new(Mutex::new(HashSet::new()));
+        let cache = MentionCache::new(); // Use new MentionCache
 
         let event_time = Utc::now();
         let event = create_test_note_event_with_id(
@@ -923,7 +918,8 @@ mod tests {
             title: "Test Issue".to_string(),
             description: Some("Issue description here.".to_string()),
             state: "opened".to_string(),
-            author: GitlabUser { // Author of the issue itself
+            author: GitlabUser {
+                // Author of the issue itself
                 id: TEST_GENERIC_USER_ID + 1, // Different from the commenting user or bot
                 username: "issue_author".to_string(),
                 name: "Issue Author".to_string(),
@@ -1051,11 +1047,10 @@ mod tests {
             .create_async()
             .await;
 
-        let result =
-            process_mention(event, gitlab_client.clone(), config.clone(), cache.clone()).await;
+        let result = process_mention(event, gitlab_client.clone(), config.clone(), &cache).await; // Pass as reference
 
         assert!(result.is_ok(), "Processing failed: {:?}", result.err());
-        assert!(cache.lock().await.contains(&TEST_MENTION_ID));
+        assert!(cache.check(TEST_MENTION_ID).await); // Use new check method
     }
 
     // Test Cache Hit
@@ -1064,8 +1059,8 @@ mod tests {
         let mut server = mockito::Server::new_async().await;
         let config = test_app_settings(server.url());
         let gitlab_client = Arc::new(GitlabApiClient::new(&config).unwrap());
-        let cache = Arc::new(Mutex::new(HashSet::new()));
-        cache.lock().await.insert(TEST_MENTION_ID); // Pre-populate cache
+        let cache = MentionCache::new(); // Use new MentionCache
+        cache.add(TEST_MENTION_ID).await; // Pre-populate cache
 
         let event = create_test_note_event_with_id(
             TEST_USER_USERNAME,
@@ -1091,7 +1086,7 @@ mod tests {
             .create_async()
             .await;
 
-        let result = process_mention(event, gitlab_client, config, cache.clone()).await;
+        let result = process_mention(event, gitlab_client, config, &cache).await; // Pass as reference
 
         assert!(result.is_ok());
         m_get_notes_uncalled.expect(0).assert_async().await; // Explicitly assert not called
@@ -1104,7 +1099,7 @@ mod tests {
         let mut server = mockito::Server::new_async().await;
         let config = test_app_settings(server.url());
         let gitlab_client = Arc::new(GitlabApiClient::new(&config).unwrap());
-        let cache = Arc::new(Mutex::new(HashSet::new())); // Empty cache initially
+        let cache = MentionCache::new(); // Empty cache initially
 
         let mention_time = Utc::now();
         let bot_reply_time = mention_time + ChronoDuration::seconds(10);
@@ -1160,10 +1155,10 @@ mod tests {
             .create_async()
             .await;
 
-        let result = process_mention(event, gitlab_client, config, cache.clone()).await;
+        let result = process_mention(event, gitlab_client, config, &cache).await; // Pass as reference
 
         assert!(result.is_ok());
-        assert!(cache.lock().await.contains(&TEST_MENTION_ID)); // Original mention ID added to cache
+        assert!(cache.check(TEST_MENTION_ID).await); // Original mention ID added to cache
         m_openai_uncalled.expect(0).assert_async().await;
         m_post_comment_uncalled.expect(0).assert_async().await;
     }
@@ -1174,7 +1169,7 @@ mod tests {
         let mut server = mockito::Server::new_async().await;
         let config = test_app_settings(server.url());
         let gitlab_client = Arc::new(GitlabApiClient::new(&config).unwrap());
-        let cache = Arc::new(Mutex::new(HashSet::new())); // Empty cache
+        let cache = MentionCache::new(); // Empty cache
 
         let event = create_test_note_event_with_id(
             TEST_USER_USERNAME,
@@ -1213,9 +1208,9 @@ mod tests {
             .create_async()
             .await;
 
-        let result = process_mention(event, gitlab_client, config, cache.clone()).await;
+        let result = process_mention(event, gitlab_client, config, &cache).await; // Pass as reference
 
         assert!(result.is_err());
-        assert!(!cache.lock().await.contains(&TEST_MENTION_ID)); // Cache should NOT contain the ID
+        assert!(!cache.check(TEST_MENTION_ID).await); // Cache should NOT contain the ID
     }
 }

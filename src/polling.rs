@@ -1,13 +1,13 @@
 use crate::config::AppSettings;
 use crate::gitlab::GitlabApiClient;
 use crate::handlers::process_mention;
+use crate::mention_cache::MentionCache;
 use crate::models::{
     GitlabIssue, GitlabMergeRequest, GitlabNoteAttributes, GitlabNoteEvent, GitlabNoteObject,
     GitlabProject, GitlabUser,
 };
 use anyhow::Result;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
-use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
@@ -19,7 +19,7 @@ pub struct PollingService {
     gitlab_client: Arc<GitlabApiClient>,
     config: Arc<AppSettings>,
     last_checked: Arc<Mutex<u64>>,
-    processed_mentions_cache: Arc<Mutex<HashSet<i64>>>,
+    processed_mentions_cache: MentionCache,
 }
 
 impl PollingService {
@@ -36,7 +36,7 @@ impl PollingService {
             gitlab_client,
             config,
             last_checked: Arc::new(Mutex::new(initial_time)),
-            processed_mentions_cache: Arc::new(Mutex::new(HashSet::new())),
+            processed_mentions_cache: MentionCache::new(),
         }
     }
 
@@ -231,7 +231,7 @@ impl PollingService {
                         event,
                         self.gitlab_client.clone(),
                         self.config.clone(),
-                        self.processed_mentions_cache.clone(),
+                        &self.processed_mentions_cache,
                     )
                     .await
                     {
@@ -286,7 +286,7 @@ impl PollingService {
                         event,
                         self.gitlab_client.clone(),
                         self.config.clone(),
-                        self.processed_mentions_cache.clone(),
+                        &self.processed_mentions_cache,
                     )
                     .await
                     {
