@@ -698,11 +698,17 @@ mod tests {
             log_level: "debug".to_string(),
             bot_username: TEST_BOT_USERNAME.to_string(),
             poll_interval_seconds: 60,
+            default_branch: "main".to_string(),
             stale_issue_days: 30,
             max_age_hours: 24,
             context_repo_path: None,
             max_context_size: 60000,
         })
+    }
+
+    // Simple wrapper around create_test_note_event_with_id with defaults
+    fn create_test_note_event(username: &str, noteable_type: &str) -> GitlabNoteEvent {
+        create_test_note_event_with_id(username, noteable_type, 123, None, None)
     }
 
     // Updated helper to create a test note event, allowing mention ID override
@@ -895,6 +901,9 @@ mod tests {
         };
         let gitlab_client = Arc::new(GitlabApiClient::new(Arc::new(settings.clone())).unwrap());
 
+        // Create a cache for the test
+        let cache = MentionCache::new();
+
         // Process the mention
         let result = process_mention(event, gitlab_client, config, &cache).await; // Pass as reference
 
@@ -927,6 +936,9 @@ mod tests {
             max_context_size: 60000,
             default_branch: "main".to_string(),
         });
+
+        // Create a cache for the test
+        let cache = MentionCache::new();
 
         // Create a mock GitLab client
         let server = mockito::Server::new_async().await;
@@ -963,7 +975,7 @@ mod tests {
     async fn test_cache_miss_and_successful_processing() {
         let mut server = mockito::Server::new_async().await;
         let config = test_app_settings(server.url());
-        let gitlab_client = Arc::new(GitlabApiClient::new(&config).unwrap());
+        let gitlab_client = Arc::new(GitlabApiClient::new(config.clone()).unwrap());
         let cache = MentionCache::new(); // Use new MentionCache
 
         let event_time = Utc::now();
@@ -1138,7 +1150,7 @@ mod tests {
     async fn test_cache_hit() {
         let mut server = mockito::Server::new_async().await;
         let config = test_app_settings(server.url());
-        let gitlab_client = Arc::new(GitlabApiClient::new(&config).unwrap());
+        let gitlab_client = Arc::new(GitlabApiClient::new(config.clone()).unwrap());
         let cache = MentionCache::new(); // Use new MentionCache
         cache.add(TEST_MENTION_ID).await; // Pre-populate cache
 
@@ -1178,7 +1190,7 @@ mod tests {
     async fn test_cache_update_on_deduplication_trigger() {
         let mut server = mockito::Server::new_async().await;
         let config = test_app_settings(server.url());
-        let gitlab_client = Arc::new(GitlabApiClient::new(&config).unwrap());
+        let gitlab_client = Arc::new(GitlabApiClient::new(config.clone()).unwrap());
         let cache = MentionCache::new(); // Empty cache initially
 
         let mention_time = Utc::now();
@@ -1248,7 +1260,7 @@ mod tests {
     async fn test_no_cache_update_on_processing_failure() {
         let mut server = mockito::Server::new_async().await;
         let config = test_app_settings(server.url());
-        let gitlab_client = Arc::new(GitlabApiClient::new(&config).unwrap());
+        let gitlab_client = Arc::new(GitlabApiClient::new(config.clone()).unwrap());
         let cache = MentionCache::new(); // Empty cache
 
         let event = create_test_note_event_with_id(
