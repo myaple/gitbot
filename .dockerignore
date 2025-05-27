@@ -1,0 +1,22 @@
+.git
+.gitignore
+.github
+.env*
+
+# Build artifacts
+target/
+
+# IDEs / Editors
+.idea/
+.vscode/
+*.iml
+*.project
+*.sublime-*
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Logs and temporary files
+*.log
+*.tmp 
