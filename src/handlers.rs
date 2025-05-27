@@ -72,7 +72,9 @@ async fn has_bot_already_replied(
                         event
                     );
                     // Return an error that will be propagated up by process_mention
-                    return Err(anyhow!("Missing issue details in note event for reply check"));
+                    return Err(anyhow!(
+                        "Missing issue details in note event for reply check"
+                    ));
                 }
             };
             info!(
@@ -92,7 +94,9 @@ async fn has_bot_already_replied(
                 None => {
                     error!("Missing merge request details (iid) in note event for a MergeRequest. Event: {:?}", event);
                     // Return an error that will be propagated up by process_mention
-                    return Err(anyhow!("Missing merge request details in note event for reply check"));
+                    return Err(anyhow!(
+                        "Missing merge request details in note event for reply check"
+                    ));
                 }
             };
             info!(
@@ -318,7 +322,14 @@ pub async fn process_mention(
     );
 
     // Post the comment
-    post_reply_to_gitlab(&event, &gitlab_client, project_id, is_issue, &final_comment_body).await?;
+    post_reply_to_gitlab(
+        &event,
+        &gitlab_client,
+        project_id,
+        is_issue,
+        &final_comment_body,
+    )
+    .await?;
 
     // Add to cache after successful processing
     processed_mentions_cache.add(mention_id).await; // Updated logic
@@ -541,11 +552,7 @@ async fn handle_issue_mention(
         let repo_context_extractor =
             RepoContextExtractor::new(gitlab_client.clone(), config.clone());
         match repo_context_extractor
-            .extract_context_for_issue(
-                &issue,
-                &event.project,
-                config.context_repo_path.as_deref(),
-            )
+            .extract_context_for_issue(&issue, &event.project, config.context_repo_path.as_deref())
             .await
         {
             Ok(context_str) => {
@@ -578,11 +585,7 @@ async fn handle_issue_mention(
         let repo_context_extractor =
             RepoContextExtractor::new(gitlab_client.clone(), config.clone());
         match repo_context_extractor
-            .extract_context_for_issue(
-                &issue,
-                &event.project,
-                config.context_repo_path.as_deref(),
-            )
+            .extract_context_for_issue(&issue, &event.project, config.context_repo_path.as_deref())
             .await
         {
             Ok(context_str) => {
@@ -595,9 +598,8 @@ async fn handle_issue_mention(
 
         // Add instructions for steps
         prompt_parts.push(
-            String::from(
-                "Please provide a summary of the issue and suggest specific steps to",
-            ) + "address it based on the repository context. Again, be specific about"
+            String::from("Please provide a summary of the issue and suggest specific steps to")
+                + "address it based on the repository context. Again, be specific about"
                 + "which files, functions, or modules need to be modified.",
         );
     }
@@ -616,7 +618,10 @@ async fn handle_merge_request_mention(
     let mr_iid = match event.merge_request.as_ref().map(|mr| mr.iid) {
         Some(iid) => iid,
         None => {
-            error!("Missing merge request details (iid) in note event for a MergeRequest. Event: {:?}", event);
+            error!(
+                "Missing merge request details (iid) in note event for a MergeRequest. Event: {:?}",
+                event
+            );
             return Err(anyhow!("Missing merge request details in note event"));
         }
     };
@@ -678,7 +683,10 @@ async fn handle_merge_request_mention(
     }
 
     if let Some(context) = user_provided_context {
-        prompt_parts.push(format!("The user @{} provided the following request regarding this merge request: '{}'.", event.user.username, context));
+        prompt_parts.push(format!(
+            "The user @{} provided the following request regarding this merge request: '{}'.",
+            event.user.username, context
+        ));
 
         prompt_parts.push(format!("Title: {}", mr.title));
         prompt_parts.push(format!(
@@ -696,11 +704,7 @@ async fn handle_merge_request_mention(
         let repo_context_extractor =
             RepoContextExtractor::new(gitlab_client.clone(), config.clone());
         match repo_context_extractor
-            .extract_context_for_mr(
-                &mr,
-                &event.project,
-                config.context_repo_path.as_deref(),
-            )
+            .extract_context_for_mr(&mr, &event.project, config.context_repo_path.as_deref())
             .await
         {
             Ok((context_for_llm, context_for_comment)) => {
@@ -715,7 +719,10 @@ async fn handle_merge_request_mention(
         prompt_parts.push(format!("User's specific request: {}", context));
     } else {
         // No specific context, summarize with code diffs
-        prompt_parts.push(format!("Please review this merge request for user @{} and provide a summary of the changes.", event.user.username));
+        prompt_parts.push(format!(
+            "Please review this merge request for user @{} and provide a summary of the changes.",
+            event.user.username
+        ));
         prompt_parts.push(format!("Merge Request Title: {}", mr.title));
         prompt_parts.push(format!(
             "Merge Request Description: {}",
@@ -733,11 +740,7 @@ async fn handle_merge_request_mention(
         let repo_context_extractor =
             RepoContextExtractor::new(gitlab_client.clone(), config.clone());
         match repo_context_extractor
-            .extract_context_for_mr(
-                &mr,
-                &event.project,
-                config.context_repo_path.as_deref(),
-            )
+            .extract_context_for_mr(&mr, &event.project, config.context_repo_path.as_deref())
             .await
         {
             Ok((context_for_llm, context_for_comment)) => {
