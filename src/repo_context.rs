@@ -42,7 +42,7 @@ impl RepoContextExtractor {
     async fn get_all_source_files(&self, project_id: i64) -> Result<Vec<String>> {
         let files = self.gitlab_client.get_repository_tree(project_id).await?;
 
-        // Filter for source code files and limit to MAX_SOURCE_FILES
+        // Filter for source code files
         let source_files: Vec<String> = files
             .into_iter()
             .filter(|path| {
@@ -70,10 +70,42 @@ impl RepoContextExtractor {
                         | "vue"
                 )
             })
-            .take(MAX_SOURCE_FILES)
             .collect();
 
         Ok(source_files)
+    }
+
+    async fn get_combined_source_files(
+        &self,
+        project: &GitlabProject,
+        context_repo_path: Option<&str>,
+    ) -> Result<Vec<String>> {
+        // Get source files from the main project
+        let mut all_files = self.get_all_source_files(project.id).await?;
+
+        // If context repo is specified, get its files too
+        if let Some(context_path) = context_repo_path {
+            match self.gitlab_client.get_project_by_path(context_path).await {
+                Ok(context_project) => match self.get_all_source_files(context_project.id).await {
+                    Ok(context_files) => {
+                        all_files.extend(context_files);
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Failed to get source files from context repo {}: {}",
+                            context_path, e
+                        );
+                    }
+                },
+                Err(e) => {
+                    warn!("Failed to get context repo {}: {}", context_path, e);
+                }
+            }
+        }
+
+        // Limit the total combined files
+        all_files.truncate(MAX_SOURCE_FILES);
+        Ok(all_files)
     }
 
     /// Extract relevant context from a repository for an issue
@@ -102,9 +134,10 @@ impl RepoContextExtractor {
         let mut context = String::new();
         let mut total_size = 0;
 
-        // First add the list of all source files
-        let project = self.gitlab_client.get_project_by_path(repo_path).await?;
-        let source_files = self.get_all_source_files(project.id).await?;
+        // First add the list of all source files from both projects
+        let source_files = self
+            .get_combined_source_files(project, context_repo_path)
+            .await?;
         if !source_files.is_empty() {
             let files_list = format!(
                 "\n--- All Source Files (up to {} files) ---\n{}\n",
@@ -144,6 +177,7 @@ impl RepoContextExtractor {
         &self,
         mr: &GitlabMergeRequest,
         project: &GitlabProject,
+        context_repo_path: Option<&str>,
     ) -> Result<(String, String)> {
         info!(
             "Extracting diff context for MR !{} in {}",
@@ -155,7 +189,9 @@ impl RepoContextExtractor {
         let mut total_size = 0;
 
         // First add the list of all source files
-        let source_files = self.get_all_source_files(project.id).await?;
+        let source_files = self
+            .get_combined_source_files(project, context_repo_path)
+            .await?;
         if !source_files.is_empty() {
             let files_list = format!(
                 "\n--- All Source Files (up to {} files) ---\n{}\n",

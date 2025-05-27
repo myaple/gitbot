@@ -438,7 +438,11 @@ pub async fn process_mention(
                 let repo_context_extractor =
                     RepoContextExtractor::new(gitlab_client.clone(), config.clone());
                 match repo_context_extractor
-                    .extract_context_for_mr(&mr, &event.project)
+                    .extract_context_for_mr(
+                        &mr,
+                        &event.project,
+                        config.context_repo_path.as_deref(),
+                    )
                     .await
                 {
                     Ok((context_for_llm, context_for_comment)) => {
@@ -471,7 +475,11 @@ pub async fn process_mention(
                 let repo_context_extractor =
                     RepoContextExtractor::new(gitlab_client.clone(), config.clone());
                 match repo_context_extractor
-                    .extract_context_for_mr(&mr, &event.project)
+                    .extract_context_for_mr(
+                        &mr,
+                        &event.project,
+                        config.context_repo_path.as_deref(),
+                    )
                     .await
                 {
                     Ok((context_for_llm, context_for_comment)) => {
