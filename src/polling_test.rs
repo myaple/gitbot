@@ -21,6 +21,7 @@ async fn test_max_age_hours_calculation() {
         max_age_hours: 12,
         context_repo_path: None,
         max_context_size: 60000,
+        default_branch: "main".to_string(),
     };
 
     // Get current time and calculate a timestamp from 24 hours ago

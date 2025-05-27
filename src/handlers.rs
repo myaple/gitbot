@@ -698,11 +698,17 @@ mod tests {
             log_level: "debug".to_string(),
             bot_username: TEST_BOT_USERNAME.to_string(),
             poll_interval_seconds: 60,
+            default_branch: "main".to_string(),
             stale_issue_days: 30,
             max_age_hours: 24,
             context_repo_path: None,
             max_context_size: 60000,
         })
+    }
+
+    // Simple wrapper around create_test_note_event_with_id with defaults
+    fn create_test_note_event(username: &str, noteable_type: &str) -> GitlabNoteEvent {
+        create_test_note_event_with_id(username, noteable_type, 123, None, None)
     }
 
     // Updated helper to create a test note event, allowing mention ID override
@@ -846,38 +852,116 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_process_mention_self_mention() {
-        let server = mockito::Server::new_async().await; // No mocks set on server in this test directly
-        let config = test_app_settings(server.url());
-        let gitlab_client = Arc::new(GitlabApiClient::new(&config).unwrap());
-        let cache = MentionCache::new(); // Use new MentionCache
+    async fn test_process_mention_no_bot_mention() {
+        // Create a test event where the bot is not mentioned
+        let mut event = create_test_note_event("user", "Issue");
+        // Override the note content to remove bot mention
+        event.object_attributes.note = "This is a comment without any bot mention".to_string();
 
-        // Create a test event where the bot mentions itself
-        let event =
-            create_test_note_event_with_id(TEST_BOT_USERNAME, "Issue", TEST_MENTION_ID, None, None);
+        // Create test config
+        let config = Arc::new(AppSettings {
+            gitlab_url: "https://gitlab.example.com".to_string(),
+            gitlab_token: "test_token".to_string(),
+            openai_api_key: "test_key".to_string(),
+            openai_custom_url: "https://api.openai.com/v1".to_string(),
+            openai_model: "gpt-3.5-turbo".to_string(),
+            openai_temperature: 0.7,
+            openai_max_tokens: 1024,
+            repos_to_poll: vec!["test/repo".to_string()],
+            log_level: "debug".to_string(),
+            bot_username: "gitbot".to_string(),
+            poll_interval_seconds: 60,
+            stale_issue_days: 30,
+            max_age_hours: 24,
+            context_repo_path: None,
+            max_context_size: 60000,
+            default_branch: "main".to_string(),
+        });
+
+        // Create a mock GitLab client
+        let server = mockito::Server::new_async().await;
+        let base_url = server.url();
+        let settings = AppSettings {
+            gitlab_url: base_url,
+            gitlab_token: "test_token".to_string(),
+            openai_api_key: "test_key".to_string(),
+            openai_model: "gpt-3.5-turbo".to_string(),
+            openai_temperature: 0.7,
+            openai_max_tokens: 1024,
+            openai_custom_url: "https://api.openai.com/v1".to_string(),
+            repos_to_poll: vec!["test/repo".to_string()],
+            log_level: "debug".to_string(),
+            bot_username: "gitbot".to_string(),
+            poll_interval_seconds: 60,
+            max_age_hours: 24,
+            stale_issue_days: 30, // Added default for tests
+            context_repo_path: None,
+            max_context_size: 60000,
+            default_branch: "main".to_string(),
+        };
+        let gitlab_client = Arc::new(GitlabApiClient::new(Arc::new(settings.clone())).unwrap());
+
+        // Create a cache for the test
+        let cache = MentionCache::new();
 
         // Process the mention
         let result = process_mention(event, gitlab_client, config, &cache).await; // Pass as reference
 
-        // Should return Ok since we're ignoring self-mentions
+        // Should return Ok since we're ignoring comments without mentions
         assert!(result.is_ok());
     }
 
     #[tokio::test]
-    async fn test_process_mention_no_bot_mention() {
-        let server = mockito::Server::new_async().await; // No mocks set on server in this test directly
-        let config = test_app_settings(server.url());
-        let gitlab_client = Arc::new(GitlabApiClient::new(&config).unwrap());
-        let cache = MentionCache::new(); // Use new MentionCache
-
+    async fn test_process_mention_with_no_bot_mention() {
         // Create a test event with no bot mention
-        let event = create_test_note_event_with_id(
-            TEST_USER_USERNAME,
-            "Issue",
-            TEST_MENTION_ID,
-            Some("This is a comment with no bot mention".to_string()),
-            None,
-        );
+        let mut event = create_test_note_event("user1", "Issue");
+        event.object_attributes.note = "This is a comment with no bot mention".to_string();
+
+        // Create test config
+        let config = Arc::new(AppSettings {
+            gitlab_url: "https://gitlab.example.com".to_string(),
+            gitlab_token: "test_token".to_string(),
+            openai_api_key: "test_key".to_string(),
+            openai_custom_url: "https://api.openai.com/v1".to_string(),
+            openai_model: "gpt-3.5-turbo".to_string(),
+            openai_temperature: 0.7,
+            openai_max_tokens: 1024,
+            repos_to_poll: vec!["org/repo1".to_string()],
+            log_level: "debug".to_string(),
+            bot_username: "gitbot".to_string(),
+            max_age_hours: 24,
+            poll_interval_seconds: 60,
+            stale_issue_days: 30, // Added default for tests
+            context_repo_path: None,
+            max_context_size: 60000,
+            default_branch: "main".to_string(),
+        });
+
+        // Create a cache for the test
+        let cache = MentionCache::new();
+
+        // Create a mock GitLab client
+        let server = mockito::Server::new_async().await;
+        let base_url = server.url();
+        let settings = AppSettings {
+            gitlab_url: base_url,
+            gitlab_token: "test_token".to_string(),
+            openai_api_key: "test_key".to_string(),
+            openai_model: "gpt-3.5-turbo".to_string(),
+            openai_temperature: 0.7,
+            openai_max_tokens: 1024,
+            openai_custom_url: "https://api.openai.com/v1".to_string(),
+            repos_to_poll: vec!["org/repo1".to_string()],
+            log_level: "debug".to_string(),
+            max_age_hours: 24,
+            bot_username: "gitbot".to_string(),
+            poll_interval_seconds: 60,
+            stale_issue_days: 30, // Added default for tests
+            context_repo_path: None,
+            max_context_size: 60000,
+            default_branch: "main".to_string(),
+        };
+        let gitlab_client = Arc::new(GitlabApiClient::new(Arc::new(settings.clone())).unwrap());
 
         // Process the mention
         let result = process_mention(event, gitlab_client, config, &cache).await; // Pass as reference
@@ -891,7 +975,7 @@ mod tests {
     async fn test_cache_miss_and_successful_processing() {
         let mut server = mockito::Server::new_async().await;
         let config = test_app_settings(server.url());
-        let gitlab_client = Arc::new(GitlabApiClient::new(&config).unwrap());
+        let gitlab_client = Arc::new(GitlabApiClient::new(config.clone()).unwrap());
         let cache = MentionCache::new(); // Use new MentionCache
 
         let event_time = Utc::now();
@@ -1066,7 +1150,7 @@ mod tests {
     async fn test_cache_hit() {
         let mut server = mockito::Server::new_async().await;
         let config = test_app_settings(server.url());
-        let gitlab_client = Arc::new(GitlabApiClient::new(&config).unwrap());
+        let gitlab_client = Arc::new(GitlabApiClient::new(config.clone()).unwrap());
         let cache = MentionCache::new(); // Use new MentionCache
         cache.add(TEST_MENTION_ID).await; // Pre-populate cache
 
@@ -1106,7 +1190,7 @@ mod tests {
     async fn test_cache_update_on_deduplication_trigger() {
         let mut server = mockito::Server::new_async().await;
         let config = test_app_settings(server.url());
-        let gitlab_client = Arc::new(GitlabApiClient::new(&config).unwrap());
+        let gitlab_client = Arc::new(GitlabApiClient::new(config.clone()).unwrap());
         let cache = MentionCache::new(); // Empty cache initially
 
         let mention_time = Utc::now();
@@ -1176,7 +1260,7 @@ mod tests {
     async fn test_no_cache_update_on_processing_failure() {
         let mut server = mockito::Server::new_async().await;
         let config = test_app_settings(server.url());
-        let gitlab_client = Arc::new(GitlabApiClient::new(&config).unwrap());
+        let gitlab_client = Arc::new(GitlabApiClient::new(config.clone()).unwrap());
         let cache = MentionCache::new(); // Empty cache
 
         let event = create_test_note_event_with_id(

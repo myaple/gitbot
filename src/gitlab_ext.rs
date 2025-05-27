@@ -5,6 +5,7 @@
 mod tests {
     use crate::config::AppSettings;
     use crate::gitlab::GitlabApiClient;
+    use std::sync::Arc;
 
     fn create_test_settings(base_url: String) -> AppSettings {
         AppSettings {
@@ -13,6 +14,7 @@ mod tests {
             openai_api_key: "key".to_string(),
             openai_custom_url: "url".to_string(),
             openai_model: "gpt-3.5-turbo".to_string(),
+            default_branch: "test-main".to_string(),
             openai_temperature: 0.7,
             openai_max_tokens: 1024,
             repos_to_poll: vec!["org/repo1".to_string()],
@@ -30,8 +32,8 @@ mod tests {
     async fn test_get_repository_tree() {
         let mut server = mockito::Server::new_async().await;
         let base_url = server.url();
-        let settings = create_test_settings(base_url);
-        let client = GitlabApiClient::new(&settings).unwrap();
+        let settings = Arc::new(create_test_settings(base_url));
+        let client = GitlabApiClient::new(settings).unwrap();
 
         let mock_tree_response = serde_json::json!([
             {
@@ -79,8 +81,8 @@ mod tests {
     async fn test_get_file_content() {
         let mut server = mockito::Server::new_async().await;
         let base_url = server.url();
-        let settings = create_test_settings(base_url);
-        let client = GitlabApiClient::new(&settings).unwrap();
+        let settings = Arc::new(create_test_settings(base_url.clone()));
+        let client = GitlabApiClient::new(settings).unwrap();
 
         let mock_file_response = serde_json::json!({
             "file_name": "main.rs",
@@ -92,7 +94,10 @@ mod tests {
 
         let _m = server
             .mock("GET", "/api/v4/projects/1/repository/files/src%2Fmain.rs")
-            .match_query(mockito::Matcher::UrlEncoded("ref".into(), "main".into()))
+            .match_query(mockito::Matcher::UrlEncoded(
+                "ref".into(),
+                "test-main".into(),
+            ))
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(mock_file_response.to_string())
@@ -110,8 +115,8 @@ mod tests {
     async fn test_get_merge_request_changes() {
         let mut server = mockito::Server::new_async().await;
         let base_url = server.url();
-        let settings = create_test_settings(base_url);
-        let client = GitlabApiClient::new(&settings).unwrap();
+        let settings = Arc::new(create_test_settings(base_url));
+        let client = GitlabApiClient::new(settings).unwrap();
 
         let mock_changes_response = serde_json::json!({
             "changes": [
