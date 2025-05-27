@@ -50,6 +50,41 @@ export APP_REPOS_TO_POLL=group/project1,group/project2
 ./target/debug/gitbot
 ```
 
+## Running with Docker
+
+You can also build and run `gitbot` using Docker.
+
+1.  **Build the Docker image:**
+    ```bash
+    docker build -t gitbot .
+    ```
+
+2.  **Run the Docker container:**
+
+    You'll need to pass your configuration as environment variables to the container. 
+    The container exposes port `8080` by default, though `gitbot` itself doesn't currently run a web server on this port. This can be adjusted or removed from the `Dockerfile` if not needed.
+
+    ```bash
+    docker run -d --name gitbot \
+      -e APP_GITLAB_TOKEN="YOUR_GITLAB_TOKEN" \
+      -e APP_OPENAI_API_KEY="YOUR_OPENAI_KEY" \
+      -e APP_BOT_USERNAME="YOUR_BOT_USERNAME" \
+      -e APP_REPOS_TO_POLL="group/project1,group/project2" \
+      # Add any other necessary environment variables here (e.g., APP_CONTEXT_REPO_PATH, APP_LOG_LEVEL)
+      gitbot
+    ```
+
+    To see the logs from the container:
+    ```bash
+    docker logs gitbot
+    ```
+
+    To stop and remove the container:
+    ```bash
+    docker stop gitbot
+    docker rm gitbot
+    ```
+
 ## Features
 
 Gitbot comments on issues and merge requests when tagged, providing
