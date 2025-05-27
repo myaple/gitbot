@@ -24,6 +24,8 @@ pub struct OpenAIApiClient {
     api_key: String,
 }
 
+pub const OPENAI_CHAT_COMPLETIONS_PATH: &str = "chat/completions";
+
 impl OpenAIApiClient {
     pub fn new(settings: &AppSettings) -> Result<Self, OpenAIClient> {
         let openai_custom_url = Url::parse(&settings.openai_custom_url)?;
@@ -48,7 +50,7 @@ impl OpenAIApiClient {
         let base_for_final_join = Url::parse(&base_url_string).map_err(OpenAIClient::UrlParse)?;
 
         let request_url = base_for_final_join
-            .join("chat/completions")
+            .join(OPENAI_CHAT_COMPLETIONS_PATH)
             .map_err(OpenAIClient::UrlParse)?;
 
         debug!("Sending chat completion request to: {}", request_url);
@@ -93,6 +95,7 @@ mod tests {
     use super::*;
     use crate::config::AppSettings;
     use crate::models::OpenAIChatMessage; // Already imported OpenAIChatRequest via super::*
+    use mockito::Matcher; // Added Matcher import
     use serde_json::json;
 
     fn create_test_settings(base_url: String) -> AppSettings {
@@ -175,7 +178,10 @@ mod tests {
 
         // The mock path should be "/chat/completions" relative to the server's base URL.
         let mock = server
-            .mock("POST", "/chat/completions")
+            .mock(
+                "POST",
+                Matcher::Exact(format!("/{}", OPENAI_CHAT_COMPLETIONS_PATH)),
+            )
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(mock_response_body.to_string())
@@ -238,7 +244,10 @@ mod tests {
 
         // The mock path should be "/v1/chat/completions"
         let mock = server
-            .mock("POST", "/v1/chat/completions") // Note the /v1 prefix
+            .mock(
+                "POST",
+                Matcher::Exact(format!("/v1/{}", OPENAI_CHAT_COMPLETIONS_PATH)),
+            ) // Note the /v1 prefix
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(mock_response_body.to_string())
@@ -301,7 +310,10 @@ mod tests {
         // The mock path should still be "/v1/chat/completions"
         // as the client should correctly handle the existing trailing slash.
         let mock = server
-            .mock("POST", "/v1/chat/completions") // Note the /v1 prefix
+            .mock(
+                "POST",
+                Matcher::Exact(format!("/v1/{}", OPENAI_CHAT_COMPLETIONS_PATH)),
+            ) // Note the /v1 prefix
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(mock_response_body.to_string())
@@ -343,7 +355,10 @@ mod tests {
         let error_body = json!({"error": {"message": "Invalid API key", "type": "auth_error"}});
 
         let mock = server
-            .mock("POST", "/chat/completions") // Mock the appended path
+            .mock(
+                "POST",
+                Matcher::Exact(format!("/{}", OPENAI_CHAT_COMPLETIONS_PATH)),
+            ) // Mock the appended path
             .with_status(401) // Unauthorized
             .with_header("content-type", "application/json")
             .with_body(error_body.to_string())
@@ -396,7 +411,10 @@ mod tests {
         });
 
         let mock = server
-            .mock("POST", "/chat/completions") // Mock the appended path
+            .mock(
+                "POST",
+                Matcher::Exact(format!("/{}", OPENAI_CHAT_COMPLETIONS_PATH)),
+            ) // Mock the appended path
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(mock_response_body.to_string())

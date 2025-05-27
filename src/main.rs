@@ -10,6 +10,7 @@ mod config;
 mod gitlab;
 mod gitlab_ext;
 mod handlers;
+mod mention_cache;
 mod models;
 mod openai;
 mod polling;
