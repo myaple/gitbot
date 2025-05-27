@@ -505,6 +505,7 @@ mod tests {
             max_age_hours: 24,
             context_repo_path: Some("org/context-repo".to_string()),
             max_context_size: 60000,
+            default_branch: "main".to_string(),
         })
     }
 
@@ -560,7 +561,7 @@ mod tests {
     async fn test_issue_becomes_stale() {
         let mut server = mockito::Server::new_async().await;
         let config = test_config(30, TEST_BOT_USERNAME, server.url());
-        let client = Arc::new(GitlabApiClient::new(&config).unwrap());
+        let client = Arc::new(GitlabApiClient::new(config.clone()).unwrap());
 
         let old_update = (Utc::now() - ChronoDuration::days(35)).to_rfc3339();
         let issue1 = create_issue(1, &old_update, vec![], "opened");
@@ -616,7 +617,7 @@ mod tests {
     async fn test_stale_issue_remains_stale() {
         let mut server = mockito::Server::new_async().await;
         let config = test_config(30, TEST_BOT_USERNAME, server.url());
-        let client = Arc::new(GitlabApiClient::new(&config).unwrap());
+        let client = Arc::new(GitlabApiClient::new(config.clone()).unwrap());
 
         let old_update = (Utc::now() - ChronoDuration::days(40)).to_rfc3339();
         let issue1 = create_issue(1, &old_update, vec![STALE_LABEL.to_string()], "opened");
@@ -677,7 +678,7 @@ mod tests {
     async fn test_stale_issue_becomes_active_by_user_note() {
         let mut server = mockito::Server::new_async().await;
         let config = test_config(30, TEST_BOT_USERNAME, server.url());
-        let client = Arc::new(GitlabApiClient::new(&config).unwrap());
+        let client = Arc::new(GitlabApiClient::new(config.clone()).unwrap());
 
         let issue_update_old = (Utc::now() - ChronoDuration::days(50)).to_rfc3339();
         let recent_note_update = (Utc::now() - ChronoDuration::days(5)).to_rfc3339();
@@ -730,7 +731,7 @@ mod tests {
     async fn test_issue_remains_active_not_stale() {
         let mut server = mockito::Server::new_async().await;
         let config = test_config(30, TEST_BOT_USERNAME, server.url());
-        let client = Arc::new(GitlabApiClient::new(&config).unwrap());
+        let client = Arc::new(GitlabApiClient::new(config.clone()).unwrap());
 
         let recent_update = (Utc::now() - ChronoDuration::days(10)).to_rfc3339();
         let issue1 = create_issue(1, &recent_update, vec![], "opened");
@@ -782,7 +783,7 @@ mod tests {
     async fn test_bot_comment_does_not_affect_staleness() {
         let mut server = mockito::Server::new_async().await;
         let config = test_config(30, TEST_BOT_USERNAME, server.url());
-        let client = Arc::new(GitlabApiClient::new(&config).unwrap());
+        let client = Arc::new(GitlabApiClient::new(config.clone()).unwrap());
 
         let issue_update_old = (Utc::now() - ChronoDuration::days(60)).to_rfc3339();
         let bot_note_recent = (Utc::now() - ChronoDuration::days(1)).to_rfc3339();
@@ -841,7 +842,7 @@ mod tests {
     async fn test_issue_with_no_notes_becomes_stale() {
         let mut server = mockito::Server::new_async().await;
         let config = test_config(30, TEST_BOT_USERNAME, server.url());
-        let client = Arc::new(GitlabApiClient::new(&config).unwrap());
+        let client = Arc::new(GitlabApiClient::new(config.clone()).unwrap());
 
         let old_update = (Utc::now() - ChronoDuration::days(35)).to_rfc3339();
         let issue1 = create_issue(1, &old_update, vec![], "opened");
@@ -883,7 +884,7 @@ mod tests {
     async fn test_issue_with_only_old_bot_notes_becomes_stale() {
         let mut server = mockito::Server::new_async().await;
         let config = test_config(30, TEST_BOT_USERNAME, server.url());
-        let client = Arc::new(GitlabApiClient::new(&config).unwrap());
+        let client = Arc::new(GitlabApiClient::new(config.clone()).unwrap());
 
         let issue_update_very_old = (Utc::now() - ChronoDuration::days(100)).to_rfc3339();
         let bot_note_also_old = (Utc::now() - ChronoDuration::days(90)).to_rfc3339();
@@ -928,7 +929,7 @@ mod tests {
     async fn test_get_issues_api_failure() {
         let mut server = mockito::Server::new_async().await;
         let config = test_config(30, TEST_BOT_USERNAME, server.url());
-        let client = Arc::new(GitlabApiClient::new(&config).unwrap());
+        let client = Arc::new(GitlabApiClient::new(config.clone()).unwrap());
 
         let _m_issues_fail = server
             .mock(
@@ -952,7 +953,7 @@ mod tests {
     async fn test_get_issue_notes_failure_continues() {
         let mut server = mockito::Server::new_async().await;
         let config = test_config(30, TEST_BOT_USERNAME, server.url());
-        let client = Arc::new(GitlabApiClient::new(&config).unwrap());
+        let client = Arc::new(GitlabApiClient::new(config.clone()).unwrap());
 
         let issue_update_old = (Utc::now() - ChronoDuration::days(40)).to_rfc3339();
         // Issue 1 will have notes fail, Issue 2 should still be processed.
@@ -1025,7 +1026,7 @@ mod tests {
     async fn test_add_label_failure_continues() {
         let mut server = mockito::Server::new_async().await;
         let config = test_config(30, TEST_BOT_USERNAME, server.url());
-        let client = Arc::new(GitlabApiClient::new(&config).unwrap());
+        let client = Arc::new(GitlabApiClient::new(config.clone()).unwrap());
 
         let old_update = (Utc::now() - ChronoDuration::days(45)).to_rfc3339();
         let issue1 = create_issue(1, &old_update, vec![], "opened"); // Should become stale
@@ -1091,9 +1092,9 @@ mod tests {
         let base_url = server.url();
 
         let settings_obj = test_config(30, TEST_BOT_USERNAME, base_url.clone());
-        let gitlab_client = GitlabApiClient::new(&settings_obj).unwrap();
+        let gitlab_client = GitlabApiClient::new(settings_obj.clone()).unwrap();
 
-        let polling_service = PollingService::new(Arc::new(gitlab_client), settings_obj.clone());
+        let polling_service = PollingService::new(Arc::new(gitlab_client), settings_obj);
 
         let last_checked = *polling_service.last_checked.lock().await;
         let now = SystemTime::now()
@@ -1112,29 +1113,43 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        let old_timestamp = now - (24 * 3600); // 24 hours ago
+        let _old_timestamp = now - (24 * 3600); // 24 hours ago
 
         // Calculate what the effective timestamp should be (12 hours ago)
-        let expected_timestamp = now - (12 * 3600);
+        let _expected_timestamp = now - (12 * 3600);
+    }
+
+    #[tokio::test]
+    async fn test_get_issues_since_timestamp() {
+        let server = mockito::Server::new_async().await;
+        let base_url = server.url();
 
         // Create settings with max_age_hours = 12
         let settings = AppSettings {
-            gitlab_url: "https://gitlab.example.com".to_string(),
+            gitlab_url: base_url.clone(),
             gitlab_token: "test_token".to_string(),
             openai_api_key: "test_key".to_string(),
             openai_model: "gpt-3.5-turbo".to_string(),
             openai_temperature: 0.7,
             openai_max_tokens: 1024,
             openai_custom_url: "https://api.openai.com/v1".to_string(),
-            repos_to_poll: vec!["test/project".to_string()],
+            repos_to_poll: vec!["org/repo".to_string()],
             log_level: "debug".to_string(),
-            bot_username: "gitbot".to_string(),
+            bot_username: "test_bot".to_string(),
             poll_interval_seconds: 60,
             stale_issue_days: 30,
             max_age_hours: 12, // Set to 12 hours for this test
             context_repo_path: None,
             max_context_size: 60000,
+            default_branch: "main".to_string(),
         };
+
+        // Setup timestamp calculation test
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let old_timestamp = now - (20 * 3600); // 20 hours ago (older than max_age_hours)
 
         // Directly test the timestamp calculation logic
         let settings_arc = Arc::new(settings);
@@ -1144,7 +1159,10 @@ mod tests {
             old_timestamp
         };
 
-        // Verify that the effective timestamp is close to the expected timestamp (12 hours ago)
+        // Calculate what the expected timestamp should be (12 hours ago)
+        let expected_timestamp = now - (12 * 3600);
+
+        // Verify timestamp bounds (within 10 seconds precision)
         assert!(effective_timestamp >= expected_timestamp - 10);
         assert!(effective_timestamp <= expected_timestamp + 10);
     }

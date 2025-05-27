@@ -8,6 +8,7 @@ use reqwest::{header, Client, Method, StatusCode};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::fmt::Debug;
+use std::sync::Arc;
 use thiserror::Error;
 use tracing::{debug, error, instrument};
 use url::Url;
@@ -30,16 +31,18 @@ pub struct GitlabApiClient {
     client: Client,
     gitlab_url: Url,
     private_token: String,
+    settings: Arc<AppSettings>,
 }
 
 impl GitlabApiClient {
-    pub fn new(settings: &AppSettings) -> Result<Self, GitlabError> {
+    pub fn new(settings: Arc<AppSettings>) -> Result<Self, GitlabError> {
         let gitlab_url = Url::parse(&settings.gitlab_url)?;
         let client = Client::new();
         Ok(Self {
             client,
             gitlab_url,
             private_token: settings.gitlab_token.clone(),
+            settings,
         })
     }
 
@@ -304,7 +307,8 @@ impl GitlabApiClient {
             project_id,
             encode(file_path)
         );
-        let query = &[("ref", "main")]; // Default to main branch
+        let ref_str = self.settings.default_branch.as_str();
+        let query = &[("ref", ref_str)];
 
         let mut file: GitlabFile = self
             .send_request(Method::GET, &path, Some(query), None::<()>)
@@ -482,6 +486,7 @@ mod tests {
             openai_api_key: "key".to_string(),
             openai_custom_url: "url".to_string(),
             openai_model: "gpt-3.5-turbo".to_string(),
+            default_branch: "test-main".to_string(),
             openai_temperature: 0.7,
             openai_max_tokens: 1024,
             repos_to_poll: vec!["org/repo1".to_string()],
@@ -497,17 +502,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_new_gitlab_api_client_valid_url() {
-        let settings = create_test_settings("http://localhost:1234".to_string());
-        let client = GitlabApiClient::new(&settings);
+        let settings = Arc::new(create_test_settings("http://localhost:1234".to_string()));
+        let client = GitlabApiClient::new(settings);
         assert!(client.is_ok());
     }
 
     #[tokio::test]
     async fn test_new_gitlab_api_client_invalid_url() {
-        let settings = create_test_settings("not a valid url".to_string());
-        let client = GitlabApiClient::new(&settings);
-        assert!(client.is_err());
-        match client.err().unwrap() {
+        let settings = Arc::new(create_test_settings("not a url".to_string()));
+        let result = GitlabApiClient::new(settings);
+        assert!(result.is_err());
+        match result.err().unwrap() {
             GitlabError::UrlParse(_) => {} // Expected error
             _ => panic!("Expected UrlParse"),
         }
@@ -518,8 +523,8 @@ mod tests {
         let mut server = mockito::Server::new_async().await;
         let base_url = server.url();
 
-        let settings = create_test_settings(base_url.clone());
-        let client = GitlabApiClient::new(&settings).unwrap();
+        let settings = Arc::new(create_test_settings(base_url.clone()));
+        let client = GitlabApiClient::new(settings).unwrap();
 
         let mock_issue_response = json!({
             "id": 1, "iid": 101, "project_id": 1, "title": "Test Issue",
@@ -553,8 +558,8 @@ mod tests {
         let mut server = mockito::Server::new_async().await;
         let base_url = server.url();
 
-        let settings = create_test_settings(base_url.clone());
-        let client = GitlabApiClient::new(&settings).unwrap();
+        let settings = Arc::new(create_test_settings(base_url.clone()));
+        let client = GitlabApiClient::new(settings).unwrap();
 
         let _m = server
             .mock("GET", "/api/v4/projects/2/issues/202")
@@ -578,14 +583,14 @@ mod tests {
     async fn test_get_merge_request_success() {
         let mut server = mockito::Server::new_async().await;
         let base_url = server.url();
-        let settings = create_test_settings(base_url);
-        let client = GitlabApiClient::new(&settings).unwrap();
+        let settings = Arc::new(create_test_settings(base_url));
+        let client = GitlabApiClient::new(settings).unwrap();
 
         let mock_mr_response = json!({
             "id": 1, "iid": 5, "project_id": 1, "title": "Test MR",
             "description": "A test merge request", "state": "opened",
             "author": {"id": 1, "username": "mr_tester", "name": "MR Test User", "avatar_url": null, "web_url": "url"},
-            "source_branch": "feature-branch", "target_branch": "main",
+            "source_branch": "feature-branch", "target_branch": "test-main",
             "web_url": "http://example.com/mr/1", "labels": [], "assignees": [], "reviewers": [],
             "milestone": null, "closed_at": null, "closed_by": null, "created_at": "2023-01-01T10:00:00Z", "updated_at": "2023-01-03T10:00:00Z",
             "upvotes": 0, "downvotes": 0, "user_notes_count": 0, "work_in_progress": false, "draft": false,
@@ -616,8 +621,8 @@ mod tests {
     async fn test_post_comment_to_issue_success() {
         let mut server = mockito::Server::new_async().await;
         let base_url = server.url();
-        let settings = create_test_settings(base_url);
-        let client = GitlabApiClient::new(&settings).unwrap();
+        let settings = Arc::new(create_test_settings(base_url));
+        let client = GitlabApiClient::new(settings).unwrap();
         let comment_body = "This is a test comment on an issue.";
 
         let mock_response_body = json!({
@@ -661,8 +666,8 @@ mod tests {
     async fn test_post_comment_to_merge_request_error() {
         let mut server = mockito::Server::new_async().await;
         let base_url = server.url();
-        let settings = create_test_settings(base_url);
-        let client = GitlabApiClient::new(&settings).unwrap();
+        let settings = Arc::new(create_test_settings(base_url));
+        let client = GitlabApiClient::new(settings).unwrap();
         let comment_body = "This comment should fail.";
 
         let mock = server
@@ -692,8 +697,8 @@ mod tests {
     async fn test_get_project_by_path() {
         let mut server = mockito::Server::new_async().await;
         let base_url = server.url();
-        let settings = create_test_settings(base_url);
-        let client = GitlabApiClient::new(&settings).unwrap();
+        let settings = Arc::new(create_test_settings(base_url));
+        let client = GitlabApiClient::new(settings).unwrap();
 
         let mock_project_response = serde_json::json!({
             "id": 1,
@@ -718,8 +723,8 @@ mod tests {
     async fn test_get_issues() {
         let mut server = mockito::Server::new_async().await;
         let base_url = server.url();
-        let settings = create_test_settings(base_url);
-        let client = GitlabApiClient::new(&settings).unwrap();
+        let settings = Arc::new(create_test_settings(base_url));
+        let client = GitlabApiClient::new(settings).unwrap();
 
         let mock_issues_response = serde_json::json!([
             {
@@ -764,22 +769,22 @@ mod tests {
     async fn test_get_merge_requests() {
         let mut server = mockito::Server::new_async().await;
         let base_url = server.url();
-        let settings = create_test_settings(base_url);
-        let client = GitlabApiClient::new(&settings).unwrap();
+        let settings = Arc::new(create_test_settings(base_url));
+        let client = GitlabApiClient::new(settings).unwrap();
 
         let mock_mrs_response = serde_json::json!([
             {
                 "id": 1, "iid": 5, "project_id": 1, "title": "Test MR 1",
                 "description": "A test merge request 1", "state": "opened",
                 "author": {"id": 1, "username": "mr_tester", "name": "MR Test User", "avatar_url": null, "web_url": "url"},
-                "source_branch": "feature-branch-1", "target_branch": "main",
+                "source_branch": "feature-branch-1", "target_branch": "test-main",
                 "web_url": "http://example.com/mr/1", "labels": [], "updated_at": "2023-01-03T10:00:00Z"
             },
             {
                 "id": 2, "iid": 6, "project_id": 1, "title": "Test MR 2",
                 "description": "A test merge request 2", "state": "opened",
                 "author": {"id": 1, "username": "mr_tester", "name": "MR Test User", "avatar_url": null, "web_url": "url"},
-                "source_branch": "feature-branch-2", "target_branch": "main",
+                "source_branch": "feature-branch-2", "target_branch": "test-main",
                 "web_url": "http://example.com/mr/2", "labels": [], "updated_at": "2023-01-03T11:00:00Z"
             }
         ]);
@@ -812,8 +817,8 @@ mod tests {
     async fn test_get_issue_notes() {
         let mut server = mockito::Server::new_async().await;
         let base_url = server.url();
-        let settings = create_test_settings(base_url);
-        let client = GitlabApiClient::new(&settings).unwrap();
+        let settings = Arc::new(create_test_settings(base_url));
+        let client = GitlabApiClient::new(settings).unwrap();
 
         let mock_notes_response = serde_json::json!([
             {
@@ -868,8 +873,8 @@ mod tests {
     async fn test_get_merge_request_notes() {
         let mut server = mockito::Server::new_async().await;
         let base_url = server.url();
-        let settings = create_test_settings(base_url);
-        let client = GitlabApiClient::new(&settings).unwrap();
+        let settings = Arc::new(create_test_settings(base_url));
+        let client = GitlabApiClient::new(settings).unwrap();
 
         let mock_notes_response = serde_json::json!([
             {
@@ -927,8 +932,8 @@ mod tests {
     async fn test_add_issue_label_success() {
         let mut server = mockito::Server::new_async().await;
         let base_url = server.url();
-        let settings = create_test_settings(base_url);
-        let client = GitlabApiClient::new(&settings).unwrap();
+        let settings = Arc::new(create_test_settings(base_url));
+        let client = GitlabApiClient::new(settings).unwrap();
         let label_to_add = "feature-request";
 
         let _mock_issue_response_before = json!({ // Prefixed with underscore
@@ -971,8 +976,8 @@ mod tests {
     async fn test_remove_issue_label_success() {
         let mut server = mockito::Server::new_async().await;
         let base_url = server.url();
-        let settings = create_test_settings(base_url);
-        let client = GitlabApiClient::new(&settings).unwrap();
+        let settings = Arc::new(create_test_settings(base_url));
+        let client = GitlabApiClient::new(settings).unwrap();
         let label_to_remove = "bug";
 
         let _mock_issue_response_before = json!({ // Prefixed with underscore
@@ -1015,8 +1020,8 @@ mod tests {
     async fn test_add_issue_label_not_found() {
         let mut server = mockito::Server::new_async().await;
         let base_url = server.url();
-        let settings = create_test_settings(base_url);
-        let client = GitlabApiClient::new(&settings).unwrap();
+        let settings = Arc::new(create_test_settings(base_url));
+        let client = GitlabApiClient::new(settings).unwrap();
         let label_to_add = "enhancement";
 
         let _m = server
@@ -1044,8 +1049,8 @@ mod tests {
     async fn test_remove_issue_label_not_found() {
         let mut server = mockito::Server::new_async().await;
         let base_url = server.url();
-        let settings = create_test_settings(base_url);
-        let client = GitlabApiClient::new(&settings).unwrap();
+        let settings = Arc::new(create_test_settings(base_url));
+        let client = GitlabApiClient::new(settings).unwrap();
         let label_to_remove = "wontfix";
 
         let _m = server
@@ -1073,8 +1078,8 @@ mod tests {
     async fn test_get_file_commits() {
         let mut server = mockito::Server::new_async().await;
         let base_url = server.url();
-        let settings = create_test_settings(base_url);
-        let client = GitlabApiClient::new(&settings).unwrap();
+        let settings = Arc::new(create_test_settings(base_url));
+        let client = GitlabApiClient::new(settings).unwrap();
 
         let mock_commits_response = serde_json::json!([
             {

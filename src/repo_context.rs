@@ -461,11 +461,13 @@ mod tests {
             max_age_hours: 24,
             context_repo_path: None,
             max_context_size: 60000,
+            default_branch: "main".to_string(),
         };
 
+        let settings_arc = Arc::new(settings.clone());
         let extractor = RepoContextExtractor::new(
-            Arc::new(GitlabApiClient::new(&settings).unwrap()),
-            Arc::new(settings.clone()),
+            Arc::new(GitlabApiClient::new(settings_arc.clone()).unwrap()),
+            settings_arc,
         );
 
         let keywords = extractor.extract_keywords(&issue);
@@ -506,11 +508,13 @@ mod tests {
             max_age_hours: 24,
             context_repo_path: None,
             max_context_size: 60000,
+            default_branch: "main".to_string(),
         };
 
+        let settings_arc = Arc::new(settings.clone());
         let extractor = RepoContextExtractor::new(
-            Arc::new(GitlabApiClient::new(&settings).unwrap()),
-            Arc::new(settings.clone()),
+            Arc::new(GitlabApiClient::new(settings_arc.clone()).unwrap()),
+            settings_arc,
         );
 
         let keywords = vec![

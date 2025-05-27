@@ -35,14 +35,14 @@ async fn main() -> Result<()> {
     info!("Configuration loaded successfully.");
 
     // Initialize GitLab API Client
-    let gitlab_client =
-        GitlabApiClient::new(&app_settings).with_context(|| "Failed to create GitLab client")?;
+    let config_arc = Arc::new(app_settings);
+    let gitlab_client = GitlabApiClient::new(config_arc.clone())
+        .with_context(|| "Failed to create GitLab client")?;
 
     info!("GitLab API client initialized successfully.");
     let gitlab_client = Arc::new(gitlab_client);
 
     // Create polling service
-    let config_arc = Arc::new(app_settings);
     let polling_service = PollingService::new(gitlab_client, config_arc.clone());
 
     info!(

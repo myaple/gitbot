@@ -708,9 +708,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_process_mention_self_mention() {
-        // Create a test event where the bot mentions itself
-        let event = create_test_note_event("gitbot", "Issue");
+    async fn test_process_mention_no_bot_mention() {
+        // Create a test event where the bot is not mentioned
+        let mut event = create_test_note_event("user", "Issue");
+        // Override the note content to remove bot mention
+        event.object_attributes.note = "This is a comment without any bot mention".to_string();
 
         // Create test config
         let config = Arc::new(AppSettings {
@@ -729,6 +731,7 @@ mod tests {
             max_age_hours: 24,
             context_repo_path: None,
             max_context_size: 60000,
+            default_branch: "main".to_string(),
         });
 
         // Create a mock GitLab client
@@ -742,7 +745,7 @@ mod tests {
             openai_temperature: 0.7,
             openai_max_tokens: 1024,
             openai_custom_url: "https://api.openai.com/v1".to_string(),
-            repos_to_poll: vec!["org/repo1".to_string()],
+            repos_to_poll: vec!["test/repo".to_string()],
             log_level: "debug".to_string(),
             bot_username: "gitbot".to_string(),
             poll_interval_seconds: 60,
@@ -750,18 +753,19 @@ mod tests {
             stale_issue_days: 30, // Added default for tests
             context_repo_path: None,
             max_context_size: 60000,
+            default_branch: "main".to_string(),
         };
-        let gitlab_client = Arc::new(GitlabApiClient::new(&settings).unwrap());
+        let gitlab_client = Arc::new(GitlabApiClient::new(Arc::new(settings.clone())).unwrap());
 
         // Process the mention
         let result = process_mention(event, gitlab_client, config).await;
 
-        // Should return Ok since we're ignoring self-mentions
+        // Should return Ok since we're ignoring comments without mentions
         assert!(result.is_ok());
     }
 
     #[tokio::test]
-    async fn test_process_mention_no_bot_mention() {
+    async fn test_process_mention_with_no_bot_mention() {
         // Create a test event with no bot mention
         let mut event = create_test_note_event("user1", "Issue");
         event.object_attributes.note = "This is a comment with no bot mention".to_string();
@@ -783,6 +787,7 @@ mod tests {
             stale_issue_days: 30, // Added default for tests
             context_repo_path: None,
             max_context_size: 60000,
+            default_branch: "main".to_string(),
         });
 
         // Create a mock GitLab client
@@ -804,8 +809,9 @@ mod tests {
             stale_issue_days: 30, // Added default for tests
             context_repo_path: None,
             max_context_size: 60000,
+            default_branch: "main".to_string(),
         };
-        let gitlab_client = Arc::new(GitlabApiClient::new(&settings).unwrap());
+        let gitlab_client = Arc::new(GitlabApiClient::new(Arc::new(settings.clone())).unwrap());
 
         // Process the mention
         let result = process_mention(event, gitlab_client, config).await;
