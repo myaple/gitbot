@@ -1,5 +1,6 @@
 use crate::config::AppSettings;
 use crate::gitlab::GitlabApiClient;
+use crate::gitlab::GitlabError;
 use crate::models::{GitlabIssue, GitlabMergeRequest, GitlabProject};
 
 use anyhow::{Context, Result};
@@ -8,6 +9,7 @@ use std::sync::Arc;
 use tracing::{debug, info, warn};
 
 const MAX_SOURCE_FILES: usize = 250; // Maximum number of source files to include in context
+const AGENTS_MD_FILE: &str = "AGENTS.md";
 
 #[derive(Debug, Deserialize)]
 pub struct GitlabFile {
@@ -36,6 +38,65 @@ impl RepoContextExtractor {
             gitlab_client,
             settings,
         }
+    }
+
+    async fn get_file_content_from_project(
+        &self,
+        project_id: i64,
+        file_path: &str,
+    ) -> Result<Option<String>> {
+        match self
+            .gitlab_client
+            .get_file_content(project_id, file_path)
+            .await
+        {
+            Ok(file) => Ok(file.content),
+            Err(GitlabError::Api { status, .. }) if status == reqwest::StatusCode::NOT_FOUND => {
+                Ok(None)
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    async fn get_agents_md_content(
+        &self,
+        project: &GitlabProject,
+        context_repo_path: Option<&str>,
+    ) -> Result<Option<String>> {
+        // Try fetching from the main project first
+        if let Some(content) = self
+            .get_file_content_from_project(project.id, AGENTS_MD_FILE)
+            .await?
+        {
+            info!(
+                "Found AGENTS.md in main project {}",
+                project.path_with_namespace
+            );
+            return Ok(Some(content));
+        }
+
+        // If not found and context repo is specified, try fetching from context repo
+        if let Some(context_path) = context_repo_path {
+            match self.gitlab_client.get_project_by_path(context_path).await {
+                Ok(context_project) => {
+                    if let Some(content) = self
+                        .get_file_content_from_project(context_project.id, AGENTS_MD_FILE)
+                        .await?
+                    {
+                        info!("Found AGENTS.md in context project {}", context_path);
+                        return Ok(Some(content));
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to get context repo {}: {}", context_path, e);
+                }
+            }
+        }
+        info!(
+            "AGENTS.md not found in main project {} or context repo {:?}",
+            project.path_with_namespace, context_repo_path
+        );
+        Ok(None)
     }
 
     /// Get all source code files in the repository, up to MAX_SOURCE_FILES limit
@@ -148,6 +209,32 @@ impl RepoContextExtractor {
             total_size += files_list.len();
         }
 
+        // Add AGENTS.md content if available
+        match self.get_agents_md_content(project, context_repo_path).await {
+            Ok(Some(agents_md)) => {
+                let agents_md_context = format!("\n--- {} ---\n{}\n", AGENTS_MD_FILE, agents_md);
+                if total_size + agents_md_context.len() <= self.settings.max_context_size {
+                    context.push_str(&agents_md_context);
+                    total_size += agents_md_context.len();
+                } else {
+                    warn!(
+                        "AGENTS.md content too large to fit in context for issue #{}",
+                        issue.iid
+                    );
+                    context.push_str(&format!(
+                        "\n--- {} ---\n[Content omitted due to context size limits]\n",
+                        AGENTS_MD_FILE
+                    ));
+                }
+            }
+            Ok(None) => {
+                // AGENTS.md not found, do nothing
+            }
+            Err(e) => {
+                warn!("Failed to fetch AGENTS.md for issue #{}: {}", issue.iid, e);
+            }
+        }
+
         // Then add relevant file contents
         for file in relevant_files {
             if let Some(content) = file.content {
@@ -200,6 +287,32 @@ impl RepoContextExtractor {
             );
             context_for_llm.push_str(&files_list);
             total_size += files_list.len();
+        }
+
+        // Add AGENTS.md content if available
+        match self.get_agents_md_content(project, context_repo_path).await {
+            Ok(Some(agents_md)) => {
+                let agents_md_context = format!("\n--- {} ---\n{}\n", AGENTS_MD_FILE, agents_md);
+                if total_size + agents_md_context.len() <= self.settings.max_context_size {
+                    context_for_llm.push_str(&agents_md_context);
+                    total_size += agents_md_context.len();
+                } else {
+                    warn!(
+                        "AGENTS.md content too large to fit in context for MR !{}",
+                        mr.iid
+                    );
+                    context_for_llm.push_str(&format!(
+                        "\n--- {} ---\n[Content omitted due to context size limits]\n",
+                        AGENTS_MD_FILE
+                    ));
+                }
+            }
+            Ok(None) => {
+                // AGENTS.md not found, do nothing
+            }
+            Err(e) => {
+                warn!("Failed to fetch AGENTS.md for MR !{}: {}", mr.iid, e);
+            }
         }
 
         // Then add the diff context and file history
@@ -422,6 +535,7 @@ mod tests {
     use super::*;
     use crate::config::AppSettings;
     use crate::models::GitlabUser;
+    use urlencoding::encode;
 
     #[test]
     fn test_extract_keywords() {
@@ -553,5 +667,425 @@ mod tests {
         assert!(scores[1].1 == 0); // README.md should have no score
         assert!(scores[3].1 == 0); // utils.rs should have no score
         assert!(scores[4].1 == 0); // image.png should have no score
+    }
+
+    // Helper to create AppSettings for tests
+    fn test_settings(gitlab_url: String, context_repo: Option<String>) -> Arc<AppSettings> {
+        Arc::new(AppSettings {
+            gitlab_url: gitlab_url.clone(),
+            gitlab_token: "test_token".to_string(),
+            openai_api_key: "test_openai_key".to_string(),
+            openai_custom_url: gitlab_url, // Mock server URL
+            openai_model: "gpt-3.5-turbo".to_string(),
+            openai_temperature: 0.7,
+            openai_max_tokens: 150,
+            repos_to_poll: vec!["test_org/test_repo".to_string()],
+            log_level: "debug".to_string(),
+            bot_username: "test_bot".to_string(),
+            poll_interval_seconds: 60,
+            default_branch: "main".to_string(),
+            stale_issue_days: 30,
+            max_age_hours: 24,
+            context_repo_path: context_repo,
+            max_context_size: 60000,
+        })
+    }
+
+    fn create_mock_project(id: i64, path_with_namespace: &str) -> GitlabProject {
+        GitlabProject {
+            id,
+            path_with_namespace: path_with_namespace.to_string(),
+            web_url: format!("https://gitlab.com/{}", path_with_namespace),
+        }
+    }
+
+    fn create_mock_issue(iid: i64, project_id: i64) -> GitlabIssue {
+        GitlabIssue {
+            id: iid, // Typically id and iid might be different, but for mock it's fine
+            iid,
+            project_id,
+            title: format!("Test Issue #{}", iid),
+            description: Some(format!("Description for issue #{}", iid)),
+            state: "opened".to_string(),
+            author: GitlabUser {
+                id: 1,
+                username: "test_user".to_string(),
+                name: "Test User".to_string(),
+                avatar_url: None,
+            },
+            web_url: "url".to_string(),
+            labels: vec![],
+            updated_at: "2023-01-01T00:00:00Z".to_string(),
+        }
+    }
+
+    fn create_mock_mr(iid: i64, project_id: i64) -> GitlabMergeRequest {
+        GitlabMergeRequest {
+            id: iid,
+            iid,
+            project_id,
+            title: format!("Test MR !{}", iid),
+            description: Some(format!("Description for MR !{}", iid)),
+            state: "opened".to_string(),
+            author: GitlabUser {
+                id: 1,
+                username: "test_user".to_string(),
+                name: "Test User".to_string(),
+                avatar_url: None,
+            },
+            source_branch: "feature-branch".to_string(),
+            target_branch: "main".to_string(),
+            web_url: "url".to_string(),
+            labels: vec![],
+            detailed_merge_status: Some("mergeable".to_string()),
+            updated_at: "2023-01-01T00:00:00Z".to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_extract_context_for_issue_with_agents_md() {
+        let mut server = mockito::Server::new_async().await;
+        let settings = test_settings(server.url(), None);
+        let gitlab_client = Arc::new(GitlabApiClient::new(settings.clone()).unwrap());
+        let extractor = RepoContextExtractor::new(gitlab_client.clone(), settings.clone());
+
+        let project = create_mock_project(1, "test_org/main_repo");
+        let issue = create_mock_issue(101, project.id);
+        let agents_md_content = "This is the AGENTS.md content from main_repo.";
+
+        // Mock get_repository_tree for the second call (by find_relevant_files_for_issue for the project)
+        // Defined first so LIFO matching picks the src_files mock for the first call.
+        let _m_repo_tree_relevant_files = server
+            .mock(
+                "GET",
+                "/api/v4/projects/1/repository/tree?recursive=true&per_page=100",
+            )
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(serde_json::json!([]).to_string()) // No relevant files found for this call
+            .expect(1) // Crucial: this mock is for the second call
+            .create_async()
+            .await;
+
+        // Mock get_repository_tree for the first call (by get_combined_source_files)
+        let _m_repo_tree_src_files = server
+            .mock("GET", "/api/v4/projects/1/repository/tree?recursive=true&per_page=100")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(serde_json::json!([{"id": "1", "name": "main.rs", "type": "blob", "path": "src/main.rs", "mode": "100644"}]).to_string())
+            .expect(1) // Crucial: this mock is for the first call
+            .create_async()
+            .await;
+
+        let _m_agents_md_main = server
+            .mock(
+                "GET",
+                format!(
+                    "/api/v4/projects/1/repository/files/{}?ref=main",
+                    AGENTS_MD_FILE
+                )
+                .as_str(),
+            )
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "file_name": AGENTS_MD_FILE,
+                    "file_path": AGENTS_MD_FILE,
+                    "size": agents_md_content.len(),
+                    "encoding": "base64",
+                    "content": base64::encode(agents_md_content),
+                    "ref": "main",
+                    "blob_id": "someblobid",
+                    "commit_id": "somecommitid",
+                    "last_commit_id": "somelastcommitid"
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+
+        // 1. Mock get_project_by_path (called by find_relevant_files_for_issue)
+        let _m_get_project_for_relevant_files = server
+            .mock(
+                "GET",
+                format!("/api/v4/projects/{}", encode(&project.path_with_namespace)).as_str(),
+            )
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(serde_json::json!(project).to_string()) // returns the same project
+            .create_async()
+            .await;
+
+        // Note: find_relevant_files_for_issue also calls get_file_content for each "relevant" file.
+        // Since _m_repo_tree_relevant_files (which is consumed by the second repo tree call) returns no files,
+        // no further mocks for get_file_content are needed here for find_relevant_files_for_issue.
+
+        let context = extractor
+            .extract_context_for_issue(&issue, &project, None)
+            .await
+            .unwrap();
+
+        assert!(
+            context.contains(&format!(
+                "--- All Source Files (up to {} files) ---",
+                MAX_SOURCE_FILES
+            )),
+            "Context missing correctly formatted 'All Source Files' header. Full: {}",
+            context
+        );
+        assert!(
+            context.contains("src/main.rs"),
+            "Context missing 'src/main.rs'. Full: {}",
+            context
+        );
+        assert!(
+            context.contains("--- AGENTS.md ---"),
+            "Context missing AGENTS.md header. Full: {}",
+            context
+        );
+        assert!(
+            context.contains(agents_md_content),
+            "Context missing AGENTS.md content. Full: {}",
+            context
+        );
+    }
+
+    #[tokio::test]
+    async fn test_extract_context_for_issue_with_agents_md_in_context_repo() {
+        let mut server = mockito::Server::new_async().await;
+        let context_repo_path = "test_org/context_repo";
+        let settings = test_settings(server.url(), Some(context_repo_path.to_string()));
+        let gitlab_client = Arc::new(GitlabApiClient::new(settings.clone()).unwrap());
+        let extractor = RepoContextExtractor::new(gitlab_client.clone(), settings.clone());
+
+        let main_project = create_mock_project(1, "test_org/main_repo");
+        let context_project_mock = create_mock_project(2, context_repo_path);
+        let issue = create_mock_issue(102, main_project.id);
+        let agents_md_content = "This is the AGENTS.md content from context_repo.";
+
+        // Mock get_repository_tree for main project (empty source files for simplicity in get_combined_source_files)
+        let _m_repo_tree_main_src = server
+            .mock(
+                "GET",
+                "/api/v4/projects/1/repository/tree?recursive=true&per_page=100",
+            )
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(serde_json::json!([]).to_string())
+            .create_async()
+            .await;
+
+        // Mock get_file_content for AGENTS.md in main project (not found)
+        let _m_agents_md_main_not_found = server
+            .mock(
+                "GET",
+                format!(
+                    "/api/v4/projects/1/repository/files/{}?ref=main",
+                    AGENTS_MD_FILE
+                )
+                .as_str(),
+            )
+            .with_status(404) // Not Found
+            .create_async()
+            .await;
+
+        // Mock get_project_by_path for context_repo (called by get_combined_source_files, get_agents_md_content, and find_relevant_files_for_issue)
+        let _m_context_project_fetch = server
+            .mock(
+                "GET",
+                format!("/api/v4/projects/{}", encode(context_repo_path)).as_str(),
+            )
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(serde_json::json!(context_project_mock).to_string())
+            .expect(3) // Called by get_combined_source_files, get_agents_md_content, find_relevant_files_for_issue
+            .create_async()
+            .await;
+
+        // Mock get_repository_tree for context project (for get_combined_source_files)
+        let _m_repo_tree_context_src = server
+            .mock(
+                "GET",
+                "/api/v4/projects/2/repository/tree?recursive=true&per_page=100",
+            )
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(serde_json::json!([]).to_string()) // No source files in context repo for this part
+            .create_async()
+            .await;
+
+        // Mock get_file_content for AGENTS.md in context project
+        let _m_agents_md_context = server
+            .mock(
+                "GET",
+                format!(
+                    "/api/v4/projects/2/repository/files/{}?ref=main",
+                    AGENTS_MD_FILE
+                )
+                .as_str(),
+            )
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "file_name": AGENTS_MD_FILE,
+                    "file_path": AGENTS_MD_FILE,
+                    "size": agents_md_content.len(),
+                    "encoding": "base64",
+                    "content": base64::encode(agents_md_content),
+                    "ref": "main",
+                    "blob_id": "someblobid",
+                    "commit_id": "somecommitid",
+                    "last_commit_id": "somelastcommitid"
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+
+        // Mocks for find_relevant_files_for_issue (repo_path will be context_repo_path)
+        // get_project_by_path for context_repo_path is already covered by _m_context_project_fetch (third call)
+
+        // Mock get_repository_tree for context_project (ID 2) (for find_relevant_files_for_issue, return empty)
+        let _m_repo_tree_context_relevant = server
+            .mock(
+                "GET",
+                "/api/v4/projects/2/repository/tree?recursive=true&per_page=100",
+            )
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(serde_json::json!([]).to_string())
+            .create_async()
+            .await;
+
+        // Since find_relevant_files_for_issue will find no files from the tree, no get_file_content calls will be made by it.
+
+        let context = extractor
+            .extract_context_for_issue(&issue, &main_project, Some(context_repo_path))
+            .await
+            .unwrap();
+
+        // Assert AGENTS.md content is present
+        assert!(
+            context.contains("--- AGENTS.md ---"),
+            "Context should contain AGENTS.md header. Full context: {}",
+            context
+        );
+        assert!(
+            context.contains(agents_md_content),
+            "Context should contain AGENTS.md content from context_repo. Full context: {}",
+            context
+        );
+
+        // Assert that source file list is NOT present (since mocked as empty)
+        assert!(!context.contains("--- All Source Files ---"), "Context should NOT contain 'All Source Files' header if no source files. Full context: {}", context);
+
+        // Assert that the default "empty" message is NOT present because AGENTS.md was added
+        assert!(!context.contains("No source files or relevant files found"), "Context should NOT contain default empty message if AGENTS.md is present. Full context: {}", context);
+    }
+
+    #[tokio::test]
+    async fn test_extract_context_for_mr_with_agents_md() {
+        let mut server = mockito::Server::new_async().await;
+        let settings = test_settings(server.url(), None);
+        let gitlab_client = Arc::new(GitlabApiClient::new(settings.clone()).unwrap());
+        let extractor = RepoContextExtractor::new(gitlab_client.clone(), settings.clone());
+
+        let project = create_mock_project(1, "test_org/main_repo");
+        let mr = create_mock_mr(201, project.id);
+        let agents_md_content = "MR AGENTS.md content.";
+
+        // Mock get_repository_tree (for source files)
+        let _m_repo_tree = server
+            .mock("GET", "/api/v4/projects/1/repository/tree?recursive=true&per_page=100")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(serde_json::json!([{"id": "1", "name": "code.rs", "type": "blob", "path": "src/code.rs", "mode": "100644"}]).to_string())
+            .create_async()
+            .await;
+
+        // Mock get_file_content for AGENTS.md in main project
+        let _m_agents_md_main = server
+            .mock(
+                "GET",
+                format!(
+                    "/api/v4/projects/1/repository/files/{}?ref=main",
+                    AGENTS_MD_FILE
+                )
+                .as_str(),
+            )
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "file_name": AGENTS_MD_FILE,
+                    "file_path": AGENTS_MD_FILE,
+                    "size": agents_md_content.len(),
+                    "encoding": "base64",
+                    "content": base64::encode(agents_md_content),
+                    "ref": "main",
+                    "blob_id": "someblobid",
+                    "commit_id": "somecommitid",
+                    "last_commit_id": "somelastcommitid"
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+
+        // Mock get_merge_request_changes (empty diff for simplicity)
+        let _m_mr_changes = server
+            .mock("GET", "/api/v4/projects/1/merge_requests/201/changes")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(serde_json::json!({ "changes": [] }).to_string())
+            .create_async()
+            .await;
+
+        let (context_llm, context_comment) = extractor
+            .extract_context_for_mr(&mr, &project, None)
+            .await
+            .unwrap();
+
+        assert!(
+            context_llm.contains(&format!(
+                "--- All Source Files (up to {} files) ---",
+                MAX_SOURCE_FILES
+            )),
+            "LLM context missing correctly formatted 'All Source Files' header. Full: {}",
+            context_llm
+        );
+        assert!(
+            context_llm.contains("src/code.rs"),
+            "LLM context missing 'src/code.rs'. Full: {}",
+            context_llm
+        );
+        assert!(
+            context_llm.contains("--- AGENTS.md ---"),
+            "LLM context missing AGENTS.md header. Full: {}",
+            context_llm
+        );
+        assert!(
+            context_llm.contains(agents_md_content),
+            "LLM context missing AGENTS.md content. Full: {}",
+            context_llm
+        );
+        // Since diffs are empty, no "Changes in file" section. Commit history for comment should be default.
+        assert!(
+            !context_llm.contains("Changes in"),
+            "LLM context should not contain diff changes. Full: {}",
+            context_llm
+        );
+        assert_eq!(
+            context_comment,
+            "No commit history available for the changed files."
+        );
+        // Ensure the default "No source files or changes found..." message is NOT there because we have source files and AGENTS.md
+        assert!(
+            !context_llm.contains("No source files or changes found"),
+            "LLM context should not contain default empty message. Full: {}",
+            context_llm
+        );
     }
 }
