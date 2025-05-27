@@ -12,6 +12,8 @@ use thiserror::Error;
 use tracing::{debug, error, instrument};
 use url::Url;
 use urlencoding::encode;
+use async_trait::async_trait; // Added for GitlabClientTrait
+use anyhow::Result as AnyhowResult; // For trait method return types
 
 #[derive(Error, Debug)]
 pub enum GitlabError {
@@ -456,17 +458,48 @@ impl GitlabApiClient {
         &self,
         project_id: i64,
         file_path: &str,
-        limit: Option<usize>,
-    ) -> Result<Vec<GitlabCommit>, GitlabError> {
+        limit: Option<usize>, 
+    ) -> Result<Vec<GitlabCommit>, GitlabError> { // Actual method returns Result<..., GitlabError>
         let path = format!("/api/v4/projects/{}/repository/commits", project_id);
 
-        let per_page = limit.unwrap_or(5).to_string();
-        let query_params = vec![("path", file_path), ("per_page", &per_page)];
+        let per_page_str = limit.map(|l| l.to_string()).unwrap_or_else(|| "5".to_string());
+        let query_params = vec![("path", file_path), ("per_page", per_page_str.as_str())];
+
 
         self.send_request(Method::GET, &path, Some(&query_params), None::<()>)
             .await
     }
 }
+
+#[async_trait]
+pub trait GitlabClientTrait: Send + Sync {
+    async fn get_project_by_path(&self, path_with_namespace: &str) -> AnyhowResult<GitlabProject>;
+    async fn get_file_content(&self, project_id: i64, file_path: &str) -> AnyhowResult<GitlabFile>;
+    async fn get_repository_tree(&self, project_id: i64) -> AnyhowResult<Vec<String>>;
+    async fn get_merge_request_changes(&self, project_id: i64, mr_iid: i64) -> AnyhowResult<Vec<GitlabDiff>>;
+    async fn get_file_commits(&self, project_id: i64, file_path: &str, per_page: Option<u32>) -> AnyhowResult<Vec<crate::models::GitlabCommit>>;
+}
+
+#[async_trait]
+impl GitlabClientTrait for GitlabApiClient {
+    async fn get_project_by_path(&self, path_with_namespace: &str) -> AnyhowResult<GitlabProject> {
+        self.get_project_by_path(path_with_namespace).await.map_err(anyhow::Error::from)
+    }
+    async fn get_file_content(&self, project_id: i64, file_path: &str) -> AnyhowResult<GitlabFile> {
+        self.get_file_content(project_id, file_path).await.map_err(anyhow::Error::from)
+    }
+    async fn get_repository_tree(&self, project_id: i64) -> AnyhowResult<Vec<String>> {
+        self.get_repository_tree(project_id).await.map_err(anyhow::Error::from)
+    }
+    async fn get_merge_request_changes(&self, project_id: i64, mr_iid: i64) -> AnyhowResult<Vec<GitlabDiff>> {
+        self.get_merge_request_changes(project_id, mr_iid).await.map_err(anyhow::Error::from)
+    }
+    async fn get_file_commits(&self, project_id: i64, file_path: &str, per_page: Option<u32>) -> AnyhowResult<Vec<crate::models::GitlabCommit>> {
+        let limit_usize: Option<usize> = per_page.map(|p| p as usize);
+        self.get_file_commits(project_id, file_path, limit_usize).await.map_err(anyhow::Error::from)
+    }
+}
+
 
 #[cfg(test)]
 mod tests {

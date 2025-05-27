@@ -4,6 +4,7 @@ use crate::models::{GitlabIssue, GitlabMergeRequest, GitlabProject};
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
+use std::error::Error; // Added for AGENTS.md error handling
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
@@ -35,6 +36,37 @@ impl RepoContextExtractor {
         Self {
             gitlab_client,
             settings,
+        }
+    }
+
+    /// Get the content of a specific file (e.g. AGENTS.md) from the repository root
+    async fn get_agents_md_context(&self, project_id: i64, file_path: &str) -> Result<Option<String>> {
+        match self.gitlab_client.get_file_content(project_id, file_path).await {
+            Ok(file) => {
+                // Content is already decoded by gitlab_client.get_file_content if it was base64
+                if file.content.is_some() {
+                    return Ok(file.content);
+                }
+                Ok(None) // No content
+            }
+            Err(e) => {
+                // Check if the error is a 404 Not Found by iterating through sources
+                let mut source_err = e.source();
+                while let Some(s_err) = source_err {
+                    if let Some(gitlab_error) = s_err.downcast_ref::<crate::gitlab::GitlabError>() {
+                        if matches!(gitlab_error, crate::gitlab::GitlabError::Api { status, .. } if *status == reqwest::StatusCode::NOT_FOUND) {
+                            debug!("File {} not found for project {}: {}", file_path, project_id, gitlab_error);
+                            return Ok(None); // File not found is not an error for this context
+                        }
+                        // Found GitlabError, no need to look further up the chain for this specific check.
+                        break; 
+                    }
+                    source_err = s_err.source();
+                }
+                // For other errors (or if GitlabError was found but not a 404), log and treat as if file not found for context purposes.
+                warn!("Failed to get {} for project {}: {}", file_path, project_id, e);
+                Ok(None)
+            }
         }
     }
 
@@ -80,42 +112,100 @@ impl RepoContextExtractor {
     pub async fn extract_context_for_issue(
         &self,
         issue: &GitlabIssue,
-        project: &GitlabProject,
-        context_repo_path: Option<&str>,
+        main_issue_project: &GitlabProject, // Project object for the issue's own repository
+        context_repo_path_option: Option<&str>, // Optional path to a different repository for context
     ) -> Result<String> {
-        // Determine which repository to use for context
-        let repo_path = if let Some(context_path) = context_repo_path {
-            context_path
-        } else {
-            &project.path_with_namespace
-        };
+        let mut agents_md_combined_content = String::new();
+        let mut agents_md_total_size = 0;
 
-        info!(
-            "Extracting context for issue #{} from repo {}",
-            issue.iid, repo_path
-        );
-
-        // Get repository files that might be relevant to the issue
-        let relevant_files = self.find_relevant_files_for_issue(issue, repo_path).await?;
-
-        // Format the context
-        let mut context = String::new();
-        let mut total_size = 0;
-
-        // First add the list of all source files
-        let project = self.gitlab_client.get_project_by_path(repo_path).await?;
-        let source_files = self.get_all_source_files(project.id).await?;
-        if !source_files.is_empty() {
-            let files_list = format!(
-                "\n--- All Source Files (up to {} files) ---\n{}\n",
-                MAX_SOURCE_FILES,
-                source_files.join("\n")
+        // 1. Get AGENTS.md from the main project (where the issue resides)
+        if let Ok(Some(content)) = self.get_agents_md_context(main_issue_project.id, "AGENTS.md").await {
+            let formatted_content = format!(
+                "\n--- AGENTS.md (Main Repo: {}) ---\n{}\n",
+                main_issue_project.path_with_namespace, content
             );
-            context.push_str(&files_list);
-            total_size += files_list.len();
+            agents_md_combined_content.push_str(&formatted_content);
+            agents_md_total_size += formatted_content.len();
         }
 
+        // 2. Get AGENTS.md from the context_repo if specified and different from the main_issue_project
+        if let Some(context_path_str) = context_repo_path_option {
+            if context_path_str != main_issue_project.path_with_namespace {
+                match self.gitlab_client.get_project_by_path(context_path_str).await {
+                    Ok(context_project_details) => {
+                        if let Ok(Some(content)) = self.get_agents_md_context(context_project_details.id, "AGENTS.md").await {
+                            let formatted_content = format!(
+                                "\n--- AGENTS.md (Context Repo: {}) ---\n{}\n",
+                                context_path_str, content
+                            );
+                            agents_md_combined_content.push_str(&formatted_content);
+                            agents_md_total_size += formatted_content.len();
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Failed to get project details for context repo {}: {}", context_path_str, e);
+                    }
+                }
+            }
+        }
+        
+        // Determine the active project from which to fetch source files and relevant files.
+        let path_for_files_context = context_repo_path_option.unwrap_or(&main_issue_project.path_with_namespace);
+        let active_project_for_files = self.gitlab_client.get_project_by_path(path_for_files_context).await?;
+
+        info!(
+            "Extracting file context for issue #{} from primary repo for files: {}",
+            issue.iid, active_project_for_files.path_with_namespace
+        );
+        
+        let mut context_string = agents_md_combined_content;
+        let mut total_size = agents_md_total_size;
+
+        // Add the list of all source files from the active_project_for_files
+        let source_files = self.get_all_source_files(active_project_for_files.id).await?;
+        if !source_files.is_empty() {
+            let files_list_header = format!(
+                "\n--- All Source Files from {} (up to {} files) ---\n",
+                active_project_for_files.path_with_namespace, MAX_SOURCE_FILES
+            );
+            let files_list_content = source_files.join("\n");
+            let files_list = format!("{}{}\n", files_list_header, files_list_content);
+
+            if total_size + files_list.len() <= self.settings.max_context_size {
+                context_string.push_str(&files_list);
+                total_size += files_list.len();
+            } else {
+                 context_string.push_str(&format!("\n[Source files list from {} omitted due to context size limits]\n", active_project_for_files.path_with_namespace));
+            }
+        }
+        
+        // Get repository files that might be relevant to the issue (from active_project_for_files)
+        let relevant_files = self.find_relevant_files_for_issue(issue, &active_project_for_files.path_with_namespace).await?;
+
         // Then add relevant file contents
+        for file in relevant_files {
+            if let Some(content) = file.content {
+                let file_context = format!("\n--- File: {} ---\n{}\n", file.file_path, content);
+
+                // Check if adding this file would exceed our context limit
+                if total_size + file_context.len() > self.settings.max_context_size {
+                    context_string.push_str("\n[Additional files omitted due to context size limits]\n");
+                    break;
+                }
+
+                context_string.push_str(&file_context);
+                total_size += file_context.len();
+            }
+        }
+
+        if context_string.is_empty() {
+            context_string = "No source files or relevant files found in the repository.".to_string();
+        }
+
+        Ok(context_string)
+    }
+
+    /// Extract diff context for a merge request
         for file in relevant_files {
             if let Some(content) = file.content {
                 let file_context = format!("\n--- File: {} ---\n{}\n", file.file_path, content);
@@ -150,20 +240,38 @@ impl RepoContextExtractor {
             mr.iid, project.path_with_namespace
         );
 
-        let mut context_for_llm = String::new();
-        let mut context_for_comment = String::new();
-        let mut total_size = 0;
+        let mut agents_md_for_llm = String::new();
+        let mut agents_md_size = 0;
+        if let Ok(Some(content)) = self.get_agents_md_context(project.id, "AGENTS.md").await {
+            let formatted_content = format!(
+                "\n--- AGENTS.md ---\n{}\n",
+                content
+            );
+            agents_md_for_llm.push_str(&formatted_content);
+            agents_md_size += formatted_content.len();
+        }
 
-        // First add the list of all source files
+        let mut context_for_llm = agents_md_for_llm;
+        let mut context_for_comment = String::new(); // AGENTS.md is not added to comments
+        let mut total_size = agents_md_size;
+
+
+        // First add the list of all source files from the MR's project
         let source_files = self.get_all_source_files(project.id).await?;
         if !source_files.is_empty() {
-            let files_list = format!(
-                "\n--- All Source Files (up to {} files) ---\n{}\n",
-                MAX_SOURCE_FILES,
-                source_files.join("\n")
+            let files_list_header = format!(
+                "\n--- All Source Files from {} (up to {} files) ---\n",
+                 project.path_with_namespace, MAX_SOURCE_FILES
             );
-            context_for_llm.push_str(&files_list);
-            total_size += files_list.len();
+            let files_list_content = source_files.join("\n");
+            let files_list = format!("{}{}\n", files_list_header, files_list_content);
+
+            if total_size + files_list.len() <= self.settings.max_context_size {
+                context_for_llm.push_str(&files_list);
+                total_size += files_list.len();
+            } else {
+                context_for_llm.push_str(&format!("\n[Source files list from {} omitted due to context size limits]\n", project.path_with_namespace));
+            }
         }
 
         // Then add the diff context and file history
