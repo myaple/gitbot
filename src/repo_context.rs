@@ -168,6 +168,7 @@ impl RepoContextExtractor {
                         | "jsx"
                         | "tsx"
                         | "vue"
+                        | "svelte"
                 )
             })
             .collect();
@@ -577,7 +578,7 @@ impl RepoContextExtractor {
             // Prefer source code files
             let code_extensions = [
                 ".rs", ".py", ".js", ".ts", ".java", ".c", ".cpp", ".h", ".hpp", ".go", ".rb",
-                ".php", ".cs", ".scala", ".kt", ".swift", ".sh",
+                ".php", ".cs", ".scala", ".kt", ".swift", ".sh", ".jsx", ".tsx", ".vue", ".svelte",
             ];
 
             if code_extensions.iter().any(|ext| path_lower.ends_with(ext)) {
