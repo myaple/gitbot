@@ -107,10 +107,7 @@ impl RepoContextExtractor {
                         }
                         Ok(None) => {
                             // File not found in context project either
-                            debug!(
-                                "AGENTS.md not found in context project {}.",
-                                context_path
-                            );
+                            debug!("AGENTS.md not found in context project {}.", context_path);
                         }
                         Err(e) => {
                             // Critical error fetching from context project
