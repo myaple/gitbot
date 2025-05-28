@@ -64,36 +64,78 @@ impl RepoContextExtractor {
         context_repo_path: Option<&str>,
     ) -> Result<Option<String>> {
         // Try fetching from the main project first
-        if let Some(content) = self
+        match self
             .get_file_content_from_project(project.id, AGENTS_MD_FILE)
-            .await?
+            .await
         {
-            info!(
-                "Found AGENTS.md in main project {}",
-                project.path_with_namespace
-            );
-            return Ok(Some(content));
+            Ok(Some(content)) => {
+                info!(
+                    "Found AGENTS.md in main project {}",
+                    project.path_with_namespace
+                );
+                return Ok(Some(content));
+            }
+            Ok(None) => {
+                // File not found in main project, proceed to context repo
+                debug!(
+                    "AGENTS.md not found in main project {}, trying context repo if available.",
+                    project.path_with_namespace
+                );
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to fetch AGENTS.MD from main project {}: {}. Will try context repo if available.",
+                    project.path_with_namespace, e
+                );
+                // Do not return here; proceed to try context_repo_path
+            }
         }
 
-        // If not found and context repo is specified, try fetching from context repo
+        // If not found in main project (or an error occurred there) and context repo is specified, try fetching from context repo
         if let Some(context_path) = context_repo_path {
             match self.gitlab_client.get_project_by_path(context_path).await {
                 Ok(context_project) => {
-                    if let Some(content) = self
+                    // The `?` here is acceptable as per requirements: if fetching context project's AGENTS.MD fails critically,
+                    // the whole operation should return Err. If it's just not found (Ok(None)), that's fine.
+                    match self
                         .get_file_content_from_project(context_project.id, AGENTS_MD_FILE)
-                        .await?
+                        .await
                     {
-                        info!("Found AGENTS.md in context project {}", context_path);
-                        return Ok(Some(content));
+                        Ok(Some(content)) => {
+                            info!("Found AGENTS.md in context project {}", context_path);
+                            return Ok(Some(content));
+                        }
+                        Ok(None) => {
+                            // File not found in context project either
+                            debug!(
+                                "AGENTS.md not found in context project {}.",
+                                context_path
+                            );
+                        }
+                        Err(e) => {
+                            // Critical error fetching from context project
+                            warn!(
+                                "Failed to fetch AGENTS.MD from context project {}: {}",
+                                context_path, e
+                            );
+                            return Err(e); // Return the error
+                        }
                     }
                 }
                 Err(e) => {
-                    warn!("Failed to get context repo {}: {}", context_path, e);
+                    // This error means the context_repo_path itself is problematic.
+                    // Log a warning and proceed to return Ok(None) as the file wasn't found.
+                    warn!(
+                        "Failed to get context repo project {}: {}. AGENTS.md cannot be fetched from it.",
+                        context_path, e
+                    );
                 }
             }
         }
+
+        // If we reach here, AGENTS.md was not found in either the main project or the context repo (or context repo was not specified/accessible)
         info!(
-            "AGENTS.md not found in main project {} or context repo {:?}",
+            "AGENTS.md not found in main project {} nor in context repo {:?}",
             project.path_with_namespace, context_repo_path
         );
         Ok(None)
@@ -141,8 +183,20 @@ impl RepoContextExtractor {
         project: &GitlabProject,
         context_repo_path: Option<&str>,
     ) -> Result<Vec<String>> {
+        let mut main_project_fetch_error: Option<anyhow::Error> = None;
+
         // Get source files from the main project
-        let mut all_files = self.get_all_source_files(project.id).await?;
+        let mut all_files = match self.get_all_source_files(project.id).await {
+            Ok(files) => files,
+            Err(e) => {
+                warn!(
+                    "Failed to get source files from main project {}: {}. Will attempt to use context repo files if available.",
+                    project.path_with_namespace, e
+                );
+                main_project_fetch_error = Some(e);
+                Vec::new() // Initialize with an empty vec and continue
+            }
+        };
 
         // If context repo is specified, get its files too
         if let Some(context_path) = context_repo_path {
@@ -166,7 +220,22 @@ impl RepoContextExtractor {
 
         // Limit the total combined files
         all_files.truncate(MAX_SOURCE_FILES);
-        Ok(all_files)
+
+        // Final return logic
+        if !all_files.is_empty() {
+            Ok(all_files)
+        } else {
+            // all_files is empty here
+            if let Some(main_err) = main_project_fetch_error {
+                // Main project fetch failed. If context repo also failed or wasn't specified,
+                // or if context repo succeeded but had no files, this original error should be returned.
+                Err(main_err)
+            } else {
+                // Main project fetch succeeded but returned no files,
+                // and context repo (if specified) also returned no files or failed non-critically.
+                Ok(Vec::new())
+            }
+        }
     }
 
     /// Extract relevant context from a repository for an issue
