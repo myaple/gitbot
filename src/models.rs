@@ -44,6 +44,22 @@ pub struct GitlabMergeRequest {
     pub labels: Vec<String>,
     pub detailed_merge_status: Option<String>, // e.g. "mergeable", "broken_status" - sometimes called merge_status
     pub updated_at: String,
+    pub head_pipeline: Option<GitlabPipeline>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct GitlabPipeline {
+    pub id: i64,
+    pub iid: i64,
+    pub project_id: i64,
+    pub status: String,
+    pub source: Option<String>,
+    #[serde(rename = "ref")]
+    pub ref_: String,
+    pub sha: String,
+    pub web_url: String,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

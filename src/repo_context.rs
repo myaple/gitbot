@@ -382,6 +382,37 @@ impl RepoContextExtractor {
             }
         }
 
+        // Add pipeline status information
+        let pipeline_status_context = if let Some(pipeline) = &mr.head_pipeline {
+            format!(
+                "\n--- Latest Pipeline Status ---\n        Status: {}\n        URL: {}\n        Source: {}\n        Ref: {}\n        SHA: {}\n        Created At: {}\n        Updated At: {}\n---",
+                pipeline.status,
+                pipeline.web_url,
+                pipeline.source.as_deref().unwrap_or("N/A"),
+                pipeline.ref_,
+                pipeline.sha,
+                pipeline.created_at,
+                pipeline.updated_at
+            )
+        } else {
+            "\n--- Latest Pipeline Status ---\nNo pipeline information available for this merge request.\n---".to_string()
+        };
+
+        if total_size + pipeline_status_context.len() <= self.settings.max_context_size {
+            context_for_llm.push_str(&pipeline_status_context);
+            total_size += pipeline_status_context.len();
+        } else {
+            warn!(
+                "Pipeline status too large to fit in context for MR !{}",
+                mr.iid
+            );
+            context_for_llm.push_str("\n--- Latest Pipeline Status ---\n[Pipeline status omitted due to context size limits]\n---");
+            // We don't add the size of the omission message to total_size,
+            // as it's a fixed small string replacing potentially larger content.
+            // Or, if precise accounting is needed:
+            // total_size += "\n--- Latest Pipeline Status ---\n[Pipeline status omitted due to context size limits]\n---".len();
+        }
+
         // Then add the diff context and file history
         let diffs = self
             .gitlab_client
@@ -806,6 +837,7 @@ mod tests {
             labels: vec![],
             detailed_merge_status: Some("mergeable".to_string()),
             updated_at: "2023-01-01T00:00:00Z".to_string(),
+            head_pipeline: None,
         }
     }
 
