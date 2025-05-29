@@ -203,41 +203,92 @@ impl PollingService {
             .get_issues(project_id, since_timestamp)
             .await?;
 
+        // Create a vector of futures for parallel processing of issues
+        let mut issue_tasks = Vec::new();
+
         for issue in issues {
-            // Get notes for this issue
-            let notes = self
-                .gitlab_client
-                .get_issue_notes(project_id, issue.iid, since_timestamp)
-                .await?;
+            let self_clone = self.clone();
+            let project_clone = project.clone();
+            let issue_clone = issue.clone();
+            let project_id_clone = project_id;
+            let since_timestamp_clone = since_timestamp;
 
-            for note in notes {
-                // Skip notes by the bot itself
-                if note.author.username == self.config.bot_username {
-                    continue;
-                }
-
-                // Check if note mentions the bot
-                if note
-                    .note
-                    .contains(&format!("@{}", self.config.bot_username))
-                {
-                    info!("Found mention in issue #{} note #{}", issue.iid, note.id);
-
-                    // Create a GitlabNoteEvent from the note
-                    let event = self.create_issue_note_event(project.clone(), note, issue.clone());
-
-                    // Process the mention
-                    if let Err(e) = process_mention(
-                        event,
-                        self.gitlab_client.clone(),
-                        self.config.clone(),
-                        &self.processed_mentions_cache,
-                    )
+            // Create a future that processes a single issue
+            let task = tokio::spawn(async move {
+                // Get notes for this issue
+                match self_clone
+                    .gitlab_client
+                    .get_issue_notes(project_id_clone, issue_clone.iid, since_timestamp_clone)
                     .await
-                    {
-                        error!("Error processing mention: {}", e);
+                {
+                    Ok(notes) => {
+                        // Create a vector of futures for parallel processing of notes
+                        let mut note_tasks = Vec::new();
+
+                        for note in notes {
+                            // Skip notes by the bot itself
+                            if note.author.username == self_clone.config.bot_username {
+                                continue;
+                            }
+
+                            // Check if note mentions the bot
+                            if note
+                                .note
+                                .contains(&format!("@{}", self_clone.config.bot_username))
+                            {
+                                info!(
+                                    "Found mention in issue #{} note #{}",
+                                    issue_clone.iid, note.id
+                                );
+
+                                // Create a GitlabNoteEvent from the note
+                                let event = self_clone.create_issue_note_event(
+                                    project_clone.clone(),
+                                    note,
+                                    issue_clone.clone(),
+                                );
+
+                                let self_clone_inner = self_clone.clone();
+
+                                // Create a future that processes a single mention
+                                let note_task = tokio::spawn(async move {
+                                    // Process the mention
+                                    if let Err(e) = process_mention(
+                                        event,
+                                        self_clone_inner.gitlab_client.clone(),
+                                        self_clone_inner.config.clone(),
+                                        &self_clone_inner.processed_mentions_cache,
+                                    )
+                                    .await
+                                    {
+                                        error!("Error processing mention: {}", e);
+                                    }
+                                });
+
+                                note_tasks.push(note_task);
+                            }
+                        }
+
+                        // Wait for all note processing tasks to complete
+                        for task in note_tasks {
+                            if let Err(e) = task.await {
+                                error!("Task join error for note processing: {}", e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        error!("Error getting notes for issue #{}: {}", issue_clone.iid, e);
                     }
                 }
+            });
+
+            issue_tasks.push(task);
+        }
+
+        // Wait for all issue processing tasks to complete
+        for task in issue_tasks {
+            if let Err(e) = task.await {
+                error!("Task join error for issue processing: {}", e);
             }
         }
 
@@ -258,41 +309,89 @@ impl PollingService {
             .get_merge_requests(project_id, since_timestamp)
             .await?;
 
+        // Create a vector of futures for parallel processing of merge requests
+        let mut mr_tasks = Vec::new();
+
         for mr in merge_requests {
-            // Get notes for this merge request
-            let notes = self
-                .gitlab_client
-                .get_merge_request_notes(project_id, mr.iid, since_timestamp)
-                .await?;
+            let self_clone = self.clone();
+            let project_clone = project.clone();
+            let mr_clone = mr.clone();
+            let project_id_clone = project_id;
+            let since_timestamp_clone = since_timestamp;
 
-            for note in notes {
-                // Skip notes by the bot itself
-                if note.author.username == self.config.bot_username {
-                    continue;
-                }
-
-                // Check if note mentions the bot
-                if note
-                    .note
-                    .contains(&format!("@{}", self.config.bot_username))
-                {
-                    info!("Found mention in MR !{} note #{}", mr.iid, note.id);
-
-                    // Create a GitlabNoteEvent from the note
-                    let event = self.create_mr_note_event(project.clone(), note, mr.clone());
-
-                    // Process the mention
-                    if let Err(e) = process_mention(
-                        event,
-                        self.gitlab_client.clone(),
-                        self.config.clone(),
-                        &self.processed_mentions_cache,
-                    )
+            // Create a future that processes a single merge request
+            let task = tokio::spawn(async move {
+                // Get notes for this merge request
+                match self_clone
+                    .gitlab_client
+                    .get_merge_request_notes(project_id_clone, mr_clone.iid, since_timestamp_clone)
                     .await
-                    {
-                        error!("Error processing mention: {}", e);
+                {
+                    Ok(notes) => {
+                        // Create a vector of futures for parallel processing of notes
+                        let mut note_tasks = Vec::new();
+
+                        for note in notes {
+                            // Skip notes by the bot itself
+                            if note.author.username == self_clone.config.bot_username {
+                                continue;
+                            }
+
+                            // Check if note mentions the bot
+                            if note
+                                .note
+                                .contains(&format!("@{}", self_clone.config.bot_username))
+                            {
+                                info!("Found mention in MR !{} note #{}", mr_clone.iid, note.id);
+
+                                // Create a GitlabNoteEvent from the note
+                                let event = self_clone.create_mr_note_event(
+                                    project_clone.clone(),
+                                    note,
+                                    mr_clone.clone(),
+                                );
+
+                                let self_clone_inner = self_clone.clone();
+
+                                // Create a future that processes a single mention
+                                let note_task = tokio::spawn(async move {
+                                    // Process the mention
+                                    if let Err(e) = process_mention(
+                                        event,
+                                        self_clone_inner.gitlab_client.clone(),
+                                        self_clone_inner.config.clone(),
+                                        &self_clone_inner.processed_mentions_cache,
+                                    )
+                                    .await
+                                    {
+                                        error!("Error processing mention: {}", e);
+                                    }
+                                });
+
+                                note_tasks.push(note_task);
+                            }
+                        }
+
+                        // Wait for all note processing tasks to complete
+                        for task in note_tasks {
+                            if let Err(e) = task.await {
+                                error!("Task join error for note processing: {}", e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        error!("Error getting notes for MR !{}: {}", mr_clone.iid, e);
                     }
                 }
+            });
+
+            mr_tasks.push(task);
+        }
+
+        // Wait for all merge request processing tasks to complete
+        for task in mr_tasks {
+            if let Err(e) = task.await {
+                error!("Task join error for merge request processing: {}", e);
             }
         }
 
@@ -375,114 +474,140 @@ async fn check_stale_issues(
     // Fetch all issues (or a broad set by passing 0 as since_timestamp)
     // We will filter for "opened" state client-side.
     let all_issues = gitlab_client.get_issues(project_id, 0).await?;
-    let open_issues = all_issues
+    let open_issues: Vec<_> = all_issues
         .into_iter()
-        .filter(|issue| issue.state == "opened");
+        .filter(|issue| issue.state == "opened")
+        .collect();
+
+    // Create a vector of futures for parallel processing of issues
+    let mut issue_tasks = Vec::new();
 
     for issue in open_issues {
-        debug!("Processing issue #{} for staleness", issue.iid);
+        let gitlab_client_clone = gitlab_client.clone();
+        let config_clone = config.clone();
+        let project_id_clone = project_id;
+        let stale_label_name_clone = stale_label_name.to_string();
 
-        let mut last_activity_ts: Option<DateTime<Utc>> = None;
+        // Create a future that processes a single issue
+        let task = tokio::spawn(async move {
+            debug!("Processing issue #{} for staleness", issue.iid);
 
-        // Start with the issue's own updated_at timestamp
-        match DateTime::parse_from_rfc3339(&issue.updated_at) {
-            Ok(ts) => last_activity_ts = Some(ts.with_timezone(&Utc)),
-            Err(e) => {
-                warn!(
-                    "Failed to parse issue updated_at timestamp for issue #{}: {}. Error: {}",
-                    issue.iid, issue.updated_at, e
-                );
-                // Continue, but this issue might not be accurately processed for staleness
-                // if its own timestamp is the only one or the latest.
-            }
-        }
+            let mut last_activity_ts: Option<DateTime<Utc>> = None;
 
-        // Fetch all notes for the issue (since_timestamp = 0 to get all)
-        let notes = match gitlab_client
-            .get_issue_notes(project_id, issue.iid, 0)
-            .await
-        {
-            Ok(n) => n,
-            Err(e) => {
-                error!(
-                    "Failed to fetch notes for issue #{}: {}. Skipping note processing for this issue.",
-                    issue.iid, e
-                );
-                Vec::new() // Process with no notes if fetching failed
-            }
-        };
-
-        for note in notes {
-            if note.author.username == config.bot_username {
-                continue; // Skip notes from the bot itself
-            }
-            match DateTime::parse_from_rfc3339(&note.updated_at) {
-                Ok(note_ts_rfc3339) => {
-                    let note_ts = note_ts_rfc3339.with_timezone(&Utc);
-                    if let Some(current_max_ts) = last_activity_ts {
-                        if note_ts > current_max_ts {
-                            last_activity_ts = Some(note_ts);
-                        }
-                    } else {
-                        last_activity_ts = Some(note_ts);
-                    }
-                }
+            // Start with the issue's own updated_at timestamp
+            match DateTime::parse_from_rfc3339(&issue.updated_at) {
+                Ok(ts) => last_activity_ts = Some(ts.with_timezone(&Utc)),
                 Err(e) => {
                     warn!(
-                        "Failed to parse note updated_at for note #{} on issue #{}: {}. Error: {}",
-                        note.id, issue.iid, note.updated_at, e
+                        "Failed to parse issue updated_at timestamp for issue #{}: {}. Error: {}",
+                        issue.iid, issue.updated_at, e
                     );
+                    // Continue, but this issue might not be accurately processed for staleness
+                    // if its own timestamp is the only one or the latest.
                 }
             }
-        }
 
-        if let Some(last_active_date) = last_activity_ts {
-            let now = Utc::now();
-            let days_stale = config.stale_issue_days;
-            let staleness_threshold = ChronoDuration::days(days_stale as i64);
-
-            if now - last_active_date > staleness_threshold {
-                // Issue is stale
-                if !issue.labels.iter().any(|l| l == stale_label_name) {
-                    info!(
-                        "Issue #{} is stale and not labeled. Adding '{}' label.",
-                        issue.iid, stale_label_name
+            // Fetch all notes for the issue (since_timestamp = 0 to get all)
+            let notes = match gitlab_client_clone
+                .get_issue_notes(project_id_clone, issue.iid, 0)
+                .await
+            {
+                Ok(n) => n,
+                Err(e) => {
+                    error!(
+                        "Failed to fetch notes for issue #{}: {}. Skipping note processing for this issue.",
+                        issue.iid, e
                     );
-                    if let Err(e) = gitlab_client
-                        .add_issue_label(project_id, issue.iid, stale_label_name)
-                        .await
-                    {
-                        error!(
-                            "Failed to add '{}' label to issue #{}: {}",
-                            stale_label_name, issue.iid, e
+                    Vec::new() // Process with no notes if fetching failed
+                }
+            };
+
+            for note in notes {
+                if note.author.username == config_clone.bot_username {
+                    continue; // Skip notes from the bot itself
+                }
+                match DateTime::parse_from_rfc3339(&note.updated_at) {
+                    Ok(note_ts_rfc3339) => {
+                        let note_ts = note_ts_rfc3339.with_timezone(&Utc);
+                        if let Some(current_max_ts) = last_activity_ts {
+                            if note_ts > current_max_ts {
+                                last_activity_ts = Some(note_ts);
+                            }
+                        } else {
+                            last_activity_ts = Some(note_ts);
+                        }
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Failed to parse note updated_at for note #{} on issue #{}: {}. Error: {}",
+                            note.id, issue.iid, note.updated_at, e
                         );
+                    }
+                }
+            }
+
+            if let Some(last_active_date) = last_activity_ts {
+                let now = Utc::now();
+                let days_stale = config_clone.stale_issue_days;
+                let staleness_threshold = ChronoDuration::days(days_stale as i64);
+
+                if now - last_active_date > staleness_threshold {
+                    // Issue is stale
+                    if !issue.labels.iter().any(|l| l == &stale_label_name_clone) {
+                        info!(
+                            "Issue #{} is stale and not labeled. Adding '{}' label.",
+                            issue.iid, stale_label_name_clone
+                        );
+                        if let Err(e) = gitlab_client_clone
+                            .add_issue_label(project_id_clone, issue.iid, &stale_label_name_clone)
+                            .await
+                        {
+                            error!(
+                                "Failed to add '{}' label to issue #{}: {}",
+                                stale_label_name_clone, issue.iid, e
+                            );
+                        }
+                    }
+                } else {
+                    // Issue is not stale
+                    if issue.labels.iter().any(|l| l == &stale_label_name_clone) {
+                        info!(
+                            "Issue #{} is not stale but has '{}' label. Removing label.",
+                            issue.iid, stale_label_name_clone
+                        );
+                        if let Err(e) = gitlab_client_clone
+                            .remove_issue_label(
+                                project_id_clone,
+                                issue.iid,
+                                &stale_label_name_clone,
+                            )
+                            .await
+                        {
+                            error!(
+                                "Failed to remove '{}' label from issue #{}: {}",
+                                stale_label_name_clone, issue.iid, e
+                            );
+                        }
                     }
                 }
             } else {
-                // Issue is not stale
-                if issue.labels.iter().any(|l| l == stale_label_name) {
-                    info!(
-                        "Issue #{} is not stale but has '{}' label. Removing label.",
-                        issue.iid, stale_label_name
-                    );
-                    if let Err(e) = gitlab_client
-                        .remove_issue_label(project_id, issue.iid, stale_label_name)
-                        .await
-                    {
-                        error!(
-                            "Failed to remove '{}' label from issue #{}: {}",
-                            stale_label_name, issue.iid, e
-                        );
-                    }
-                }
+                warn!(
+                    "Could not determine last activity timestamp for issue #{}. Skipping staleness check.",
+                    issue.iid
+                );
             }
-        } else {
-            warn!(
-                "Could not determine last activity timestamp for issue #{}. Skipping staleness check.",
-                issue.iid
-            );
+        });
+
+        issue_tasks.push(task);
+    }
+
+    // Wait for all issue processing tasks to complete
+    for task in issue_tasks {
+        if let Err(e) = task.await {
+            error!("Task join error for issue staleness processing: {}", e);
         }
     }
+
     Ok(())
 }
 
