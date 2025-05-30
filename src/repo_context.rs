@@ -3,7 +3,7 @@ use crate::gitlab::GitlabApiClient;
 use crate::gitlab::GitlabError;
 use crate::models::{GitlabIssue, GitlabMergeRequest, GitlabProject};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::Deserialize;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
@@ -243,29 +243,34 @@ impl RepoContextExtractor {
         project: &GitlabProject,
         context_repo_path: Option<&str>,
     ) -> Result<String> {
-        // Determine which repository to use for context
-        let repo_path = if let Some(context_path) = context_repo_path {
-            context_path
-        } else {
-            &project.path_with_namespace
-        };
-
         info!(
-            "Extracting context for issue #{} from repo {}",
-            issue.iid, repo_path
+            "Extracting context for issue #{} from main project {} and context repo {:?}",
+            issue.iid, project.path_with_namespace, context_repo_path
         );
-
-        // Get repository files that might be relevant to the issue
-        let relevant_files = self.find_relevant_files_for_issue(issue, repo_path).await?;
 
         // Format the context
         let mut context = String::new();
         let mut total_size = 0;
+        let mut has_any_content = false;
 
         // First add the list of all source files from both projects
-        let source_files = self
+        let source_files = match self
             .get_combined_source_files(project, context_repo_path)
-            .await?;
+            .await
+        {
+            Ok(files) => {
+                has_any_content = true;
+                files
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to get combined source files for issue #{}: {}. Continuing with other context.",
+                    issue.iid, e
+                );
+                Vec::new()
+            }
+        };
+
         if !source_files.is_empty() {
             let files_list = format!(
                 "\n--- All Source Files (up to {} files) ---\n{}\n",
@@ -279,6 +284,7 @@ impl RepoContextExtractor {
         // Add AGENTS.md content if available
         match self.get_agents_md_content(project, context_repo_path).await {
             Ok(Some(agents_md)) => {
+                has_any_content = true;
                 let agents_md_context = format!("\n--- {} ---\n{}\n", AGENTS_MD_FILE, agents_md);
                 if total_size + agents_md_context.len() <= self.settings.max_context_size {
                     context.push_str(&agents_md_context);
@@ -296,31 +302,50 @@ impl RepoContextExtractor {
             }
             Ok(None) => {
                 // AGENTS.md not found, do nothing
+                debug!("AGENTS.md not found for issue #{}", issue.iid);
             }
             Err(e) => {
-                warn!("Failed to fetch AGENTS.md for issue #{}: {}", issue.iid, e);
+                warn!(
+                    "Failed to fetch AGENTS.md for issue #{}: {}. Continuing with other context.",
+                    issue.iid, e
+                );
             }
         }
 
-        // Then add relevant file contents
-        for file in relevant_files {
-            if let Some(content) = file.content {
-                let file_context = format!("\n--- File: {} ---\n{}\n", file.file_path, content);
+        // Get repository files that might be relevant to the issue from both main project and context repo
+        let relevant_files = self
+            .find_relevant_files_from_all_sources(issue, project, context_repo_path)
+            .await;
 
-                // Check if adding this file would exceed our context limit
-                if total_size + file_context.len() > self.settings.max_context_size {
-                    // If we're about to exceed the limit, add a truncation notice
-                    context.push_str("\n[Additional files omitted due to context size limits]\n");
-                    break;
+        if !relevant_files.is_empty() {
+            has_any_content = true;
+            // Then add relevant file contents
+            for file in relevant_files {
+                if let Some(content) = file.content {
+                    let file_context = format!("\n--- File: {} ---\n{}\n", file.file_path, content);
+
+                    // Check if adding this file would exceed our context limit
+                    if total_size + file_context.len() > self.settings.max_context_size {
+                        // If we're about to exceed the limit, add a truncation notice
+                        context
+                            .push_str("\n[Additional files omitted due to context size limits]\n");
+                        break;
+                    }
+
+                    context.push_str(&file_context);
+                    total_size += file_context.len();
                 }
-
-                context.push_str(&file_context);
-                total_size += file_context.len();
             }
+        } else {
+            debug!("No relevant files found for issue #{}", issue.iid);
         }
 
-        if context.is_empty() {
+        if !has_any_content {
             context = "No source files or relevant files found in the repository.".to_string();
+        } else if context.is_empty() {
+            context =
+                "Context gathering completed but no content was added due to size constraints."
+                    .to_string();
         }
 
         Ok(context)
@@ -334,18 +359,33 @@ impl RepoContextExtractor {
         context_repo_path: Option<&str>,
     ) -> Result<(String, String)> {
         info!(
-            "Extracting diff context for MR !{} in {}",
-            mr.iid, project.path_with_namespace
+            "Extracting diff context for MR !{} in {} and context repo {:?}",
+            mr.iid, project.path_with_namespace, context_repo_path
         );
 
         let mut context_for_llm = String::new();
         let mut context_for_comment = String::new();
         let mut total_size = 0;
+        let mut has_any_content = false;
 
         // First add the list of all source files
-        let source_files = self
+        let source_files = match self
             .get_combined_source_files(project, context_repo_path)
-            .await?;
+            .await
+        {
+            Ok(files) => {
+                has_any_content = true;
+                files
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to get combined source files for MR !{}: {}. Continuing with other context.",
+                    mr.iid, e
+                );
+                Vec::new()
+            }
+        };
+
         if !source_files.is_empty() {
             let files_list = format!(
                 "\n--- All Source Files (up to {} files) ---\n{}\n",
@@ -359,6 +399,7 @@ impl RepoContextExtractor {
         // Add AGENTS.md content if available
         match self.get_agents_md_content(project, context_repo_path).await {
             Ok(Some(agents_md)) => {
+                has_any_content = true;
                 let agents_md_context = format!("\n--- {} ---\n{}\n", AGENTS_MD_FILE, agents_md);
                 if total_size + agents_md_context.len() <= self.settings.max_context_size {
                     context_for_llm.push_str(&agents_md_context);
@@ -376,9 +417,13 @@ impl RepoContextExtractor {
             }
             Ok(None) => {
                 // AGENTS.md not found, do nothing
+                debug!("AGENTS.md not found for MR !{}", mr.iid);
             }
             Err(e) => {
-                warn!("Failed to fetch AGENTS.md for MR !{}: {}", mr.iid, e);
+                warn!(
+                    "Failed to fetch AGENTS.md for MR !{}: {}. Continuing with other context.",
+                    mr.iid, e
+                );
             }
         }
 
@@ -414,11 +459,23 @@ impl RepoContextExtractor {
         }
 
         // Then add the diff context and file history
-        let diffs = self
+        let diffs = match self
             .gitlab_client
             .get_merge_request_changes(project.id, mr.iid)
             .await
-            .context("Failed to get merge request changes")?;
+        {
+            Ok(diffs) => {
+                has_any_content = true;
+                diffs
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to get merge request changes for MR !{}: {}. Continuing with other context.",
+                    mr.iid, e
+                );
+                Vec::new()
+            }
+        };
 
         for diff in diffs {
             let mut file_context =
@@ -464,7 +521,10 @@ impl RepoContextExtractor {
                     context_for_comment.push('\n');
                 }
                 Err(e) => {
-                    warn!("Failed to get commit history for {}: {}", diff.new_path, e);
+                    warn!(
+                        "Failed to get commit history for {}: {}. Continuing with other context.",
+                        diff.new_path, e
+                    );
                 }
             }
 
@@ -479,8 +539,12 @@ impl RepoContextExtractor {
             total_size += file_context.len();
         }
 
-        if context_for_llm.is_empty() {
+        if !has_any_content {
             context_for_llm = "No source files or changes found in this merge request.".to_string();
+        } else if context_for_llm.is_empty() {
+            context_for_llm =
+                "Context gathering completed but no content was added due to size constraints."
+                    .to_string();
         }
 
         if context_for_comment.is_empty() {
@@ -497,7 +561,13 @@ impl RepoContextExtractor {
         repo_path: &str,
     ) -> Result<Vec<GitlabFile>> {
         // Get project ID from path
-        let project = self.gitlab_client.get_project_by_path(repo_path).await?;
+        let project = match self.gitlab_client.get_project_by_path(repo_path).await {
+            Ok(project) => project,
+            Err(e) => {
+                warn!("Failed to get project by path {}: {}", repo_path, e);
+                return Err(e.into());
+            }
+        };
 
         // Extract keywords from issue title and description
         let keywords = self.extract_keywords(issue);
@@ -507,7 +577,16 @@ impl RepoContextExtractor {
         );
 
         // Get repository file tree
-        let files = self.gitlab_client.get_repository_tree(project.id).await?;
+        let files = match self.gitlab_client.get_repository_tree(project.id).await {
+            Ok(files) => files,
+            Err(e) => {
+                warn!(
+                    "Failed to get repository tree for project {}: {}",
+                    project.id, e
+                );
+                return Err(e.into());
+            }
+        };
 
         // Score files based on relevance to keywords
         let mut scored_files = Vec::new();
@@ -542,6 +621,62 @@ impl RepoContextExtractor {
         }
 
         Ok(files_with_content)
+    }
+
+    // Find relevant files from both main project and context repo if provided
+    async fn find_relevant_files_from_all_sources(
+        &self,
+        issue: &GitlabIssue,
+        project: &GitlabProject,
+        context_repo_path: Option<&str>,
+    ) -> Vec<GitlabFile> {
+        let mut all_relevant_files = Vec::new();
+
+        // First try to get files from the main project
+        match self
+            .find_relevant_files_for_issue(issue, &project.path_with_namespace)
+            .await
+        {
+            Ok(files) => {
+                debug!(
+                    "Found {} relevant files in main project {}",
+                    files.len(),
+                    project.path_with_namespace
+                );
+                all_relevant_files.extend(files);
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to find relevant files in main project {}: {}. Will try context repo if available.",
+                    project.path_with_namespace, e
+                );
+            }
+        }
+
+        // If context repo is provided, also get files from there
+        if let Some(context_path) = context_repo_path {
+            match self
+                .find_relevant_files_for_issue(issue, context_path)
+                .await
+            {
+                Ok(files) => {
+                    debug!(
+                        "Found {} relevant files in context repo {}",
+                        files.len(),
+                        context_path
+                    );
+                    all_relevant_files.extend(files);
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to find relevant files in context repo {}: {}",
+                        context_path, e
+                    );
+                }
+            }
+        }
+
+        all_relevant_files
     }
 
     /// Extract keywords from issue title and description
@@ -852,27 +987,13 @@ mod tests {
         let issue = create_mock_issue(101, project.id);
         let agents_md_content = "This is the AGENTS.md content from main_repo.";
 
-        // Mock get_repository_tree for the second call (by find_relevant_files_for_issue for the project)
-        // Defined first so LIFO matching picks the src_files mock for the first call.
-        let _m_repo_tree_relevant_files = server
-            .mock(
-                "GET",
-                "/api/v4/projects/1/repository/tree?recursive=true&per_page=100",
-            )
-            .with_status(200)
-            .with_header("content-type", "application/json")
-            .with_body(serde_json::json!([]).to_string()) // No relevant files found for this call
-            .expect(1) // Crucial: this mock is for the second call
-            .create_async()
-            .await;
-
         // Mock get_repository_tree for the first call (by get_combined_source_files)
         let _m_repo_tree_src_files = server
             .mock("GET", "/api/v4/projects/1/repository/tree?recursive=true&per_page=100")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(serde_json::json!([{"id": "1", "name": "main.rs", "type": "blob", "path": "src/main.rs", "mode": "100644"}]).to_string())
-            .expect(1) // Crucial: this mock is for the first call
+            .expect(2) // Called twice: once for get_combined_source_files and once for find_relevant_files_for_issue
             .create_async()
             .await;
 
@@ -904,7 +1025,7 @@ mod tests {
             .create_async()
             .await;
 
-        // 1. Mock get_project_by_path (called by find_relevant_files_for_issue)
+        // Mock get_project_by_path (called by find_relevant_files_for_issue)
         let _m_get_project_for_relevant_files = server
             .mock(
                 "GET",
@@ -913,12 +1034,9 @@ mod tests {
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(serde_json::json!(project).to_string()) // returns the same project
+            .expect(1) // Called once by find_relevant_files_for_issue
             .create_async()
             .await;
-
-        // Note: find_relevant_files_for_issue also calls get_file_content for each "relevant" file.
-        // Since _m_repo_tree_relevant_files (which is consumed by the second repo tree call) returns no files,
-        // no further mocks for get_file_content are needed here for find_relevant_files_for_issue.
 
         let context = extractor
             .extract_context_for_issue(&issue, &project, None)
