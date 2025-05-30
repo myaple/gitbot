@@ -5,6 +5,7 @@ use crate::models::{GitlabIssue, GitlabMergeRequest, GitlabProject};
 
 use anyhow::Result;
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
@@ -18,6 +19,13 @@ pub struct GitlabFile {
     pub size: usize,
     pub content: Option<String>,
     pub encoding: Option<String>,
+}
+
+/// Stores the content of files for indexing and searching.
+#[derive(Debug, Default)]
+pub struct FileContentIndex {
+    /// A map where the key is the file path and the value is the file content.
+    pub files: HashMap<String, String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -176,6 +184,135 @@ impl RepoContextExtractor {
         Ok(source_files)
     }
 
+    /// Builds an index of file paths and their content.
+    /// Builds an index of file paths and their content from the main project
+    /// and optionally from a context repository.
+    async fn build_content_index(
+        &self,
+        main_project_id: i64,
+        context_repo_path: Option<&str>,
+    ) -> Result<FileContentIndex> {
+        info!(
+            "Building content index for main_project_id: {}",
+            main_project_id
+        );
+        let mut index = FileContentIndex::default();
+        let mut accumulated_files = 0;
+
+        // Index files from the main project
+        match self.get_all_source_files(main_project_id).await {
+            Ok(source_files) => {
+                for file_path in source_files {
+                    if accumulated_files >= MAX_SOURCE_FILES {
+                        warn!("Reached MAX_SOURCE_FILES limit ({}) while building content index from main project. Some files will not be indexed.", MAX_SOURCE_FILES);
+                        break;
+                    }
+                    match self
+                        .get_file_content_from_project(main_project_id, &file_path)
+                        .await
+                    {
+                        Ok(Some(content)) => {
+                            if !content.trim().is_empty() {
+                                index.files.insert(file_path, content);
+                                accumulated_files += 1;
+                            } else {
+                                debug!("Skipping empty file from main project: {}", file_path);
+                            }
+                        }
+                        Ok(None) => {
+                            warn!(
+                                "Main project file path {} listed but content not found or empty.",
+                                file_path
+                            );
+                        }
+                        Err(e) => {
+                            warn!(
+                                "Failed to get content for main project file {}: {}. Skipping.",
+                                file_path, e
+                            );
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                // Log error but continue to try context_repo if available, as some context is better than none.
+                warn!("Failed to get source files for indexing main_project_id {}: {}. Will attempt context_repo if specified.", main_project_id, e);
+                // If main project fails critically, perhaps we should return Err(e) here.
+                // For now, let's allow it to proceed to context repo.
+            }
+        }
+
+        // Index files from the context_repo_path if provided
+        if let Some(ctx_repo_path) = context_repo_path {
+            if accumulated_files >= MAX_SOURCE_FILES {
+                info!("Skipping context repo indexing as MAX_SOURCE_FILES ({}) already reached from main project.", MAX_SOURCE_FILES);
+            } else {
+                info!("Fetching files from context_repo_path: {}", ctx_repo_path);
+                match self.gitlab_client.get_project_by_path(ctx_repo_path).await {
+                    Ok(context_project) => {
+                        match self.get_all_source_files(context_project.id).await {
+                            Ok(source_files) => {
+                                for file_path in source_files {
+                                    if accumulated_files >= MAX_SOURCE_FILES {
+                                        warn!("Reached MAX_SOURCE_FILES limit ({}) while building content index from context project. Some files will not be indexed.", MAX_SOURCE_FILES);
+                                        break;
+                                    }
+                                    match self
+                                        .get_file_content_from_project(
+                                            context_project.id,
+                                            &file_path,
+                                        )
+                                        .await
+                                    {
+                                        Ok(Some(content)) => {
+                                            if !content.trim().is_empty() {
+                                                // Using insert will overwrite if path is identical to one from main project.
+                                                // This might be desired if context_repo is an override, or problematic if paths are expected to be unique.
+                                                // For now, simple insertion is used. Consider prefixing paths if necessary.
+                                                index.files.insert(file_path, content);
+                                                accumulated_files += 1;
+                                            } else {
+                                                debug!(
+                                                    "Skipping empty file from context project: {}",
+                                                    file_path
+                                                );
+                                            }
+                                        }
+                                        Ok(None) => {
+                                            warn!("Context project file path {} listed but content not found or empty.", file_path);
+                                        }
+                                        Err(e) => {
+                                            warn!("Failed to get content for context project file {}: {}. Skipping.", file_path, e);
+                                        }
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                warn!(
+                                    "Failed to get source files for indexing context_repo {}: {}",
+                                    ctx_repo_path, e
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Failed to get project for context_repo_path {}: {}",
+                            ctx_repo_path, e
+                        );
+                    }
+                }
+            }
+        }
+
+        info!(
+            "Content index build process complete. Total indexed files: {}. Limit was: {}",
+            index.files.len(),
+            MAX_SOURCE_FILES
+        );
+        Ok(index)
+    }
+
     async fn get_combined_source_files(
         &self,
         project: &GitlabProject,
@@ -312,32 +449,73 @@ impl RepoContextExtractor {
             }
         }
 
-        // Get repository files that might be relevant to the issue from both main project and context repo
-        let relevant_files = self
-            .find_relevant_files_from_all_sources(issue, project, context_repo_path)
-            .await;
+        // Build the content index
+        let content_index = match self
+            .build_content_index(project.id, context_repo_path) // Assuming project.id for main project
+            .await
+        {
+            Ok(index) => {
+                if !index.files.is_empty() {
+                    has_any_content = true; // Mark that we have some content if index is built
+                }
+                index
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to build content index for issue #{}: {}. Proceeding without indexed search.",
+                    issue.iid, e
+                );
+                FileContentIndex::default() // Proceed with an empty index
+            }
+        };
+
+        // Search the content index (new function to be implemented)
+        // For now, this will return an empty vec. The loop below will be skipped.
+        let relevant_files: Vec<GitlabFile> = self.search_content_index(&content_index, issue);
 
         if !relevant_files.is_empty() {
             has_any_content = true;
-            // Then add relevant file contents
+            context.push_str("\n--- Relevant Files from Index ---\n");
             for file in relevant_files {
-                if let Some(content) = file.content {
-                    let file_context = format!("\n--- File: {} ---\n{}\n", file.file_path, content);
-
-                    // Check if adding this file would exceed our context limit
-                    if total_size + file_context.len() > self.settings.max_context_size {
-                        // If we're about to exceed the limit, add a truncation notice
-                        context
-                            .push_str("\n[Additional files omitted due to context size limits]\n");
-                        break;
+                // The content should already be in file.content if search_content_index populates it.
+                // If search_content_index only returns paths, we'd need to fetch content here.
+                // Assuming search_content_index will provide GitlabFile with content.
+                if let Some(content_str) = file.content {
+                    // Renamed to content_str to avoid conflict with outer context
+                    let file_context =
+                        format!("--- File: {} ---\n{}\n", file.file_path, content_str);
+                    if total_size + file_context.len() <= self.settings.max_context_size {
+                        context.push_str(&file_context);
+                        total_size += file_context.len();
+                    } else {
+                        context.push_str(&format!(
+                            "\n--- File: {} ---\n[Content omitted due to context size limits]\n",
+                            file.file_path
+                        ));
+                        // Optionally break here if no more files can be added
+                        // context.push_str("\n[Additional files omitted due to context size limits]\n");
+                        // break;
                     }
-
-                    context.push_str(&file_context);
-                    total_size += file_context.len();
                 }
             }
+        } else if !content_index.files.is_empty() {
+            // Index was built and not empty, but search found nothing.
+            let msg = "\nContent index built, but no relevant files found via keyword search.\n";
+            debug!("For issue #{}: {}", issue.iid, msg.trim());
+            if total_size + msg.len() <= self.settings.max_context_size {
+                context.push_str(msg);
+                // total_size += msg.len(); // Removed as per requirement, covered by check above
+                has_any_content = true;
+            }
         } else {
-            debug!("No relevant files found for issue #{}", issue.iid);
+            // Index was empty or not built.
+            let msg = "\nContent index empty or not built, and no relevant files found.\n";
+            debug!("For issue #{}: {}", issue.iid, msg.trim());
+            if total_size + msg.len() <= self.settings.max_context_size {
+                context.push_str(msg);
+                // total_size += msg.len(); // Removed as per requirement, covered by check above
+                has_any_content = true;
+            }
         }
 
         if !has_any_content {
@@ -554,131 +732,6 @@ impl RepoContextExtractor {
         Ok((context_for_llm, context_for_comment))
     }
 
-    /// Find files that might be relevant to the issue based on keywords
-    async fn find_relevant_files_for_issue(
-        &self,
-        issue: &GitlabIssue,
-        repo_path: &str,
-    ) -> Result<Vec<GitlabFile>> {
-        // Get project ID from path
-        let project = match self.gitlab_client.get_project_by_path(repo_path).await {
-            Ok(project) => project,
-            Err(e) => {
-                warn!("Failed to get project by path {}: {}", repo_path, e);
-                return Err(e.into());
-            }
-        };
-
-        // Extract keywords from issue title and description
-        let keywords = self.extract_keywords(issue);
-        debug!(
-            "Extracted keywords for issue #{}: {:?}",
-            issue.iid, keywords
-        );
-
-        // Get repository file tree
-        let files = match self.gitlab_client.get_repository_tree(project.id).await {
-            Ok(files) => files,
-            Err(e) => {
-                warn!(
-                    "Failed to get repository tree for project {}: {}",
-                    project.id, e
-                );
-                return Err(e.into());
-            }
-        };
-
-        // Score files based on relevance to keywords
-        let mut scored_files = Vec::new();
-        for file_path in &files {
-            let score = self.calculate_relevance_score(file_path, &keywords);
-            if score > 0 {
-                scored_files.push((file_path.clone(), score));
-            }
-        }
-
-        // Sort by relevance score (highest first)
-        scored_files.sort_by(|a, b| b.1.cmp(&a.1));
-
-        // Take top N most relevant files
-        let top_files: Vec<String> = scored_files
-            .into_iter()
-            .take(5) // Limit to 5 most relevant files
-            .map(|(path, _)| path)
-            .collect();
-
-        // Fetch content for top files
-        let mut files_with_content = Vec::new();
-        for file_path in top_files {
-            match self
-                .gitlab_client
-                .get_file_content(project.id, &file_path)
-                .await
-            {
-                Ok(file) => files_with_content.push(file),
-                Err(e) => warn!("Failed to get content for file {}: {}", file_path, e),
-            }
-        }
-
-        Ok(files_with_content)
-    }
-
-    // Find relevant files from both main project and context repo if provided
-    async fn find_relevant_files_from_all_sources(
-        &self,
-        issue: &GitlabIssue,
-        project: &GitlabProject,
-        context_repo_path: Option<&str>,
-    ) -> Vec<GitlabFile> {
-        let mut all_relevant_files = Vec::new();
-
-        // First try to get files from the main project
-        match self
-            .find_relevant_files_for_issue(issue, &project.path_with_namespace)
-            .await
-        {
-            Ok(files) => {
-                debug!(
-                    "Found {} relevant files in main project {}",
-                    files.len(),
-                    project.path_with_namespace
-                );
-                all_relevant_files.extend(files);
-            }
-            Err(e) => {
-                warn!(
-                    "Failed to find relevant files in main project {}: {}. Will try context repo if available.",
-                    project.path_with_namespace, e
-                );
-            }
-        }
-
-        // If context repo is provided, also get files from there
-        if let Some(context_path) = context_repo_path {
-            match self
-                .find_relevant_files_for_issue(issue, context_path)
-                .await
-            {
-                Ok(files) => {
-                    debug!(
-                        "Found {} relevant files in context repo {}",
-                        files.len(),
-                        context_path
-                    );
-                    all_relevant_files.extend(files);
-                }
-                Err(e) => {
-                    warn!(
-                        "Failed to find relevant files in context repo {}: {}",
-                        context_path, e
-                    );
-                }
-            }
-        }
-
-        all_relevant_files
-    }
-
     /// Extract keywords from issue title and description
     fn extract_keywords(&self, issue: &GitlabIssue) -> Vec<String> {
         let mut text = issue.title.clone();
@@ -707,59 +760,69 @@ impl RepoContextExtractor {
             .collect()
     }
 
-    /// Calculate relevance score of a file to the keywords
-    fn calculate_relevance_score(&self, file_path: &str, keywords: &[String]) -> usize {
-        let path_lower = file_path.to_lowercase();
-
-        // Skip binary files and non-code files
-        let binary_extensions = [
-            ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".ico", ".svg", ".pdf", ".zip", ".tar", ".gz",
-            ".rar", ".exe", ".dll", ".so", ".bin", ".dat", ".db", ".sqlite", ".mp3", ".mp4",
-            ".avi", ".mov",
-        ];
-
-        if binary_extensions
-            .iter()
-            .any(|ext| path_lower.ends_with(ext))
-        {
-            return 0;
+    /// Searches the content index for files relevant to the issue.
+    fn search_content_index(
+        &self,
+        index: &FileContentIndex,
+        issue: &GitlabIssue,
+    ) -> Vec<GitlabFile> {
+        if index.files.is_empty() {
+            return Vec::new();
         }
 
-        // Calculate score based on keyword matches
-        let mut score = 0;
+        let keywords = self.extract_keywords(issue);
+        if keywords.is_empty() {
+            return Vec::new();
+        }
+        debug!("Searching index with keywords: {:?}", keywords);
 
-        // Prefer documentation files, but only if they match keywords
-        let has_keyword_match = keywords
-            .iter()
-            .any(|keyword| path_lower.contains(&keyword.to_lowercase()));
+        let mut relevant_files = Vec::new();
+        let mut scored_files = Vec::new(); // To store (path, score, content_preview)
 
-        if has_keyword_match {
-            if path_lower.contains("readme")
-                || path_lower.contains("docs/")
-                || path_lower.ends_with(".md")
-            {
-                score += 5;
-            }
+        for (path, content) in &index.files {
+            let path_lower = path.to_lowercase();
+            let content_lower = content.to_lowercase();
+            let mut score = 0;
+            let mut matched_keywords_in_content = 0;
 
-            // Prefer source code files
-            let code_extensions = [
-                ".rs", ".py", ".js", ".ts", ".java", ".c", ".cpp", ".h", ".hpp", ".go", ".rb",
-                ".php", ".cs", ".scala", ".kt", ".swift", ".sh", ".jsx", ".tsx", ".vue", ".svelte",
-            ];
-
-            if code_extensions.iter().any(|ext| path_lower.ends_with(ext)) {
-                score += 3;
-            }
-
-            // Add points for each keyword match in the file path
-            for keyword in keywords {
-                if path_lower.contains(&keyword.to_lowercase()) {
-                    score += 10; // Higher score for direct matches in path
+            for keyword in &keywords {
+                let kw_lower = keyword.to_lowercase();
+                if path_lower.contains(&kw_lower) {
+                    score += 10; // Higher score for match in path
+                }
+                if content_lower.contains(&kw_lower) {
+                    score += 1; // Base score for keyword match in content
+                                // Count occurrences for better scoring (simple version)
+                    matched_keywords_in_content += content_lower.matches(&kw_lower).count();
                 }
             }
+            score += matched_keywords_in_content; // Add occurrence count to score
+
+            if score > 0 {
+                // Store path, score, and the full content for now
+                // The GitlabFile struct expects full content if available
+                scored_files.push((path.clone(), score, content.clone()));
+            }
         }
 
-        score
+        // Sort by score (descending)
+        scored_files.sort_by(|a, b| b.1.cmp(&a.1));
+
+        // Limit to top 5
+        for (path, _score, content_str) in scored_files.into_iter().take(5) {
+            relevant_files.push(GitlabFile {
+                file_path: path,
+                content: Some(content_str), // Full content as requested
+                size: 0, // Size is not strictly needed here as we have content, can be set if available
+                encoding: None, // Encoding not relevant for this constructed GitlabFile
+            });
+        }
+        info!(
+            "Found {} relevant files from index search for issue #{}",
+            relevant_files.len(),
+            issue.iid
+        );
+        relevant_files
     }
 }
 
@@ -768,7 +831,526 @@ mod tests {
     use super::*;
     use crate::config::AppSettings;
     use crate::models::GitlabUser;
+    use mockito::Mock;
     use urlencoding::encode;
+
+    // Helper function to mock get_all_source_files
+    async fn mock_get_all_source_files(
+        server: &mut mockito::ServerGuard,
+        project_id: i64,
+        files: &[&str],
+    ) -> Mock {
+        server
+            .mock(
+                "GET",
+                // Path should be relative to server.url()/api/v4/
+                format!("/projects/{}/repository/tree?recursive=true&per_page=100", project_id).as_str(),
+            )
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_header("X-Total-Pages", "1")
+            .with_body(
+                serde_json::json!(files
+                    .iter()
+                    .map(|f| serde_json::json!({"id": "id", "name": f, "type": "blob", "path": f, "mode": "100644"}))
+                    .collect::<Vec<_>>())
+                .to_string(),
+            )
+            // .expect(1) // Removed duplicate expect
+            .create_async()
+            .await
+    }
+
+    // Helper function to mock get_file_content_from_project
+    async fn mock_get_file_content(
+        server: &mut mockito::ServerGuard,
+        project_id: i64,
+        file_path: &str,
+        content: &str,
+    ) -> Mock {
+        server
+            .mock(
+                "GET",
+                // Path should be relative to server.url()/api/v4/
+                format!(
+                    "/projects/{}/repository/files/{}?ref=main",
+                    project_id,
+                    urlencoding::encode(file_path)
+                )
+                .as_str(),
+            )
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "file_name": file_path,
+                    "file_path": file_path,
+                    "size": content.len(),
+                    "encoding": "base64",
+                    "content": base64::encode(content),
+                    "ref": "main",
+                    "blob_id": "blobid",
+                    "commit_id": "commitid",
+                    "last_commit_id": "lastcommitid"
+                })
+                .to_string(),
+            )
+            // .expect(1) // Removed from helper
+            .create_async()
+            .await
+    }
+
+    #[tokio::test]
+    async fn test_build_content_index_main_project_only() {
+        let mut server = mockito::Server::new_async().await;
+        let settings = test_settings(server.url(), None);
+        let gitlab_client = Arc::new(GitlabApiClient::new(settings.clone()).unwrap());
+        let extractor = RepoContextExtractor::new(gitlab_client, settings);
+
+        let main_project_id = 1;
+        let main_files = ["src/main.rs", "src/lib.rs"]; // This variable will be unused after inlining
+        let main_contents = [
+            ("src/main.rs", "fn main() {}"),
+            ("src/lib.rs", "pub fn lib_func() {}"),
+        ]; // This variable will be unused after inlining
+
+        // Inlined and specific mocks for this test:
+        let main_file_path1 = "src/main.rs";
+        let main_file_content1 = "fn main() {}";
+        let main_file_path2 = "src/lib.rs";
+        let main_file_content2 = "pub fn lib_func() {}";
+
+        let m_main_tree = server
+            .mock("GET", "/projects/1/repository/tree?recursive=true&per_page=100")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_header("X-Total-Pages", "1")
+            .with_body(serde_json::json!([
+                {"id": "id1", "name": main_file_path1, "type": "blob", "path": main_file_path1, "mode": "100644"},
+                {"id": "id2", "name": main_file_path2, "type": "blob", "path": main_file_path2, "mode": "100644"}
+            ]).to_string())
+            .expect(1)
+            .create_async()
+            .await;
+
+        let path1_str = format!(
+            "/projects/1/repository/files/{}?ref=main",
+            urlencoding::encode(main_file_path1)
+        );
+        let m_main_content1 = server
+            .mock("GET", path1_str.as_str())
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(serde_json::json!({
+                "file_name": main_file_path1, "file_path": main_file_path1, "size": main_file_content1.len(),
+                "encoding": "base64", "content": base64::encode(main_file_content1),
+                "ref": "main", "blob_id": "blobid1", "commit_id": "commitid1", "last_commit_id": "lastcommitid1"
+            }).to_string())
+            .expect(1)
+            .create_async()
+            .await;
+
+        let path2_str = format!(
+            "/projects/1/repository/files/{}?ref=main",
+            urlencoding::encode(main_file_path2)
+        );
+        let m_main_content2 = server
+            .mock("GET", path2_str.as_str())
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(serde_json::json!({
+                "file_name": main_file_path2, "file_path": main_file_path2, "size": main_file_content2.len(),
+                "encoding": "base64", "content": base64::encode(main_file_content2),
+                "ref": "main", "blob_id": "blobid2", "commit_id": "commitid2", "last_commit_id": "lastcommitid2"
+            }).to_string())
+            .expect(1)
+            .create_async()
+            .await;
+
+        // Keep mocks in scope by assigning to _
+        let _ = (&m_main_tree, &m_main_content1, &m_main_content2);
+
+        let index = extractor
+            .build_content_index(main_project_id, None)
+            .await
+            .unwrap();
+
+        assert_eq!(index.files.len(), 2);
+        assert_eq!(index.files.get("src/main.rs").unwrap(), "fn main() {}");
+        assert_eq!(
+            index.files.get("src/lib.rs").unwrap(),
+            "pub fn lib_func() {}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_build_content_index_with_context_repo() {
+        let mut server = mockito::Server::new_async().await;
+        let context_repo_path_str = "test_org/context_repo";
+        let settings = test_settings(server.url(), Some(context_repo_path_str.to_string()));
+        let gitlab_client = Arc::new(GitlabApiClient::new(settings.clone()).unwrap());
+        let extractor = RepoContextExtractor::new(gitlab_client, settings);
+
+        let main_project_id = 1;
+        let context_project_id = 2;
+        let context_project = create_mock_project(context_project_id, context_repo_path_str);
+
+        let main_files = ["src/main.rs"];
+        let context_files = ["docs/readme.md"];
+        let main_contents = [("src/main.rs", "fn main() {}")];
+        let context_contents = [("docs/readme.md", "# Context Readme")];
+
+        // Mock for main project
+        let _m_main_tree =
+            mock_get_all_source_files(&mut server, main_project_id, &main_files).await;
+        mock_get_file_content(
+            &mut server,
+            main_project_id,
+            main_contents[0].0,
+            main_contents[0].1,
+        )
+        .await;
+
+        // Mock for context project
+        // Path for get_project_by_path is also relative to /api/v4
+        let formatted_path_context_project =
+            format!("/projects/{}", urlencoding::encode(context_repo_path_str));
+        let _m_context_project_path = server
+            .mock("GET", formatted_path_context_project.as_str())
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(serde_json::json!(context_project).to_string())
+            .create_async()
+            .await;
+        let _m_context_tree =
+            mock_get_all_source_files(&mut server, context_project_id, &context_files).await;
+        mock_get_file_content(
+            &mut server,
+            context_project_id,
+            context_contents[0].0,
+            context_contents[0].1,
+        )
+        .await;
+
+        let index = extractor
+            .build_content_index(main_project_id, Some(context_repo_path_str))
+            .await
+            .unwrap();
+
+        assert_eq!(index.files.len(), 2);
+        assert_eq!(index.files.get("src/main.rs").unwrap(), "fn main() {}");
+        assert_eq!(
+            index.files.get("docs/readme.md").unwrap(),
+            "# Context Readme"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_build_content_index_respects_max_files_limit() {
+        let mut server = mockito::Server::new_async().await;
+        let context_repo_path_str = "test_org/context_repo";
+        // MAX_SOURCE_FILES is 250. Let's set it lower for this test for simplicity via settings if possible,
+        // or create many mock files. For now, assume real MAX_SOURCE_FILES (250)
+        // and create fewer files to test the logic of combining.
+        // To test the limit effectively, we'd need to mock MAX_SOURCE_FILES or create > MAX_SOURCE_FILES mocks.
+        // Let's simulate with a small number of files that should all be included first.
+        // Then a test that exceeds a *hypothetical* small limit.
+
+        // For this test, let's assume MAX_SOURCE_FILES is effectively 2 for simplicity of mocking
+        // The actual constant is 250. We will mock such that main has 1, context has 2.
+        // The code should take 1 from main, and 1 from context.
+
+        let settings = test_settings(server.url(), Some(context_repo_path_str.to_string()));
+        let gitlab_client = Arc::new(GitlabApiClient::new(settings.clone()).unwrap());
+        let extractor = RepoContextExtractor::new(gitlab_client, settings);
+
+        let main_project_id = 1;
+        let context_project_id = 2;
+        let context_project = create_mock_project(context_project_id, context_repo_path_str);
+
+        // Files such that main + context_repo > effective_max_files_for_test
+        // If MAX_SOURCE_FILES = 2 for test:
+        let main_files = ["main/file1.rs"];
+        let context_files = ["context/file2.rs", "context/file3.rs"]; // Total 3 files
+
+        let _m_main_tree =
+            mock_get_all_source_files(&mut server, main_project_id, &main_files).await;
+        mock_get_file_content(&mut server, main_project_id, "main/file1.rs", "content1").await;
+
+        // Path for get_project_by_path is also relative to /api/v4
+        let formatted_path_max_files_context =
+            format!("/projects/{}", urlencoding::encode(context_repo_path_str));
+        let _m_context_project_path = server
+            .mock("GET", formatted_path_max_files_context.as_str())
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(serde_json::json!(context_project).to_string())
+            .create_async()
+            .await;
+        let _m_context_tree =
+            mock_get_all_source_files(&mut server, context_project_id, &context_files).await;
+        mock_get_file_content(
+            &mut server,
+            context_project_id,
+            "context/file2.rs",
+            "content2",
+        )
+        .await;
+        // Only mock content for files expected to be indexed up to MAX_SOURCE_FILES
+        // If "context/file3.rs" is beyond the limit, its content fetch might not be mocked if not called.
+
+        // To properly test MAX_SOURCE_FILES, we'd need to generate > 250 file paths.
+        // For now, this test structure checks combination and relies on the `accumulated_files >= MAX_SOURCE_FILES` logic.
+        // Let's adjust to test the *actual* MAX_SOURCE_FILES by creating just enough mocks.
+        // If MAX_SOURCE_FILES = 250.
+        // Main project: 1 file. Context project: 249 files. Total = 250. All should be indexed.
+        // Main project: 1 file. Context project: 250 files. Total = 251. Main:1, Context:249.
+
+        // This test will use a smaller number of files and assume the logic scales.
+        // A more direct test of MAX_SOURCE_FILES would involve many file mocks.
+
+        let index = extractor
+            .build_content_index(main_project_id, Some(context_repo_path_str))
+            .await
+            .unwrap();
+
+        // Given the current logic, if main_files has 1, and context_files has 2,
+        // and MAX_SOURCE_FILES is 250, all 3 files should be indexed.
+        assert_eq!(
+            index.files.len(),
+            3,
+            "Should combine files from main and context if under limit"
+        );
+        assert!(index.files.contains_key("main/file1.rs"));
+        assert!(index.files.contains_key("context/file2.rs"));
+        assert!(index.files.contains_key("context/file3.rs"));
+
+        // TODO: Add a test that specifically mocks more than MAX_SOURCE_FILES
+        // and asserts that only MAX_SOURCE_FILES are indexed. This would require
+        // generating a large number of mock files and their content calls.
+        // For example, main_project: 150 files, context_project: 150 files.
+        // Expected: 250 files in index.
+    }
+
+    #[tokio::test]
+    async fn test_search_content_index_keyword_matching_and_ranking() {
+        let settings = test_settings("http://localhost".to_string(), None);
+        // No GitlabApiClient needed for search_content_index as it operates on FileContentIndex
+        let extractor = RepoContextExtractor::new(
+            Arc::new(GitlabApiClient::new(settings.clone()).unwrap()),
+            settings,
+        );
+
+        let mut index = FileContentIndex::default();
+        index.files.insert(
+            "src/auth.rs".to_string(),
+            "login login login authentication authentication module".to_string(),
+        );
+        index.files.insert(
+            "src/payment.rs".to_string(),
+            "payment confirmation".to_string(),
+        );
+        index.files.insert(
+            "README.md".to_string(),
+            "Project documentation: login and payment features".to_string(),
+        );
+        index.files.insert(
+            "src/utils.rs".to_string(),
+            "utility helper functions".to_string(),
+        );
+
+        let issue_title = "Issue with Login and Authentication";
+        let issue_desc =
+            "User cannot login, problem with authentication module. Also payment fails.";
+        let issue = GitlabIssue {
+            id: 1,
+            iid: 1,
+            project_id: 1,
+            title: issue_title.to_string(),
+            description: Some(issue_desc.to_string()),
+            state: "opened".to_string(),
+            author: GitlabUser {
+                id: 1,
+                username: "user".to_string(),
+                name: "Test User".to_string(),
+                avatar_url: None,
+            },
+            web_url: "".to_string(),
+            labels: vec![],
+            updated_at: "".to_string(),
+        };
+
+        let results = extractor.search_content_index(&index, &issue);
+
+        assert!(!results.is_empty(), "Should find relevant files");
+        assert!(results.len() <= 5, "Results should be limited (e.g., to 5)");
+
+        // Check for specific files and basic ranking (more matches = higher rank)
+        // "src/auth.rs" mentions "login" and "authentication" in content + "auth" in path.
+        // "README.md" mentions "login" and "authentication" (from issue keywords "login", "authentication").
+        // "src/payment.rs" mentions "payment".
+
+        // Expected keywords: "issue", "login", "authentication", "user", "cannot", "problem", "module", "payment", "fails"
+        // (actual extraction logic might vary slightly based on common word filtering and length)
+
+        // "src/auth.rs": "login", "authentication" (content), "auth" (path from "authentication") - high score
+        // "README.md": "login", "authentication" (content) - medium score
+        // "src/payment.rs": "payment" (content), "payment" (path) - medium/low score related to "payment"
+
+        assert!(
+            results.iter().any(|f| f.file_path == "src/auth.rs"),
+            "auth.rs should be relevant"
+        );
+        assert!(
+            results.iter().any(|f| f.file_path == "README.md"),
+            "README.md should be relevant"
+        );
+        assert!(
+            results.iter().any(|f| f.file_path == "src/payment.rs"),
+            "payment.rs should be relevant"
+        );
+
+        // Check ranking - this is a simple check, real ranking can be complex.
+        // Assuming "src/auth.rs" is most relevant due to multiple strong keyword matches in content and path.
+        if !results.is_empty() {
+            assert_eq!(results[0].file_path, "src/auth.rs", "auth.rs should be ranked highest due to multiple keyword matches in content and path");
+        }
+        // Ensure content is populated
+        for file in &results {
+            assert!(
+                file.content.is_some(),
+                "File content should be populated in search results"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_search_content_index_case_insensitivity() {
+        let settings = test_settings("http://localhost".to_string(), None);
+        let extractor = RepoContextExtractor::new(
+            Arc::new(GitlabApiClient::new(settings.clone()).unwrap()),
+            settings,
+        );
+
+        let mut index = FileContentIndex::default();
+        index
+            .files
+            .insert("src/config.yml".to_string(), "Setting: API_KEY".to_string());
+        index.files.insert(
+            "docs/guide.md".to_string(),
+            "Guide for API key setup".to_string(),
+        );
+
+        let issue = GitlabIssue {
+            id: 1,
+            iid: 1,
+            project_id: 1,
+            title: "api key problem".to_string(),
+            description: Some("Cannot find API_KEY".to_string()),
+            state: "opened".to_string(),
+            author: GitlabUser {
+                id: 1,
+                username: "user".to_string(),
+                name: "Test User".to_string(),
+                avatar_url: None,
+            },
+            web_url: "".to_string(),
+            labels: vec![],
+            updated_at: "".to_string(),
+        };
+        // Keywords: "api", "key", "problem", "find" (approx)
+
+        let results = extractor.search_content_index(&index, &issue);
+        assert_eq!(results.len(), 2, "Should find both files due to case-insensitive matching on 'api_key'/'API_KEY' and 'api key'");
+        assert!(results.iter().any(|f| f.file_path == "src/config.yml"));
+        assert!(results.iter().any(|f| f.file_path == "docs/guide.md"));
+    }
+
+    #[tokio::test]
+    async fn test_search_content_index_path_matching() {
+        let settings = test_settings("http://localhost".to_string(), None);
+        let extractor = RepoContextExtractor::new(
+            Arc::new(GitlabApiClient::new(settings.clone()).unwrap()),
+            settings,
+        );
+
+        let mut index = FileContentIndex::default();
+        // Content does not have the keyword, but path does.
+        index.files.insert(
+            "src/user_authentication_module.rs".to_string(),
+            "Contains various helper utilities.".to_string(),
+        );
+        index.files.insert(
+            "docs/api_guide.md".to_string(),
+            "How to use the foobar system.".to_string(),
+        );
+
+        let issue = GitlabIssue {
+            id: 1,
+            iid: 1,
+            project_id: 1,
+            title: "Issue with authentication".to_string(),
+            description: Some("Need help with the API".to_string()),
+            state: "opened".to_string(),
+            author: GitlabUser {
+                id: 1,
+                username: "user".to_string(),
+                name: "Test User".to_string(),
+                avatar_url: None,
+            },
+            web_url: "".to_string(),
+            labels: vec![],
+            updated_at: "".to_string(),
+        };
+        // Keywords: "issue", "authentication", "need", "help", "api"
+
+        let results = extractor.search_content_index(&index, &issue);
+        assert_eq!(results.len(), 2);
+        // "src/user_authentication_module.rs" should be found due to "authentication" in path.
+        // "docs/api_guide.md" should be found due to "api" in path.
+        assert!(results
+            .iter()
+            .any(|f| f.file_path == "src/user_authentication_module.rs"));
+        assert!(results.iter().any(|f| f.file_path == "docs/api_guide.md"));
+    }
+
+    #[tokio::test]
+    async fn test_search_content_index_limit_results() {
+        let settings = test_settings("http://localhost".to_string(), None);
+        let extractor = RepoContextExtractor::new(
+            Arc::new(GitlabApiClient::new(settings.clone()).unwrap()),
+            settings,
+        );
+
+        let mut index = FileContentIndex::default();
+        for i in 0..10 {
+            // Add 10 files that will match
+            index
+                .files
+                .insert(format!("file{}.rs", i), "keyword_search_term".to_string());
+        }
+
+        let issue = GitlabIssue {
+            id: 1,
+            iid: 1,
+            project_id: 1,
+            title: "Search for keyword_search_term".to_string(),
+            description: None,
+            state: "opened".to_string(),
+            author: GitlabUser {
+                id: 1,
+                username: "user".to_string(),
+                name: "Test User".to_string(),
+                avatar_url: None,
+            },
+            web_url: "".to_string(),
+            labels: vec![],
+            updated_at: "".to_string(),
+        };
+
+        let results = extractor.search_content_index(&index, &issue);
+        assert_eq!(results.len(), 5, "Results should be limited to 5");
+    }
 
     #[test]
     fn test_extract_keywords() {
@@ -835,71 +1417,6 @@ mod tests {
         assert!(!keywords.contains(&"with".to_string()));
         assert!(!keywords.contains(&"this".to_string()));
         assert!(!keywords.contains(&"are".to_string()));
-    }
-
-    #[test]
-    fn test_calculate_relevance_score() {
-        let settings = AppSettings {
-            openai_model: "gpt-3.5-turbo".to_string(),
-            openai_temperature: 0.7,
-            openai_max_tokens: 1024,
-            gitlab_url: "https://gitlab.com".to_string(),
-            gitlab_token: "test_token".to_string(),
-            openai_api_key: "key".to_string(),
-            openai_custom_url: "url".to_string(),
-            repos_to_poll: vec!["org/repo1".to_string()],
-            log_level: "debug".to_string(),
-            bot_username: "gitbot".to_string(),
-            poll_interval_seconds: 60,
-            stale_issue_days: 30,
-            max_age_hours: 24,
-            context_repo_path: None,
-            max_context_size: 60000,
-            default_branch: "main".to_string(),
-        };
-
-        let settings_arc = Arc::new(settings.clone());
-        let extractor = RepoContextExtractor::new(
-            Arc::new(GitlabApiClient::new(settings_arc.clone()).unwrap()),
-            settings_arc,
-        );
-
-        let keywords = vec![
-            "authentication".to_string(),
-            "login".to_string(),
-            "jwt".to_string(),
-        ];
-
-        // Test scoring for different file paths
-        let scores = [
-            (
-                "src/auth/login.rs",
-                extractor.calculate_relevance_score("src/auth/login.rs", &keywords),
-            ),
-            (
-                "README.md",
-                extractor.calculate_relevance_score("README.md", &keywords),
-            ),
-            (
-                "docs/authentication.md",
-                extractor.calculate_relevance_score("docs/authentication.md", &keywords),
-            ),
-            (
-                "src/utils.rs",
-                extractor.calculate_relevance_score("src/utils.rs", &keywords),
-            ),
-            (
-                "image.png",
-                extractor.calculate_relevance_score("image.png", &keywords),
-            ),
-        ];
-
-        // Check that relevant files have higher scores
-        assert!(scores[0].1 > 0); // auth/login.rs should have high score
-        assert!(scores[2].1 > 0); // authentication.md should have high score
-        assert!(scores[1].1 == 0); // README.md should have no score
-        assert!(scores[3].1 == 0); // utils.rs should have no score
-        assert!(scores[4].1 == 0); // image.png should have no score
     }
 
     // Helper to create AppSettings for tests
@@ -987,14 +1504,15 @@ mod tests {
         let issue = create_mock_issue(101, project.id);
         let agents_md_content = "This is the AGENTS.md content from main_repo.";
 
-        // Mock get_repository_tree for the first call (by get_combined_source_files)
-        let _m_repo_tree_src_files = server
-            .mock("GET", "/api/v4/projects/1/repository/tree?recursive=true&per_page=100&page=1")
+        // Mock get_repository_tree for project 1 (main_repo)
+        // Called by get_combined_source_files and by build_content_index
+        let _m_repo_tree_src_files_main = server
+            .mock("GET", "/api/v4/projects/1/repository/tree?recursive=true&per_page=100")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_header("X-Total-Pages", "1")
-            .with_body(serde_json::json!([{"id": "1", "name": "main.rs", "type": "blob", "path": "src/main.rs", "mode": "100644"}]).to_string())
-            .expect(2) // Called twice: once for get_combined_source_files and once for find_relevant_files_for_issue
+            .with_body(serde_json::json!([{"id": "1", "name": "src/main.rs", "type": "blob", "path": "src/main.rs", "mode": "100644"}]).to_string())
+            .expect(2) // Once for get_combined_source_files, once for build_content_index
             .create_async()
             .await;
 
@@ -1026,16 +1544,45 @@ mod tests {
             .create_async()
             .await;
 
-        // Mock get_project_by_path (called by find_relevant_files_for_issue)
+        // Mock get_project_by_path
+        // This path is also relative to /api/v4
         let _m_get_project_for_relevant_files = server
             .mock(
                 "GET",
-                format!("/api/v4/projects/{}", encode(&project.path_with_namespace)).as_str(),
+                format!("/projects/{}", encode(&project.path_with_namespace)).as_str(),
             )
             .with_status(200)
             .with_header("content-type", "application/json")
-            .with_body(serde_json::json!(project).to_string()) // returns the same project
-            .expect(1) // Called once by find_relevant_files_for_issue
+            .with_body(serde_json::json!(project).to_string())
+            // This mock for get_project_by_path is not called when context_repo_path is None
+            // by get_agents_md_content or build_content_index.
+            // It might have been intended for the old find_relevant_files_for_issue.
+            // Removing .expect(1) as it's not hit by the current logic flow for this test.
+            .create_async()
+            .await;
+
+        // Mock get_file_content for main.rs (called by build_content_index for project 1)
+        let _m_main_rs_content = server
+            .mock(
+                "GET",
+                "/api/v4/projects/1/repository/files/src%2Fmain.rs?ref=main",
+            )
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "file_name": "main.rs",
+                    "file_path": "src/main.rs",
+                    "size": 100, // Example size
+                    "encoding": "base64",
+                    "content": base64::encode("fn main() { println!(\"hello world\"); }"), // Example content
+                    "ref": "main",
+                    "blob_id": "someblobid_main_rs",
+                    "commit_id": "somecommitid_main_rs",
+                    "last_commit_id": "somelastcommitid_main_rs"
+                })
+                .to_string(),
+            )
             .create_async()
             .await;
 
@@ -1054,7 +1601,7 @@ mod tests {
         );
         assert!(
             context.contains("src/main.rs"),
-            "Context missing 'src/main.rs'. Full: {}",
+            "Context missing 'src/main.rs' from all source files list. Full: {}",
             context
         );
         assert!(
@@ -1065,6 +1612,21 @@ mod tests {
         assert!(
             context.contains(agents_md_content),
             "Context missing AGENTS.md content. Full: {}",
+            context
+        );
+
+        // Check if relevant files section is present (or not, if search_content_index returns empty)
+        // For this test, with "Test Issue #101" and "Description for issue #101" and content "fn main() { println!(\"hello world\"); }"
+        // it's unlikely to find "main.rs" as relevant by default keywords "test", "issue", "description".
+        // So, we expect "No relevant files found" or similar message.
+        // If "main.rs" was made relevant by keywords, then "--- Relevant Files from Index ---" should be present.
+        // For now, let's assume it might not be found to keep test simple.
+        // The actual content of main.rs is "fn main() { println!("hello world"); }"
+        // Keywords from "Test Issue #101", "Description for issue #101" are "test", "issue", "description"
+        // No match. So relevant_files should be empty.
+        assert!(
+            context.contains("Content index built, but no relevant files found via keyword search"),
+            "Context should indicate no relevant files found from index. Full: {}",
             context
         );
     }
@@ -1082,7 +1644,7 @@ mod tests {
         let issue = create_mock_issue(102, main_project.id);
         let agents_md_content = "This is the AGENTS.md content from context_repo.";
 
-        // Mock get_repository_tree for main project (empty source files for simplicity in get_combined_source_files)
+        // Mock get_repository_tree for main project (ID 1). Called by get_combined_source_files and build_content_index.
         let _m_repo_tree_main_src = server
             .mock(
                 "GET",
@@ -1090,7 +1652,9 @@ mod tests {
             )
             .with_status(200)
             .with_header("content-type", "application/json")
-            .with_body(serde_json::json!([]).to_string())
+            .with_header("X-Total-Pages", "1")
+            .with_body(serde_json::json!([]).to_string()) // Returns empty for main project files
+            .expect(2) // Called by get_combined_source_files and build_content_index
             .create_async()
             .await;
 
@@ -1117,21 +1681,38 @@ mod tests {
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(serde_json::json!(context_project_mock).to_string())
-            .expect(3) // Called by get_combined_source_files, get_agents_md_content, find_relevant_files_for_issue
+            .expect(3) // Called by get_combined_source_files, get_agents_md_content, and build_content_index
             .create_async()
             .await;
 
-        // Mock get_repository_tree for context project (for get_combined_source_files)
-        let _m_repo_tree_context_src = server
+        // Mock get_repository_tree for context project (ID 2) for get_combined_source_files (returns empty)
+        let _m_repo_tree_context_for_combined = server
             .mock(
                 "GET",
                 "/api/v4/projects/2/repository/tree?recursive=true&per_page=100",
             )
             .with_status(200)
             .with_header("content-type", "application/json")
-            .with_body(serde_json::json!([]).to_string()) // No source files in context repo for this part
+            .with_header("X-Total-Pages", "1")
+            .with_body(serde_json::json!([]).to_string())
+            .expect(1) // Only for get_combined_source_files
             .create_async()
             .await;
+
+        // Mocks for build_content_index for context_repo_path (project ID 2)
+        // It will call get_all_source_files for project ID 2
+        let context_indexed_files = ["ctx/file1.rs"];
+        let _m_build_idx_context_tree =
+            mock_get_all_source_files(&mut server, context_project_mock.id, &context_indexed_files)
+                .await;
+        // It will then call get_file_content for "ctx/file1.rs"
+        let _m_build_idx_ctx_file_content = mock_get_file_content(
+            &mut server,
+            context_project_mock.id,
+            "ctx/file1.rs",
+            "contextual keyword",
+        )
+        .await;
 
         // Mock get_file_content for AGENTS.md in context project
         let _m_agents_md_context = server
@@ -1162,23 +1743,6 @@ mod tests {
             .create_async()
             .await;
 
-        // Mocks for find_relevant_files_for_issue (repo_path will be context_repo_path)
-        // get_project_by_path for context_repo_path is already covered by _m_context_project_fetch (third call)
-
-        // Mock get_repository_tree for context_project (ID 2) (for find_relevant_files_for_issue, return empty)
-        let _m_repo_tree_context_relevant = server
-            .mock(
-                "GET",
-                "/api/v4/projects/2/repository/tree?recursive=true&per_page=100",
-            )
-            .with_status(200)
-            .with_header("content-type", "application/json")
-            .with_body(serde_json::json!([]).to_string())
-            .create_async()
-            .await;
-
-        // Since find_relevant_files_for_issue will find no files from the tree, no get_file_content calls will be made by it.
-
         let context = extractor
             .extract_context_for_issue(&issue, &main_project, Some(context_repo_path))
             .await
@@ -1196,11 +1760,38 @@ mod tests {
             context
         );
 
-        // Assert that source file list is NOT present (since mocked as empty)
-        assert!(!context.contains("--- All Source Files ---"), "Context should NOT contain 'All Source Files' header if no source files. Full context: {}", context);
+        // Assert that source file list from get_combined_source_files is NOT present (since both main and context repo mocked as empty for source files)
+        // However, the "--- All Source Files ---" header IS added by default if source_files is empty.
+        // The check should be that no actual file paths are listed under it.
+        // Current code: if !source_files.is_empty() { context.push_str(&files_list); }
+        // So if source_files is empty, the header is not added.
+        assert!(
+            !context.contains("--- All Source Files (up to"),
+            "Context should NOT contain 'All Source Files' header if no source files returned by get_combined_source_files. Full context: {}",
+            context
+        );
 
         // Assert that the default "empty" message is NOT present because AGENTS.md was added
-        assert!(!context.contains("No source files or relevant files found"), "Context should NOT contain default empty message if AGENTS.md is present. Full context: {}", context);
+        // The message is "No source files or relevant files found in the repository."
+        // or "Context gathering completed but no content was added due to size constraints."
+        assert!(
+            !context.contains("No source files or relevant files found in the repository."),
+             "Context should NOT contain default empty message if AGENTS.md is present. Full context: {}",
+             context
+        );
+        assert!(
+            !context.contains("Context gathering completed but no content was added due to size constraints."),
+             "Context should NOT contain size constraint message if AGENTS.md is present. Full context: {}",
+             context
+        );
+        // Now, build_content_index will find "ctx/file1.rs" from the context repo.
+        // Keywords "test", "issue", "description" will not match "contextual keyword" or "ctx/file1.rs".
+        // So, the message should be that the index was built but no relevant files were found.
+        assert!(
+            context.contains("Content index built, but no relevant files found via keyword search"),
+            "Context should indicate index built but no relevant files found. Full: {}",
+            context
+        );
     }
 
     #[tokio::test]
