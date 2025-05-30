@@ -35,7 +35,8 @@ mod tests {
         let settings = Arc::new(create_test_settings(base_url));
         let client = GitlabApiClient::new(settings).unwrap();
 
-        let mock_tree_response = serde_json::json!([
+        // First page response
+        let mock_tree_response_page1 = serde_json::json!([
             {
                 "id": "a1b2c3d4e5f6",
                 "name": "README.md",
@@ -59,22 +60,67 @@ mod tests {
             }
         ]);
 
-        let _m = server
+        // Second page response
+        let mock_tree_response_page2 = serde_json::json!([
+            {
+                "id": "d4e5f6a1b2c3",
+                "name": "utils.rs",
+                "type": "blob",
+                "path": "src/utils.rs",
+                "mode": "100644"
+            },
+            {
+                "id": "e5f6a1b2c3d4",
+                "name": "tests",
+                "type": "tree",
+                "path": "tests",
+                "mode": "040000"
+            },
+            {
+                "id": "f6a1b2c3d4e5",
+                "name": "test_main.rs",
+                "type": "blob",
+                "path": "tests/test_main.rs",
+                "mode": "100644"
+            }
+        ]);
+
+        // Mock first page request
+        let _m1 = server
             .mock("GET", "/api/v4/projects/1/repository/tree")
             .match_query(mockito::Matcher::AllOf(vec![
                 mockito::Matcher::UrlEncoded("recursive".into(), "true".into()),
                 mockito::Matcher::UrlEncoded("per_page".into(), "100".into()),
+                mockito::Matcher::UrlEncoded("page".into(), "1".into()),
             ]))
             .with_status(200)
             .with_header("content-type", "application/json")
-            .with_body(mock_tree_response.to_string())
+            .with_header("X-Total-Pages", "2")
+            .with_body(mock_tree_response_page1.to_string())
+            .create_async()
+            .await;
+
+        // Mock second page request
+        let _m2 = server
+            .mock("GET", "/api/v4/projects/1/repository/tree")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("recursive".into(), "true".into()),
+                mockito::Matcher::UrlEncoded("per_page".into(), "100".into()),
+                mockito::Matcher::UrlEncoded("page".into(), "2".into()),
+            ]))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_header("X-Total-Pages", "2")
+            .with_body(mock_tree_response_page2.to_string())
             .create_async()
             .await;
 
         let files = client.get_repository_tree(1).await.unwrap();
-        assert_eq!(files.len(), 2); // Only blobs, not trees
+        assert_eq!(files.len(), 4); // Only blobs, not trees
         assert!(files.contains(&"README.md".to_string()));
         assert!(files.contains(&"src/main.rs".to_string()));
+        assert!(files.contains(&"src/utils.rs".to_string()));
+        assert!(files.contains(&"tests/test_main.rs".to_string()));
     }
 
     #[tokio::test]

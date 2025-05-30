@@ -275,18 +275,84 @@ impl GitlabApiClient {
             .await
     }
 
-    /// Get the repository file tree
+    /// Get the repository file tree with pagination
     #[instrument(skip(self), fields(project_id))]
     pub async fn get_repository_tree(&self, project_id: i64) -> Result<Vec<String>, GitlabError> {
         let path = format!("/api/v4/projects/{}/repository/tree", project_id);
-        let query = &[("recursive", "true"), ("per_page", "100")];
+        let per_page = 100;
 
-        let items: Vec<serde_json::Value> = self
-            .send_request(Method::GET, &path, Some(query), None::<()>)
-            .await?;
+        let mut all_items = Vec::new();
+        let mut current_page = 1;
+
+        loop {
+            let query = &[
+                ("recursive", "true"),
+                ("per_page", &per_page.to_string()),
+                ("page", &current_page.to_string()),
+            ];
+
+            debug!("Fetching repository tree page {}", current_page);
+
+            // Create the request manually to access headers
+            let mut url = self.gitlab_url.join(&path)?;
+            url.query_pairs_mut().extend_pairs(query);
+
+            let request_builder = self
+                .client
+                .request(Method::GET, url)
+                .header("PRIVATE-TOKEN", &self.private_token);
+
+            let response = request_builder.send().await.map_err(GitlabError::Request)?;
+
+            let status = response.status();
+            if !status.is_success() {
+                let response_body = response
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "Could not read error body".to_string());
+                error!("API Error: {} - {}", status, response_body);
+                return Err(GitlabError::Api {
+                    status,
+                    body: response_body,
+                });
+            }
+
+            // Check pagination headers
+            let total_pages = response
+                .headers()
+                .get("X-Total-Pages")
+                .and_then(|h| h.to_str().ok())
+                .and_then(|s| s.parse::<usize>().ok())
+                .unwrap_or(1);
+
+            // Parse the response body
+            let items: Vec<serde_json::Value> = response
+                .json()
+                .await
+                .map_err(GitlabError::Deserialization)?;
+
+            // Check if we've reached the last page
+            let is_empty = items.is_empty();
+
+            // Add items to our collection
+            all_items.extend(items);
+
+            // Break if we've reached the last page or no items were returned
+            if current_page >= total_pages || is_empty {
+                break;
+            }
+
+            // Move to the next page
+            current_page += 1;
+        }
+
+        debug!(
+            "Fetched a total of {} items from repository tree",
+            all_items.len()
+        );
 
         // Extract file paths
-        let file_paths = items
+        let file_paths = all_items
             .into_iter()
             .filter(|item| item["type"].as_str().unwrap_or("") == "blob") // Only include files, not directories
             .filter_map(|item| item["path"].as_str().map(|s| s.to_string()))
