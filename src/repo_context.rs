@@ -14,6 +14,7 @@ const AGENTS_MD_FILE: &str = "AGENTS.md";
 #[derive(Debug, Deserialize)]
 pub struct GitlabFile {
     // pub file_name: String, // Removed unused field
+    #[allow(dead_code)] // Used in tests
     pub file_path: String,
     pub size: usize,
     pub content: Option<String>,
@@ -288,7 +289,6 @@ impl RepoContextExtractor {
                 let agents_md_context = format!("\n--- {} ---\n{}\n", AGENTS_MD_FILE, agents_md);
                 if total_size + agents_md_context.len() <= self.settings.max_context_size {
                     context.push_str(&agents_md_context);
-                    total_size += agents_md_context.len();
                 } else {
                     warn!(
                         "AGENTS.md content too large to fit in context for issue #{}",
@@ -312,33 +312,8 @@ impl RepoContextExtractor {
             }
         }
 
-        // Get repository files that might be relevant to the issue from both main project and context repo
-        let relevant_files = self
-            .find_relevant_files_from_all_sources(issue, project, context_repo_path)
-            .await;
-
-        if !relevant_files.is_empty() {
-            has_any_content = true;
-            // Then add relevant file contents
-            for file in relevant_files {
-                if let Some(content) = file.content {
-                    let file_context = format!("\n--- File: {} ---\n{}\n", file.file_path, content);
-
-                    // Check if adding this file would exceed our context limit
-                    if total_size + file_context.len() > self.settings.max_context_size {
-                        // If we're about to exceed the limit, add a truncation notice
-                        context
-                            .push_str("\n[Additional files omitted due to context size limits]\n");
-                        break;
-                    }
-
-                    context.push_str(&file_context);
-                    total_size += file_context.len();
-                }
-            }
-        } else {
-            debug!("No relevant files found for issue #{}", issue.iid);
-        }
+        // No longer searching for relevant files
+        debug!("Skipping relevant files search for issue #{}", issue.iid);
 
         if !has_any_content {
             context = "No source files or relevant files found in the repository.".to_string();
@@ -554,213 +529,7 @@ impl RepoContextExtractor {
         Ok((context_for_llm, context_for_comment))
     }
 
-    /// Find files that might be relevant to the issue based on keywords
-    async fn find_relevant_files_for_issue(
-        &self,
-        issue: &GitlabIssue,
-        repo_path: &str,
-    ) -> Result<Vec<GitlabFile>> {
-        // Get project ID from path
-        let project = match self.gitlab_client.get_project_by_path(repo_path).await {
-            Ok(project) => project,
-            Err(e) => {
-                warn!("Failed to get project by path {}: {}", repo_path, e);
-                return Err(e.into());
-            }
-        };
-
-        // Extract keywords from issue title and description
-        let keywords = self.extract_keywords(issue);
-        debug!(
-            "Extracted keywords for issue #{}: {:?}",
-            issue.iid, keywords
-        );
-
-        // Get repository file tree
-        let files = match self.gitlab_client.get_repository_tree(project.id).await {
-            Ok(files) => files,
-            Err(e) => {
-                warn!(
-                    "Failed to get repository tree for project {}: {}",
-                    project.id, e
-                );
-                return Err(e.into());
-            }
-        };
-
-        // Score files based on relevance to keywords
-        let mut scored_files = Vec::new();
-        for file_path in &files {
-            let score = self.calculate_relevance_score(file_path, &keywords);
-            if score > 0 {
-                scored_files.push((file_path.clone(), score));
-            }
-        }
-
-        // Sort by relevance score (highest first)
-        scored_files.sort_by(|a, b| b.1.cmp(&a.1));
-
-        // Take top N most relevant files
-        let top_files: Vec<String> = scored_files
-            .into_iter()
-            .take(5) // Limit to 5 most relevant files
-            .map(|(path, _)| path)
-            .collect();
-
-        // Fetch content for top files
-        let mut files_with_content = Vec::new();
-        for file_path in top_files {
-            match self
-                .gitlab_client
-                .get_file_content(project.id, &file_path)
-                .await
-            {
-                Ok(file) => files_with_content.push(file),
-                Err(e) => warn!("Failed to get content for file {}: {}", file_path, e),
-            }
-        }
-
-        Ok(files_with_content)
-    }
-
-    // Find relevant files from both main project and context repo if provided
-    async fn find_relevant_files_from_all_sources(
-        &self,
-        issue: &GitlabIssue,
-        project: &GitlabProject,
-        context_repo_path: Option<&str>,
-    ) -> Vec<GitlabFile> {
-        let mut all_relevant_files = Vec::new();
-
-        // First try to get files from the main project
-        match self
-            .find_relevant_files_for_issue(issue, &project.path_with_namespace)
-            .await
-        {
-            Ok(files) => {
-                debug!(
-                    "Found {} relevant files in main project {}",
-                    files.len(),
-                    project.path_with_namespace
-                );
-                all_relevant_files.extend(files);
-            }
-            Err(e) => {
-                warn!(
-                    "Failed to find relevant files in main project {}: {}. Will try context repo if available.",
-                    project.path_with_namespace, e
-                );
-            }
-        }
-
-        // If context repo is provided, also get files from there
-        if let Some(context_path) = context_repo_path {
-            match self
-                .find_relevant_files_for_issue(issue, context_path)
-                .await
-            {
-                Ok(files) => {
-                    debug!(
-                        "Found {} relevant files in context repo {}",
-                        files.len(),
-                        context_path
-                    );
-                    all_relevant_files.extend(files);
-                }
-                Err(e) => {
-                    warn!(
-                        "Failed to find relevant files in context repo {}: {}",
-                        context_path, e
-                    );
-                }
-            }
-        }
-
-        all_relevant_files
-    }
-
-    /// Extract keywords from issue title and description
-    fn extract_keywords(&self, issue: &GitlabIssue) -> Vec<String> {
-        let mut text = issue.title.clone();
-        if let Some(desc) = &issue.description {
-            text.push(' ');
-            text.push_str(desc);
-        }
-
-        // Convert to lowercase and split by non-alphanumeric characters
-        let words: Vec<String> = text
-            .to_lowercase()
-            .split(|c: char| !c.is_alphanumeric())
-            .filter(|s| !s.is_empty() && s.len() > 2) // Filter out empty strings and very short words
-            .map(|s| s.to_string())
-            .collect();
-
-        // Remove common words
-        let common_words = [
-            "the", "and", "for", "this", "that", "with", "from", "have", "not", "but", "what",
-            "all", "are", "when", "your", "can", "has", "been",
-        ];
-
-        words
-            .into_iter()
-            .filter(|word| !common_words.contains(&word.as_str()))
-            .collect()
-    }
-
-    /// Calculate relevance score of a file to the keywords
-    fn calculate_relevance_score(&self, file_path: &str, keywords: &[String]) -> usize {
-        let path_lower = file_path.to_lowercase();
-
-        // Skip binary files and non-code files
-        let binary_extensions = [
-            ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".ico", ".svg", ".pdf", ".zip", ".tar", ".gz",
-            ".rar", ".exe", ".dll", ".so", ".bin", ".dat", ".db", ".sqlite", ".mp3", ".mp4",
-            ".avi", ".mov",
-        ];
-
-        if binary_extensions
-            .iter()
-            .any(|ext| path_lower.ends_with(ext))
-        {
-            return 0;
-        }
-
-        // Calculate score based on keyword matches
-        let mut score = 0;
-
-        // Prefer documentation files, but only if they match keywords
-        let has_keyword_match = keywords
-            .iter()
-            .any(|keyword| path_lower.contains(&keyword.to_lowercase()));
-
-        if has_keyword_match {
-            if path_lower.contains("readme")
-                || path_lower.contains("docs/")
-                || path_lower.ends_with(".md")
-            {
-                score += 5;
-            }
-
-            // Prefer source code files
-            let code_extensions = [
-                ".rs", ".py", ".js", ".ts", ".java", ".c", ".cpp", ".h", ".hpp", ".go", ".rb",
-                ".php", ".cs", ".scala", ".kt", ".swift", ".sh", ".jsx", ".tsx", ".vue", ".svelte",
-            ];
-
-            if code_extensions.iter().any(|ext| path_lower.ends_with(ext)) {
-                score += 3;
-            }
-
-            // Add points for each keyword match in the file path
-            for keyword in keywords {
-                if path_lower.contains(&keyword.to_lowercase()) {
-                    score += 10; // Higher score for direct matches in path
-                }
-            }
-        }
-
-        score
-    }
+    // Functions related to finding relevant files have been removed
 }
 
 #[cfg(test)]
@@ -770,137 +539,7 @@ mod tests {
     use crate::models::GitlabUser;
     use urlencoding::encode;
 
-    #[test]
-    fn test_extract_keywords() {
-        let user = GitlabUser {
-            id: 1,
-            username: "test_user".to_string(),
-            name: "Test User".to_string(),
-            avatar_url: None,
-        };
-
-        let issue = GitlabIssue {
-            id: 1,
-            iid: 1,
-            project_id: 1,
-            title: "Fix authentication bug in login module".to_string(),
-            description: Some("Users are unable to login with correct credentials. This seems to be related to the JWT token validation.".to_string()),
-            state: "opened".to_string(),
-            author: user,
-            web_url: "https://gitlab.com/test/project/issues/1".to_string(),
-            labels: vec![],
-            updated_at: "2023-01-01T00:00:00Z".to_string(), // Added default for tests
-        };
-
-        let settings = AppSettings {
-            gitlab_url: "https://gitlab.com".to_string(),
-            gitlab_token: "test_token".to_string(),
-            openai_api_key: "key".to_string(),
-            openai_model: "gpt-3.5-turbo".to_string(),
-            openai_temperature: 0.7,
-            openai_max_tokens: 1024,
-            openai_custom_url: "url".to_string(),
-            repos_to_poll: vec!["org/repo1".to_string()],
-            log_level: "debug".to_string(),
-            bot_username: "gitbot".to_string(),
-            poll_interval_seconds: 60,
-            stale_issue_days: 30, // Added default for tests (removed duplicate)
-            max_age_hours: 24,
-            context_repo_path: None,
-            max_context_size: 60000,
-            default_branch: "main".to_string(),
-        };
-
-        let settings_arc = Arc::new(settings.clone());
-        let extractor = RepoContextExtractor::new(
-            Arc::new(GitlabApiClient::new(settings_arc.clone()).unwrap()),
-            settings_arc,
-        );
-
-        let keywords = extractor.extract_keywords(&issue);
-
-        // Check that important keywords were extracted
-        assert!(keywords.contains(&"authentication".to_string()));
-        assert!(keywords.contains(&"bug".to_string()));
-        assert!(keywords.contains(&"login".to_string()));
-        assert!(keywords.contains(&"module".to_string()));
-        assert!(keywords.contains(&"unable".to_string()));
-        assert!(keywords.contains(&"credentials".to_string()));
-        assert!(keywords.contains(&"jwt".to_string()));
-        assert!(keywords.contains(&"token".to_string()));
-        assert!(keywords.contains(&"validation".to_string()));
-
-        // Check that common words were filtered out
-        assert!(!keywords.contains(&"the".to_string()));
-        assert!(!keywords.contains(&"with".to_string()));
-        assert!(!keywords.contains(&"this".to_string()));
-        assert!(!keywords.contains(&"are".to_string()));
-    }
-
-    #[test]
-    fn test_calculate_relevance_score() {
-        let settings = AppSettings {
-            openai_model: "gpt-3.5-turbo".to_string(),
-            openai_temperature: 0.7,
-            openai_max_tokens: 1024,
-            gitlab_url: "https://gitlab.com".to_string(),
-            gitlab_token: "test_token".to_string(),
-            openai_api_key: "key".to_string(),
-            openai_custom_url: "url".to_string(),
-            repos_to_poll: vec!["org/repo1".to_string()],
-            log_level: "debug".to_string(),
-            bot_username: "gitbot".to_string(),
-            poll_interval_seconds: 60,
-            stale_issue_days: 30,
-            max_age_hours: 24,
-            context_repo_path: None,
-            max_context_size: 60000,
-            default_branch: "main".to_string(),
-        };
-
-        let settings_arc = Arc::new(settings.clone());
-        let extractor = RepoContextExtractor::new(
-            Arc::new(GitlabApiClient::new(settings_arc.clone()).unwrap()),
-            settings_arc,
-        );
-
-        let keywords = vec![
-            "authentication".to_string(),
-            "login".to_string(),
-            "jwt".to_string(),
-        ];
-
-        // Test scoring for different file paths
-        let scores = [
-            (
-                "src/auth/login.rs",
-                extractor.calculate_relevance_score("src/auth/login.rs", &keywords),
-            ),
-            (
-                "README.md",
-                extractor.calculate_relevance_score("README.md", &keywords),
-            ),
-            (
-                "docs/authentication.md",
-                extractor.calculate_relevance_score("docs/authentication.md", &keywords),
-            ),
-            (
-                "src/utils.rs",
-                extractor.calculate_relevance_score("src/utils.rs", &keywords),
-            ),
-            (
-                "image.png",
-                extractor.calculate_relevance_score("image.png", &keywords),
-            ),
-        ];
-
-        // Check that relevant files have higher scores
-        assert!(scores[0].1 > 0); // auth/login.rs should have high score
-        assert!(scores[2].1 > 0); // authentication.md should have high score
-        assert!(scores[1].1 == 0); // README.md should have no score
-        assert!(scores[3].1 == 0); // utils.rs should have no score
-        assert!(scores[4].1 == 0); // image.png should have no score
-    }
+    // Tests for extract_keywords and calculate_relevance_score have been removed
 
     // Helper to create AppSettings for tests
     fn test_settings(gitlab_url: String, context_repo: Option<String>) -> Arc<AppSettings> {
@@ -993,7 +632,7 @@ mod tests {
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(serde_json::json!([{"id": "1", "name": "main.rs", "type": "blob", "path": "src/main.rs", "mode": "100644"}]).to_string())
-            .expect(2) // Called twice: once for get_combined_source_files and once for find_relevant_files_for_issue
+            .expect(1) // Called once for get_combined_source_files
             .create_async()
             .await;
 
@@ -1025,18 +664,7 @@ mod tests {
             .create_async()
             .await;
 
-        // Mock get_project_by_path (called by find_relevant_files_for_issue)
-        let _m_get_project_for_relevant_files = server
-            .mock(
-                "GET",
-                format!("/api/v4/projects/{}", encode(&project.path_with_namespace)).as_str(),
-            )
-            .with_status(200)
-            .with_header("content-type", "application/json")
-            .with_body(serde_json::json!(project).to_string()) // returns the same project
-            .expect(1) // Called once by find_relevant_files_for_issue
-            .create_async()
-            .await;
+        // Mock for get_project_by_path no longer needed since find_relevant_files_for_issue was removed
 
         let context = extractor
             .extract_context_for_issue(&issue, &project, None)
@@ -1107,7 +735,7 @@ mod tests {
             .create_async()
             .await;
 
-        // Mock get_project_by_path for context_repo (called by get_combined_source_files, get_agents_md_content, and find_relevant_files_for_issue)
+        // Mock get_project_by_path for context_repo (called by get_combined_source_files and get_agents_md_content)
         let _m_context_project_fetch = server
             .mock(
                 "GET",
@@ -1116,7 +744,7 @@ mod tests {
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(serde_json::json!(context_project_mock).to_string())
-            .expect(3) // Called by get_combined_source_files, get_agents_md_content, find_relevant_files_for_issue
+            .expect(2) // Called by get_combined_source_files and get_agents_md_content
             .create_async()
             .await;
 
@@ -1161,22 +789,7 @@ mod tests {
             .create_async()
             .await;
 
-        // Mocks for find_relevant_files_for_issue (repo_path will be context_repo_path)
-        // get_project_by_path for context_repo_path is already covered by _m_context_project_fetch (third call)
-
-        // Mock get_repository_tree for context_project (ID 2) (for find_relevant_files_for_issue, return empty)
-        let _m_repo_tree_context_relevant = server
-            .mock(
-                "GET",
-                "/api/v4/projects/2/repository/tree?recursive=true&per_page=100",
-            )
-            .with_status(200)
-            .with_header("content-type", "application/json")
-            .with_body(serde_json::json!([]).to_string())
-            .create_async()
-            .await;
-
-        // Since find_relevant_files_for_issue will find no files from the tree, no get_file_content calls will be made by it.
+        // Mocks for find_relevant_files_for_issue have been removed
 
         let context = extractor
             .extract_context_for_issue(&issue, &main_project, Some(context_repo_path))
