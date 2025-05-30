@@ -989,9 +989,10 @@ mod tests {
 
         // Mock get_repository_tree for the first call (by get_combined_source_files)
         let _m_repo_tree_src_files = server
-            .mock("GET", "/api/v4/projects/1/repository/tree?recursive=true&per_page=100")
+            .mock("GET", "/api/v4/projects/1/repository/tree?recursive=true&per_page=100&page=1")
             .with_status(200)
             .with_header("content-type", "application/json")
+            .with_header("X-Total-Pages", "1")
             .with_body(serde_json::json!([{"id": "1", "name": "main.rs", "type": "blob", "path": "src/main.rs", "mode": "100644"}]).to_string())
             .expect(2) // Called twice: once for get_combined_source_files and once for find_relevant_files_for_issue
             .create_async()
@@ -1215,9 +1216,10 @@ mod tests {
 
         // Mock get_repository_tree (for source files)
         let _m_repo_tree = server
-            .mock("GET", "/api/v4/projects/1/repository/tree?recursive=true&per_page=100")
+            .mock("GET", "/api/v4/projects/1/repository/tree?recursive=true&per_page=100&page=1")
             .with_status(200)
             .with_header("content-type", "application/json")
+            .with_header("X-Total-Pages", "1")
             .with_body(serde_json::json!([{"id": "1", "name": "code.rs", "type": "blob", "path": "src/code.rs", "mode": "100644"}]).to_string())
             .create_async()
             .await;
