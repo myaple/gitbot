@@ -551,6 +551,8 @@ async fn handle_issue_mention(
         // Add repository context
         let repo_context_extractor =
             RepoContextExtractor::new(gitlab_client.clone(), config.clone());
+        // The extract_context_for_issue function now handles errors internally and will always return Ok
+        // with as much context as it could gather
         match repo_context_extractor
             .extract_context_for_issue(&issue, &event.project, config.context_repo_path.as_deref())
             .await
@@ -559,7 +561,8 @@ async fn handle_issue_mention(
                 prompt_parts.push(format!("Repository Context: {}", context_str));
             }
             Err(e) => {
-                warn!("Failed to extract repository context: {}", e);
+                // This should now only happen in catastrophic failures
+                warn!("Failed to extract repository context: {}. This is a critical error.", e);
             }
         }
 
@@ -584,6 +587,8 @@ async fn handle_issue_mention(
         // Add repository context
         let repo_context_extractor =
             RepoContextExtractor::new(gitlab_client.clone(), config.clone());
+        // The extract_context_for_issue function now handles errors internally and will always return Ok
+        // with as much context as it could gather
         match repo_context_extractor
             .extract_context_for_issue(&issue, &event.project, config.context_repo_path.as_deref())
             .await
@@ -592,7 +597,8 @@ async fn handle_issue_mention(
                 prompt_parts.push(format!("Repository Context: {}", context_str));
             }
             Err(e) => {
-                warn!("Failed to extract repository context: {}", e);
+                // This should now only happen in catastrophic failures
+                warn!("Failed to extract repository context: {}. This is a critical error.", e);
             }
         }
 
