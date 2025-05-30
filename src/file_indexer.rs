@@ -36,6 +36,7 @@ pub struct FileContentIndex {
     /// When the index was last updated
     last_updated: Arc<RwLock<Instant>>,
     /// Project ID this index belongs to
+    #[allow(dead_code)]
     project_id: i64,
 }
 
@@ -118,6 +119,7 @@ impl FileContentIndex {
     }
 
     /// Remove a file from the index
+    #[allow(dead_code)]
     pub fn remove_file(&self, file_path: &str) {
         // Remove file from file_hashes
         self.file_hashes.remove(file_path);
@@ -188,6 +190,7 @@ impl FileContentIndex {
     }
 
     /// Get the project ID this index belongs to
+    #[allow(dead_code)]
     pub fn project_id(&self) -> i64 {
         self.project_id
     }
@@ -435,7 +438,7 @@ mod tests {
 
         // Verify files are indexed
         let results = index.search(&["fn".to_string()]);
-        assert!(results.len() > 0);
+        assert!(!results.is_empty());
         assert!(results.contains(&"src/main.rs".to_string()));
         assert!(results.contains(&"src/lib.rs".to_string()));
 

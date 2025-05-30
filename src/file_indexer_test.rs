@@ -28,7 +28,7 @@ mod tests {
 
         // Test searching with keywords that match multiple files
         let results = index.search(&["fn".to_string()]);
-        assert!(results.len() > 0);
+        assert!(!results.is_empty());
         assert!(results.contains(&"src/main.rs".to_string()));
         assert!(results.contains(&"src/lib.rs".to_string()));
 
