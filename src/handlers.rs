@@ -562,7 +562,10 @@ async fn handle_issue_mention(
             }
             Err(e) => {
                 // This should now only happen in catastrophic failures
-                warn!("Failed to extract repository context: {}. This is a critical error.", e);
+                warn!(
+                    "Failed to extract repository context: {}. This is a critical error.",
+                    e
+                );
             }
         }
 
@@ -598,7 +601,10 @@ async fn handle_issue_mention(
             }
             Err(e) => {
                 // This should now only happen in catastrophic failures
-                warn!("Failed to extract repository context: {}. This is a critical error.", e);
+                warn!(
+                    "Failed to extract repository context: {}. This is a critical error.",
+                    e
+                );
             }
         }
 

@@ -270,7 +270,7 @@ impl RepoContextExtractor {
                 Vec::new()
             }
         };
-        
+
         if !source_files.is_empty() {
             let files_list = format!(
                 "\n--- All Source Files (up to {} files) ---\n{}\n",
@@ -305,13 +305,18 @@ impl RepoContextExtractor {
                 debug!("AGENTS.md not found for issue #{}", issue.iid);
             }
             Err(e) => {
-                warn!("Failed to fetch AGENTS.md for issue #{}: {}. Continuing with other context.", issue.iid, e);
+                warn!(
+                    "Failed to fetch AGENTS.md for issue #{}: {}. Continuing with other context.",
+                    issue.iid, e
+                );
             }
         }
 
         // Get repository files that might be relevant to the issue from both main project and context repo
-        let relevant_files = self.find_relevant_files_from_all_sources(issue, project, context_repo_path).await;
-        
+        let relevant_files = self
+            .find_relevant_files_from_all_sources(issue, project, context_repo_path)
+            .await;
+
         if !relevant_files.is_empty() {
             has_any_content = true;
             // Then add relevant file contents
@@ -322,7 +327,8 @@ impl RepoContextExtractor {
                     // Check if adding this file would exceed our context limit
                     if total_size + file_context.len() > self.settings.max_context_size {
                         // If we're about to exceed the limit, add a truncation notice
-                        context.push_str("\n[Additional files omitted due to context size limits]\n");
+                        context
+                            .push_str("\n[Additional files omitted due to context size limits]\n");
                         break;
                     }
 
@@ -337,7 +343,9 @@ impl RepoContextExtractor {
         if !has_any_content {
             context = "No source files or relevant files found in the repository.".to_string();
         } else if context.is_empty() {
-            context = "Context gathering completed but no content was added due to size constraints.".to_string();
+            context =
+                "Context gathering completed but no content was added due to size constraints."
+                    .to_string();
         }
 
         Ok(context)
@@ -377,7 +385,7 @@ impl RepoContextExtractor {
                 Vec::new()
             }
         };
-        
+
         if !source_files.is_empty() {
             let files_list = format!(
                 "\n--- All Source Files (up to {} files) ---\n{}\n",
@@ -412,7 +420,10 @@ impl RepoContextExtractor {
                 debug!("AGENTS.md not found for MR !{}", mr.iid);
             }
             Err(e) => {
-                warn!("Failed to fetch AGENTS.md for MR !{}: {}. Continuing with other context.", mr.iid, e);
+                warn!(
+                    "Failed to fetch AGENTS.md for MR !{}: {}. Continuing with other context.",
+                    mr.iid, e
+                );
             }
         }
 
@@ -510,7 +521,10 @@ impl RepoContextExtractor {
                     context_for_comment.push('\n');
                 }
                 Err(e) => {
-                    warn!("Failed to get commit history for {}: {}. Continuing with other context.", diff.new_path, e);
+                    warn!(
+                        "Failed to get commit history for {}: {}. Continuing with other context.",
+                        diff.new_path, e
+                    );
                 }
             }
 
@@ -528,7 +542,9 @@ impl RepoContextExtractor {
         if !has_any_content {
             context_for_llm = "No source files or changes found in this merge request.".to_string();
         } else if context_for_llm.is_empty() {
-            context_for_llm = "Context gathering completed but no content was added due to size constraints.".to_string();
+            context_for_llm =
+                "Context gathering completed but no content was added due to size constraints."
+                    .to_string();
         }
 
         if context_for_comment.is_empty() {
@@ -564,7 +580,10 @@ impl RepoContextExtractor {
         let files = match self.gitlab_client.get_repository_tree(project.id).await {
             Ok(files) => files,
             Err(e) => {
-                warn!("Failed to get repository tree for project {}: {}", project.id, e);
+                warn!(
+                    "Failed to get repository tree for project {}: {}",
+                    project.id, e
+                );
                 return Err(e.into());
             }
         };
@@ -603,7 +622,7 @@ impl RepoContextExtractor {
 
         Ok(files_with_content)
     }
-    
+
     // Find relevant files from both main project and context repo if provided
     async fn find_relevant_files_from_all_sources(
         &self,
@@ -612,9 +631,12 @@ impl RepoContextExtractor {
         context_repo_path: Option<&str>,
     ) -> Vec<GitlabFile> {
         let mut all_relevant_files = Vec::new();
-        
+
         // First try to get files from the main project
-        match self.find_relevant_files_for_issue(issue, &project.path_with_namespace).await {
+        match self
+            .find_relevant_files_for_issue(issue, &project.path_with_namespace)
+            .await
+        {
             Ok(files) => {
                 debug!(
                     "Found {} relevant files in main project {}",
@@ -630,10 +652,13 @@ impl RepoContextExtractor {
                 );
             }
         }
-        
+
         // If context repo is provided, also get files from there
         if let Some(context_path) = context_repo_path {
-            match self.find_relevant_files_for_issue(issue, context_path).await {
+            match self
+                .find_relevant_files_for_issue(issue, context_path)
+                .await
+            {
                 Ok(files) => {
                     debug!(
                         "Found {} relevant files in context repo {}",
@@ -650,7 +675,7 @@ impl RepoContextExtractor {
                 }
             }
         }
-        
+
         all_relevant_files
     }
 
