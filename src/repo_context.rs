@@ -1,4 +1,5 @@
 use crate::config::AppSettings;
+use crate::file_indexer::FileIndexManager;
 use crate::gitlab::GitlabApiClient;
 use crate::gitlab::GitlabError;
 use crate::models::{GitlabIssue, GitlabMergeRequest, GitlabProject};
@@ -30,14 +31,41 @@ pub struct GitlabDiff {
 pub struct RepoContextExtractor {
     gitlab_client: Arc<GitlabApiClient>,
     settings: Arc<AppSettings>,
+    file_index_manager: Arc<FileIndexManager>,
 }
 
 impl RepoContextExtractor {
     pub fn new(gitlab_client: Arc<GitlabApiClient>, settings: Arc<AppSettings>) -> Self {
+        // Create a file index manager with a 1-hour refresh interval
+        let file_index_manager = Arc::new(FileIndexManager::new(gitlab_client.clone(), 3600));
+
         Self {
             gitlab_client,
             settings,
+            file_index_manager,
         }
+    }
+
+    /// Initialize file indexes for a list of projects
+    pub async fn initialize_file_indexes(&self, projects: Vec<GitlabProject>) -> Result<()> {
+        info!("Initializing file indexes for {} projects", projects.len());
+
+        // Start a background task to periodically refresh the indexes
+        self.file_index_manager
+            .clone()
+            .start_refresh_task(projects.clone());
+
+        // Build initial indexes for all projects
+        for project in &projects {
+            if let Err(e) = self.file_index_manager.build_index(project).await {
+                warn!(
+                    "Failed to build initial index for {}: {}",
+                    project.path_with_namespace, e
+                );
+            }
+        }
+
+        Ok(())
     }
 
     async fn get_file_content_from_project(
@@ -576,7 +604,35 @@ impl RepoContextExtractor {
             issue.iid, keywords
         );
 
-        // Get repository file tree
+        if keywords.is_empty() {
+            debug!("No meaningful keywords extracted from issue #{}", issue.iid);
+            return Ok(Vec::new());
+        }
+
+        // Use the file index to find relevant files
+        match self
+            .file_index_manager
+            .search_files(project.id, &keywords)
+            .await
+        {
+            Ok(files) => {
+                debug!(
+                    "Found {} relevant files using content index for issue #{}",
+                    files.len(),
+                    issue.iid
+                );
+                return Ok(files);
+            }
+            Err(e) => {
+                warn!(
+                    "Error searching file index for issue #{}: {}. Falling back to path-based search.",
+                    issue.iid, e
+                );
+                // Fall back to the original path-based search method
+            }
+        }
+
+        // Fallback: Get repository file tree
         let files = match self.gitlab_client.get_repository_tree(project.id).await {
             Ok(files) => files,
             Err(e) => {
@@ -812,10 +868,8 @@ mod tests {
         };
 
         let settings_arc = Arc::new(settings.clone());
-        let extractor = RepoContextExtractor::new(
-            Arc::new(GitlabApiClient::new(settings_arc.clone()).unwrap()),
-            settings_arc,
-        );
+        let gitlab_client = Arc::new(GitlabApiClient::new(settings_arc.clone()).unwrap());
+        let extractor = RepoContextExtractor::new(gitlab_client, settings_arc);
 
         let keywords = extractor.extract_keywords(&issue);
 
@@ -859,10 +913,8 @@ mod tests {
         };
 
         let settings_arc = Arc::new(settings.clone());
-        let extractor = RepoContextExtractor::new(
-            Arc::new(GitlabApiClient::new(settings_arc.clone()).unwrap()),
-            settings_arc,
-        );
+        let gitlab_client = Arc::new(GitlabApiClient::new(settings_arc.clone()).unwrap());
+        let extractor = RepoContextExtractor::new(gitlab_client, settings_arc);
 
         let keywords = vec![
             "authentication".to_string(),
