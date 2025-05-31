@@ -15,9 +15,7 @@ const AGENTS_MD_FILE: &str = "AGENTS.md";
 pub struct GitlabFile {
     // pub file_name: String, // Removed unused field
     pub file_path: String,
-    pub size: usize,
     pub content: Option<String>,
-    pub encoding: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

@@ -38,8 +38,6 @@ pub enum GitlabError {
     Request(#[from] reqwest::Error),
     #[error("Failed to deserialize response: {0}")]
     Deserialization(String),
-    #[error("Serialization error: {0}")]
-    Serialization(String),
 }
 
 /// GitLab API client that provides comprehensive GitLab API functionality using the official gitlab crate.
@@ -53,7 +51,6 @@ pub enum GitlabError {
 pub struct GitlabApiClient {
     gitlab_url: url::Url,
     private_token: String,
-    settings: Arc<AppSettings>,
     client: reqwest::Client, // Add reqwest client for direct API calls
 }
 
@@ -64,7 +61,6 @@ impl GitlabApiClient {
         Ok(Self {
             gitlab_url,
             private_token: settings.gitlab_token.clone(),
-            settings,
             client: reqwest::Client::new(),
         })
     }
@@ -982,9 +978,7 @@ impl GitlabApiClient {
 
             let gitlab_file = GitlabFile {
                 file_path: path,
-                size: file_data["size"].as_u64().unwrap_or(0) as usize,
                 content,
-                encoding: file_data["encoding"].as_str().map(|s| s.to_string()),
             };
 
             Ok::<GitlabFile, GitlabError>(gitlab_file)

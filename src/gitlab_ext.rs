@@ -152,8 +152,6 @@ mod tests {
 
         let file = client.get_file_content(1, "src/main.rs").await.unwrap();
         assert_eq!(file.file_path, "src/main.rs");
-        assert_eq!(file.size, 123);
-        assert_eq!(file.encoding, Some("base64".to_string()));
         assert!(file.content.is_some());
     }
 
