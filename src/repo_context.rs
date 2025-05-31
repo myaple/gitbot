@@ -51,7 +51,7 @@ impl RepoContextExtractor {
             .await
         {
             Ok(file) => Ok(file.content),
-            Err(GitlabError::Api { status, .. }) if status == reqwest::StatusCode::NOT_FOUND => {
+            Err(GitlabError::Api { message }) if message.contains("404") || message.contains("not found") => {
                 Ok(None)
             }
             Err(e) => Err(e.into()),

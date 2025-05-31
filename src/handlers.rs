@@ -679,9 +679,9 @@ async fn handle_merge_request_mention(
             }
         }
         Err(e) => match e {
-            GitlabError::Api { status, .. } if status == reqwest::StatusCode::NOT_FOUND => {
+            GitlabError::Api { message } if message.contains("404") || message.contains("not found") => {
                 info!(
-                    "CONTRIBUTING.md not found (404) for project ID {}. Proceeding without it.",
+                    "CONTRIBUTING.md not found for project ID {}. Proceeding without it.",
                     project_id
                 );
             }
