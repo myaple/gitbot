@@ -667,42 +667,101 @@ impl GitlabApiClient {
     #[instrument(skip(self), fields(project_id, query))]
     pub async fn search_files_by_name(
         &self,
-        _project_id: i64,
-        _query: &str,
+        project_id: i64,
+        query: &str,
     ) -> Result<Vec<String>, GitlabError> {
-        // Note: File search may require GitLab search API which might not be available
-        // in the gitlab crate yet. This would need manual HTTP implementation.
-        Err(GitlabError::Api {
-            message: "Search functionality not available in gitlab crate - requires manual HTTP implementation".to_string(),
-        })
+        let gitlab_url = self.gitlab_url.clone();
+        let private_token = self.private_token.clone();
+        let search_query = query.to_string();
+        
+        // Run the gitlab crate operations in a blocking context
+        let result = tokio::task::spawn_blocking(move || {
+            // Create gitlab client for authentication context
+            let _client = GitlabBuilder::new(&gitlab_url, &private_token)
+                .build()
+                .map_err(|e| GitlabError::Api { message: format!("Failed to create gitlab client: {}", e) })?;
+            
+            // Use the gitlab client's HTTP client to make a manual search request
+            // Note: Search API may not be exposed through gitlab crate endpoints yet
+            let search_url = format!("{}/api/v4/projects/{}/search?scope=blobs&search={}", 
+                gitlab_url, project_id, urlencoding::encode(&search_query));
+            
+            // For now, return an error indicating this needs HTTP implementation
+            // This would require access to the internal HTTP client from gitlab crate
+            Err(GitlabError::Api {
+                message: format!("File name search requires direct HTTP access - endpoint: {}", search_url),
+            })
+        }).await
+        .map_err(|e| GitlabError::Api { message: format!("Blocking task failed: {}", e) })??;
+
+        Ok(result)
     }
 
     /// Search for files by content
     #[instrument(skip(self), fields(project_id, query))]
     pub async fn search_files_by_content(
         &self,
-        _project_id: i64,
-        _query: &str,
+        project_id: i64,
+        query: &str,
     ) -> Result<Vec<String>, GitlabError> {
-        // Note: Content search may require GitLab search API which might not be available
-        // in the gitlab crate yet. This would need manual HTTP implementation.
-        Err(GitlabError::Api {
-            message: "Search functionality not available in gitlab crate - requires manual HTTP implementation".to_string(),
-        })
+        let gitlab_url = self.gitlab_url.clone();
+        let private_token = self.private_token.clone();
+        let search_query = query.to_string();
+        
+        // Run the gitlab crate operations in a blocking context
+        let result = tokio::task::spawn_blocking(move || {
+            // Create gitlab client for authentication context
+            let _client = GitlabBuilder::new(&gitlab_url, &private_token)
+                .build()
+                .map_err(|e| GitlabError::Api { message: format!("Failed to create gitlab client: {}", e) })?;
+            
+            // Use the gitlab client's HTTP client to make a manual search request
+            // Note: Content search API may not be exposed through gitlab crate endpoints yet
+            let search_url = format!("{}/api/v4/projects/{}/search?scope=blobs&search={}", 
+                gitlab_url, project_id, urlencoding::encode(&search_query));
+            
+            // For now, return an error indicating this needs HTTP implementation
+            // This would require access to the internal HTTP client from gitlab crate
+            Err(GitlabError::Api {
+                message: format!("File content search requires direct HTTP access - endpoint: {}", search_url),
+            })
+        }).await
+        .map_err(|e| GitlabError::Api { message: format!("Blocking task failed: {}", e) })??;
+
+        Ok(result)
     }
 
     /// Get changes for a merge request
     #[instrument(skip(self), fields(project_id, merge_request_iid))]
     pub async fn get_merge_request_changes(
         &self,
-        _project_id: i64,
-        _merge_request_iid: i64,
+        project_id: i64,
+        merge_request_iid: i64,
     ) -> Result<Vec<GitlabDiff>, GitlabError> {
-        // Note: MR changes/diffs may require specific GitLab API endpoint which might not be available
-        // in the gitlab crate yet. This would need manual HTTP implementation.
-        Err(GitlabError::Api {
-            message: "MR changes functionality not available in gitlab crate - requires manual HTTP implementation".to_string(),
-        })
+        let gitlab_url = self.gitlab_url.clone();
+        let private_token = self.private_token.clone();
+        
+        // Run the gitlab crate operations in a blocking context
+        let result = tokio::task::spawn_blocking(move || {
+            // Create gitlab client for authentication context
+            let _client = GitlabBuilder::new(&gitlab_url, &private_token)
+                .build()
+                .map_err(|e| GitlabError::Api { message: format!("Failed to create gitlab client: {}", e) })?;
+            
+            // Use the gitlab client's HTTP client to make a manual changes request
+            // Note: MR changes/diffs API may not be exposed through gitlab crate endpoints yet
+            let changes_url = format!("{}/api/v4/projects/{}/merge_requests/{}/changes", 
+                gitlab_url, project_id, merge_request_iid);
+            
+            // For now, return an error indicating this needs HTTP implementation
+            // This would require access to the internal HTTP client from gitlab crate
+            Err(GitlabError::Api {
+                message: format!("MR changes requires direct HTTP access - endpoint: {}", changes_url),
+            })
+        }).await
+        .map_err(|e| GitlabError::Api { message: format!("Blocking task failed: {}", e) })??;
+
+        Ok(result)
     }
 
     #[instrument(skip(self), fields(project_id, issue_iid, label_name))]
