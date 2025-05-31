@@ -10,6 +10,9 @@ use tracing::{error, instrument};
 // GitLab crate imports for full API usage
 use gitlab::{Gitlab, GitlabBuilder, GitlabError as GitlabCrateError};
 use gitlab::api::{Query};
+use gitlab::api::projects::Project;
+use gitlab::api::projects::merge_requests::MergeRequest;
+use gitlab::api::projects::issues::notes::CreateIssueNote;
 use gitlab::api::projects::issues::Issue;
 
 #[derive(Error, Debug)]
@@ -112,24 +115,113 @@ impl GitlabApiClient {
     #[instrument(skip(self), fields(project_id, mr_iid))]
     pub async fn get_merge_request(
         &self,
-        __project_id: i64,
-        __mr_iid: i64,
+        project_id: i64,
+        mr_iid: i64,
     ) -> Result<GitlabMergeRequest, GitlabError> {
-        Err(GitlabError::Api {
-            message: "gitlab crate implementation pending".to_string(),
-        })
+        let gitlab_url = self.gitlab_url.clone();
+        let private_token = self.private_token.clone();
+        
+        // Run the gitlab crate operations in a blocking context
+        let result = tokio::task::spawn_blocking(move || {
+            let client = GitlabBuilder::new(&gitlab_url, &private_token)
+                .build()
+                .map_err(|e| GitlabError::Api { message: format!("Failed to create gitlab client: {}", e) })?;
+            
+            let endpoint = MergeRequest::builder()
+                .project(project_id as u64)
+                .merge_request(mr_iid as u64)
+                .build()
+                .map_err(|e| GitlabError::Api { message: format!("Failed to build merge request endpoint: {}", e) })?;
+
+            // Query the gitlab API
+            let mr_data: serde_json::Value = endpoint
+                .query(&client)
+                .map_err(|e| GitlabError::Api { message: format!("GitLab API query failed: {}", e) })?;
+
+            // Convert the JSON response to our GitlabMergeRequest struct
+            let gitlab_mr = GitlabMergeRequest {
+                id: mr_data["id"].as_i64().unwrap_or(0),
+                iid: mr_data["iid"].as_i64().unwrap_or(0),
+                project_id: mr_data["project_id"].as_i64().unwrap_or(0),
+                title: mr_data["title"].as_str().unwrap_or("").to_string(),
+                description: mr_data["description"].as_str().map(|s| s.to_string()),
+                state: mr_data["state"].as_str().unwrap_or("").to_string(),
+                author: crate::models::GitlabUser {
+                    id: mr_data["author"]["id"].as_i64().unwrap_or(0),
+                    username: mr_data["author"]["username"].as_str().unwrap_or("").to_string(),
+                    name: mr_data["author"]["name"].as_str().unwrap_or("").to_string(),
+                    avatar_url: mr_data["author"]["avatar_url"].as_str().map(|s| s.to_string()),
+                },
+                source_branch: mr_data["source_branch"].as_str().unwrap_or("").to_string(),
+                target_branch: mr_data["target_branch"].as_str().unwrap_or("").to_string(),
+                web_url: mr_data["web_url"].as_str().unwrap_or("").to_string(),
+                labels: mr_data["labels"].as_array()
+                    .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+                    .unwrap_or_default(),
+                detailed_merge_status: mr_data["detailed_merge_status"].as_str().map(|s| s.to_string()),
+                updated_at: mr_data["updated_at"].as_str().unwrap_or("").to_string(),
+                head_pipeline: None, // TODO: Parse pipeline if needed
+            };
+
+            Ok::<GitlabMergeRequest, GitlabError>(gitlab_mr)
+        }).await
+        .map_err(|e| GitlabError::Api { message: format!("Blocking task failed: {}", e) })??;
+
+        Ok(result)
     }
 
     #[instrument(skip(self), fields(project_id, issue_iid))]
     pub async fn post_comment_to_issue(
         &self,
-        __project_id: i64,
-        __issue_iid: i64,
-        _comment_body: &str,
+        project_id: i64,
+        issue_iid: i64,
+        comment_body: &str,
     ) -> Result<GitlabNoteAttributes, GitlabError> {
-        Err(GitlabError::Api {
-            message: "gitlab crate implementation pending".to_string(),
-        })
+        let gitlab_url = self.gitlab_url.clone();
+        let private_token = self.private_token.clone();
+        let body = comment_body.to_string();
+        
+        // Run the gitlab crate operations in a blocking context
+        let result = tokio::task::spawn_blocking(move || {
+            let client = GitlabBuilder::new(&gitlab_url, &private_token)
+                .build()
+                .map_err(|e| GitlabError::Api { message: format!("Failed to create gitlab client: {}", e) })?;
+            
+            let endpoint = CreateIssueNote::builder()
+                .project(project_id as u64)
+                .issue(issue_iid as u64)
+                .body(body)
+                .build()
+                .map_err(|e| GitlabError::Api { message: format!("Failed to build create note endpoint: {}", e) })?;
+
+            // Query the gitlab API
+            let note_data: serde_json::Value = endpoint
+                .query(&client)
+                .map_err(|e| GitlabError::Api { message: format!("GitLab API query failed: {}", e) })?;
+
+            // Convert the JSON response to our GitlabNoteAttributes struct
+            let gitlab_note = GitlabNoteAttributes {
+                id: note_data["id"].as_i64().unwrap_or(0),
+                note: note_data["body"].as_str().unwrap_or("").to_string(),
+                author: crate::models::GitlabUser {
+                    id: note_data["author"]["id"].as_i64().unwrap_or(0),
+                    username: note_data["author"]["username"].as_str().unwrap_or("").to_string(),
+                    name: note_data["author"]["name"].as_str().unwrap_or("").to_string(),
+                    avatar_url: note_data["author"]["avatar_url"].as_str().map(|s| s.to_string()),
+                },
+                project_id: note_data["project_id"].as_i64().unwrap_or(0),
+                noteable_type: note_data["noteable_type"].as_str().unwrap_or("").to_string(),
+                noteable_id: note_data["noteable_id"].as_i64(),
+                iid: note_data["iid"].as_i64(),
+                url: note_data["url"].as_str().map(|s| s.to_string()),
+                updated_at: note_data["updated_at"].as_str().unwrap_or("").to_string(),
+            };
+
+            Ok::<GitlabNoteAttributes, GitlabError>(gitlab_note)
+        }).await
+        .map_err(|e| GitlabError::Api { message: format!("Blocking task failed: {}", e) })??;
+
+        Ok(result)
     }
 
     #[instrument(skip(self), fields(project_id, mr_iid))]
@@ -145,10 +237,39 @@ impl GitlabApiClient {
     }
 
     #[instrument(skip(self), fields(repo_path))]
-    pub async fn get_project_by_path(&self, _repo_path: &str) -> Result<GitlabProject, GitlabError> {
-        Err(GitlabError::Api {
-            message: "gitlab crate implementation pending".to_string(),
-        })
+    pub async fn get_project_by_path(&self, repo_path: &str) -> Result<GitlabProject, GitlabError> {
+        let gitlab_url = self.gitlab_url.clone();
+        let private_token = self.private_token.clone();
+        let path = repo_path.to_string();
+        
+        // Run the gitlab crate operations in a blocking context
+        let result = tokio::task::spawn_blocking(move || {
+            let client = GitlabBuilder::new(&gitlab_url, &private_token)
+                .build()
+                .map_err(|e| GitlabError::Api { message: format!("Failed to create gitlab client: {}", e) })?;
+            
+            let endpoint = Project::builder()
+                .project(&path)
+                .build()
+                .map_err(|e| GitlabError::Api { message: format!("Failed to build project endpoint: {}", e) })?;
+
+            // Query the gitlab API
+            let project_data: serde_json::Value = endpoint
+                .query(&client)
+                .map_err(|e| GitlabError::Api { message: format!("GitLab API query failed: {}", e) })?;
+
+            // Convert the JSON response to our GitlabProject struct
+            let gitlab_project = GitlabProject {
+                id: project_data["id"].as_i64().unwrap_or(0),
+                path_with_namespace: project_data["path_with_namespace"].as_str().unwrap_or("").to_string(),
+                web_url: project_data["web_url"].as_str().unwrap_or("").to_string(),
+            };
+
+            Ok::<GitlabProject, GitlabError>(gitlab_project)
+        }).await
+        .map_err(|e| GitlabError::Api { message: format!("Blocking task failed: {}", e) })??;
+
+        Ok(result)
     }
 
     #[instrument(skip(self), fields(project_id, since_timestamp))]
