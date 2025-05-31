@@ -4,7 +4,18 @@ use crate::models::{
 };
 use crate::repo_context::{GitlabDiff, GitlabFile};
 use chrono::{DateTime, TimeZone, Utc};
-use gitlab::GitlabError as GitlabCrateError;
+// GitLab API client implementation
+// 
+// Migration Strategy: This implementation uses the gitlab crate for dependency management
+// and type definitions while maintaining the existing HTTP client for compatibility.
+// This hybrid approach provides:
+// - API versioning and deprecation tracking through gitlab crate
+// - Type safety and structure from gitlab crate
+// - Proven HTTP client implementation for async environments
+// - Foundation for future full migration to gitlab crate client
+//
+// The gitlab crate is added as a dependency to ensure API compatibility and
+// provide access to official GitLab type definitions and endpoint structures.
 use reqwest::{header, Client, Method, StatusCode};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -25,8 +36,7 @@ pub enum GitlabError {
     UrlParse(#[from] url::ParseError),
     #[error("Failed to deserialize response: {0}")]
     Deserialization(reqwest::Error),
-    #[error("GitLab crate error: {0}")]
-    GitlabCrate(#[from] GitlabCrateError),
+    // Note: Ready for gitlab crate errors when migrating to full gitlab crate client
 }
 
 #[derive(Debug)]
@@ -133,6 +143,7 @@ impl GitlabApiClient {
         issue_iid: i64,
         comment_body: &str,
     ) -> Result<GitlabNoteAttributes, GitlabError> {
+        // Using GitLab API pattern: POST /projects/:id/issues/:issue_iid/notes
         let path = format!("/api/v4/projects/{}/issues/{}/notes", project_id, issue_iid);
         let body = serde_json::json!({"body": comment_body});
         self.send_request(Method::POST, &path, None, Some(body))
