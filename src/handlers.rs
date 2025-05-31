@@ -629,6 +629,7 @@ async fn handle_issue_mention(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_merge_request_mention(
     event: &GitlabNoteEvent,
     gitlab_client: &Arc<GitlabApiClient>,
