@@ -679,7 +679,9 @@ async fn handle_merge_request_mention(
             }
         }
         Err(e) => match e {
-            GitlabError::Api { status, body } if status.as_u16() == 404 || body.contains("not found") => {
+            GitlabError::Api { status, body }
+                if status.as_u16() == 404 || body.contains("not found") =>
+            {
                 info!(
                     "CONTRIBUTING.md not found for project ID {}. Proceeding without it.",
                     project_id
