@@ -50,7 +50,7 @@ impl RepoContextExtractor {
         {
             Ok(file) => Ok(file.content),
             Err(GitlabError::Api { status, body })
-                if status.as_u16() == 404 || body.contains("not found") =>
+                if status == 404 || body.contains("not found") =>
             {
                 Ok(None)
             }

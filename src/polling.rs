@@ -956,7 +956,7 @@ mod tests {
         assert!(result.is_err());
         match result.err().unwrap().downcast_ref::<GitlabError>() {
             Some(GitlabError::Api { status, body }) => {
-                assert!(status.as_u16() == 500 || body.contains("error"))
+                assert!(*status == 500 || body.contains("error"))
             }
             _ => panic!("Expected GitlabError::Api"),
         }
