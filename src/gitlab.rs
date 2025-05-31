@@ -4,6 +4,7 @@ use crate::models::{
 };
 use crate::repo_context::{GitlabDiff, GitlabFile};
 use chrono::{DateTime, TimeZone, Utc};
+use gitlab::GitlabError as GitlabCrateError;
 use reqwest::{header, Client, Method, StatusCode};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -24,10 +25,13 @@ pub enum GitlabError {
     UrlParse(#[from] url::ParseError),
     #[error("Failed to deserialize response: {0}")]
     Deserialization(reqwest::Error),
+    #[error("GitLab crate error: {0}")]
+    GitlabCrate(#[from] GitlabCrateError),
 }
 
 #[derive(Debug)]
 pub struct GitlabApiClient {
+    // Keep the reqwest client for HTTP requests
     client: Client,
     gitlab_url: Url,
     private_token: String,
@@ -38,6 +42,7 @@ impl GitlabApiClient {
     pub fn new(settings: Arc<AppSettings>) -> Result<Self, GitlabError> {
         let gitlab_url = Url::parse(&settings.gitlab_url)?;
         let client = Client::new();
+        
         Ok(Self {
             client,
             gitlab_url,
