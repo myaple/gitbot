@@ -362,27 +362,26 @@ impl RepoContextExtractor {
             has_any_content = true;
             // Extract keywords from issue for content filtering
             let keywords = self.extract_keywords(issue);
-            
+
             // Then add relevant file contents with matched sections only
             for file in relevant_files {
                 if let Some(content) = file.content {
                     // Extract only relevant sections that contain keywords
                     let matches = self.extract_relevant_file_sections(&content, &keywords);
-                    
+
                     if !matches.is_empty() {
                         let mut file_context = format!("\n--- File: {} ---\n", file.file_path);
-                        
+
                         for (i, section) in matches.iter().enumerate() {
                             if i > 0 {
                                 file_context.push_str("\n...\n\n"); // Separator between sections
                             }
-                            
+
                             file_context.push_str(&format!(
                                 "Lines {}-{}:\n",
-                                section.start_line,
-                                section.end_line
+                                section.start_line, section.end_line
                             ));
-                            
+
                             for (j, line) in section.lines.iter().enumerate() {
                                 let line_number = section.start_line + j;
                                 file_context.push_str(&format!("{:4}: {}\n", line_number, line));
@@ -393,8 +392,9 @@ impl RepoContextExtractor {
                         // Check if adding this file would exceed our context limit
                         if total_size + file_context.len() > self.settings.max_context_size {
                             // If we're about to exceed the limit, add a truncation notice
-                            context
-                                .push_str("\n[Additional files omitted due to context size limits]\n");
+                            context.push_str(
+                                "\n[Additional files omitted due to context size limits]\n",
+                            );
                             break;
                         }
 
@@ -1766,33 +1766,100 @@ fn decode_jwt(token: &str) -> Result<Claims> {
 
         // Should find sections containing "authenticate" and "jwt"
         assert!(!matches.is_empty(), "Should find keyword matches");
-        
+
         // Check that we have the right number of matches (may be merged)
         let total_lines: usize = matches.iter().map(|m| m.lines.len()).sum();
         assert!(total_lines > 0, "Should have some content lines");
-        
+
         // Verify line numbers are 1-based and sequential within each match
         for match_section in &matches {
-            assert!(match_section.start_line >= 1, "Line numbers should be 1-based");
-            assert!(match_section.end_line >= match_section.start_line, "End line should be >= start line");
+            assert!(
+                match_section.start_line >= 1,
+                "Line numbers should be 1-based"
+            );
+            assert!(
+                match_section.end_line >= match_section.start_line,
+                "End line should be >= start line"
+            );
             assert_eq!(
                 match_section.lines.len(),
                 match_section.end_line - match_section.start_line + 1,
                 "Number of lines should match line range"
             );
         }
-        
+
         // Verify that at least one section contains our keywords
-        let all_content: String = matches.iter()
+        let all_content: String = matches
+            .iter()
             .flat_map(|m| m.lines.iter())
             .map(|s| s.as_str())
             .collect::<Vec<_>>()
             .join("\n")
             .to_lowercase();
-        
+
         assert!(
             all_content.contains("authenticate") || all_content.contains("jwt"),
             "Extracted content should contain at least one of the keywords"
         );
+    }
+
+    #[test]
+    fn test_token_usage_reduction() {
+        // This test demonstrates the token usage reduction
+        let settings = AppSettings {
+            openai_model: "gpt-3.5-turbo".to_string(),
+            openai_temperature: 0.7,
+            openai_max_tokens: 1024,
+            gitlab_url: "https://gitlab.com".to_string(),
+            gitlab_token: "test_token".to_string(),
+            openai_api_key: "key".to_string(),
+            openai_custom_url: "url".to_string(),
+            repos_to_poll: vec!["org/repo1".to_string()],
+            log_level: "debug".to_string(),
+            bot_username: "gitbot".to_string(),
+            poll_interval_seconds: 60,
+            stale_issue_days: 30,
+            max_age_hours: 24,
+            context_repo_path: None,
+            max_context_size: 60000,
+            default_branch: "main".to_string(),
+        };
+
+        let settings_arc = Arc::new(settings.clone());
+        let gitlab_client = Arc::new(GitlabApiClient::new(settings_arc.clone()).unwrap());
+        let file_index_manager = Arc::new(FileIndexManager::new(gitlab_client.clone(), 3600));
+        let extractor = RepoContextExtractor::new_with_file_indexer(
+            gitlab_client,
+            settings_arc,
+            file_index_manager,
+        );
+
+        // Create a large file with only a few relevant lines
+        let large_file_content = format!(
+            "{}{}{}{}{}",
+            "// Large file with lots of irrelevant content\n".repeat(50),
+            "pub fn authenticate_user(username: &str) -> bool {\n    // This is relevant\n    true\n}\n",
+            "// More irrelevant content\n".repeat(50), 
+            "fn validate_jwt_token(token: &str) -> bool {\n    // This is also relevant\n    true\n}\n",
+            "// Even more irrelevant content\n".repeat(50)
+        );
+
+        let keywords = vec!["authenticate".to_string(), "jwt".to_string()];
+        let matches = extractor.extract_relevant_file_sections(&large_file_content, &keywords);
+
+        // Calculate size reduction
+        let original_size = large_file_content.len();
+        let extracted_size: usize = matches.iter().map(|m| m.lines.join("\n").len()).sum();
+
+        println!(
+            "Token usage reduction: Original file {} chars, extracted {} chars, savings: {:.1}%",
+            original_size,
+            extracted_size,
+            (1.0 - (extracted_size as f64 / original_size as f64)) * 100.0
+        );
+
+        // Should have significant reduction
+        assert!(extracted_size < original_size / 2, "Should reduce content by at least 50%");
+        assert!(!matches.is_empty(), "Should find relevant sections");
     }
 }
