@@ -1,4 +1,5 @@
 use crate::config::AppSettings;
+use crate::file_indexer::FileIndexManager;
 use crate::gitlab::GitlabApiClient;
 use crate::handlers::process_mention;
 use crate::mention_cache::MentionCache;
@@ -20,10 +21,15 @@ pub struct PollingService {
     config: Arc<AppSettings>,
     last_checked: Arc<Mutex<u64>>,
     processed_mentions_cache: MentionCache,
+    file_index_manager: Arc<FileIndexManager>,
 }
 
 impl PollingService {
-    pub fn new(gitlab_client: Arc<GitlabApiClient>, config: Arc<AppSettings>) -> Self {
+    pub fn new(
+        gitlab_client: Arc<GitlabApiClient>,
+        config: Arc<AppSettings>,
+        file_index_manager: Arc<FileIndexManager>,
+    ) -> Self {
         // Initialize with current time minus 1 hour to check recent activity on startup
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -37,6 +43,7 @@ impl PollingService {
             config,
             last_checked: Arc::new(Mutex::new(initial_time)),
             processed_mentions_cache: MentionCache::new(),
+            file_index_manager,
         }
     }
 
@@ -232,6 +239,7 @@ impl PollingService {
                         self.gitlab_client.clone(),
                         self.config.clone(),
                         &self.processed_mentions_cache,
+                        self.file_index_manager.clone(),
                     )
                     .await
                     {
@@ -287,6 +295,7 @@ impl PollingService {
                         self.gitlab_client.clone(),
                         self.config.clone(),
                         &self.processed_mentions_cache,
+                        self.file_index_manager.clone(),
                     )
                     .await
                     {
@@ -1103,9 +1112,10 @@ mod tests {
         let base_url = server.url();
 
         let settings_obj = test_config(30, TEST_BOT_USERNAME, base_url.clone());
-        let gitlab_client = GitlabApiClient::new(settings_obj.clone()).unwrap();
+        let gitlab_client = Arc::new(GitlabApiClient::new(settings_obj.clone()).unwrap());
+        let file_index_manager = Arc::new(FileIndexManager::new(gitlab_client.clone(), 3600));
 
-        let polling_service = PollingService::new(Arc::new(gitlab_client), settings_obj);
+        let polling_service = PollingService::new(gitlab_client, settings_obj, file_index_manager);
 
         let last_checked = *polling_service.last_checked.lock().await;
         let now = SystemTime::now()
