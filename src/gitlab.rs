@@ -9,6 +9,8 @@ use tracing::{error, instrument};
 
 // GitLab crate imports for full API usage
 use gitlab::{Gitlab, GitlabBuilder, GitlabError as GitlabCrateError};
+use gitlab::api::{Query};
+use gitlab::api::projects::issues::Issue;
 
 #[derive(Error, Debug)]
 pub enum GitlabError {
@@ -33,32 +35,78 @@ pub enum GitlabError {
 /// - Future-proofing against GitLab API changes
 #[derive(Debug)]
 pub struct GitlabApiClient {
-    client: Gitlab,
+    gitlab_url: String,
+    private_token: String,
     settings: Arc<AppSettings>,
 }
 
 impl GitlabApiClient {
     pub fn new(settings: Arc<AppSettings>) -> Result<Self, GitlabError> {
-        let client = GitlabBuilder::new(&settings.gitlab_url, &settings.gitlab_token)
-            .build()
-            .map_err(GitlabError::GitlabApi)?;
-            
         Ok(Self {
-            client,
+            gitlab_url: settings.gitlab_url.clone(),
+            private_token: settings.gitlab_token.clone(),
             settings,
         })
+    }
+
+    fn create_client(&self) -> Result<Gitlab, GitlabError> {
+        GitlabBuilder::new(&self.gitlab_url, &self.private_token)
+            .build()
+            .map_err(GitlabError::GitlabApi)
     }
 
     #[instrument(skip(self), fields(project_id, issue_iid))]
     pub async fn get_issue(
         &self,
-        __project_id: i64,
-        __issue_iid: i64,
+        project_id: i64,
+        issue_iid: i64,
     ) -> Result<GitlabIssue, GitlabError> {
-        // For now, create a stub implementation that will be replaced once we understand the gitlab crate better
-        Err(GitlabError::Api {
-            message: "gitlab crate implementation pending".to_string(),
-        })
+        let gitlab_url = self.gitlab_url.clone();
+        let private_token = self.private_token.clone();
+        
+        // Run the gitlab crate operations in a blocking context
+        let result = tokio::task::spawn_blocking(move || {
+            let client = GitlabBuilder::new(&gitlab_url, &private_token)
+                .build()
+                .map_err(|e| GitlabError::Api { message: format!("Failed to create gitlab client: {}", e) })?;
+            
+            let endpoint = Issue::builder()
+                .project(project_id as u64)
+                .issue(issue_iid as u64)
+                .build()
+                .map_err(|e| GitlabError::Api { message: format!("Failed to build issue endpoint: {}", e) })?;
+
+            // Query the gitlab API (this is synchronous in the gitlab crate)
+            let issue_data: serde_json::Value = endpoint
+                .query(&client)
+                .map_err(|e| GitlabError::Api { message: format!("GitLab API query failed: {}", e) })?;
+
+            // Convert the JSON response to our GitlabIssue struct
+            let gitlab_issue = GitlabIssue {
+                id: issue_data["id"].as_i64().unwrap_or(0),
+                iid: issue_data["iid"].as_i64().unwrap_or(0),
+                project_id: issue_data["project_id"].as_i64().unwrap_or(0),
+                title: issue_data["title"].as_str().unwrap_or("").to_string(),
+                description: issue_data["description"].as_str().map(|s| s.to_string()),
+                state: issue_data["state"].as_str().unwrap_or("").to_string(),
+                author: crate::models::GitlabUser {
+                    id: issue_data["author"]["id"].as_i64().unwrap_or(0),
+                    username: issue_data["author"]["username"].as_str().unwrap_or("").to_string(),
+                    name: issue_data["author"]["name"].as_str().unwrap_or("").to_string(),
+                    avatar_url: issue_data["author"]["avatar_url"].as_str().map(|s| s.to_string()),
+                },
+                web_url: issue_data["web_url"].as_str().unwrap_or("").to_string(),
+                labels: issue_data["labels"].as_array()
+                    .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+                    .unwrap_or_default(),
+                updated_at: issue_data["updated_at"].as_str().unwrap_or("").to_string(),
+            };
+
+            Ok::<GitlabIssue, GitlabError>(gitlab_issue)
+        }).await
+        .map_err(|e| GitlabError::Api { message: format!("Blocking task failed: {}", e) })??;
+
+        Ok(result)
     }
 
     #[instrument(skip(self), fields(project_id, mr_iid))]
