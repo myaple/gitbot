@@ -12,6 +12,7 @@ use gitlab::api::projects::issues::{Issue, Issues};
 use gitlab::api::projects::merge_requests::MergeRequest;
 use gitlab::api::projects::Project;
 use gitlab::api::projects::issues::notes::CreateIssueNote;
+use gitlab::api::projects::merge_requests::notes::CreateMergeRequestNote;
 use gitlab::api::{Pagination};
 use std::sync::Arc;
 use thiserror::Error;
@@ -126,9 +127,19 @@ impl GitlabApiClient {
         mr_iid: i64,
         comment_body: &str,
     ) -> Result<GitlabNoteAttributes, GitlabError> {
-        Err(GitlabError::Api { 
-            message: format!("GitLab crate integration in progress for post_comment_to_merge_request({}, {}, len={})", project_id, mr_iid, comment_body.len()) 
-        })
+        let endpoint = CreateMergeRequestNote::builder()
+            .project(project_id as u64)
+            .merge_request(mr_iid as u64)
+            .body(comment_body)
+            .build()
+            .map_err(|e| GitlabError::Api { message: format!("Failed to build create merge request note endpoint: {}", e) })?;
+            
+        let note: GitlabNoteAttributes = endpoint
+            .query_async(&self.client)
+            .await
+            .map_err(|e| GitlabError::Api { message: format!("API error: {}", e) })?;
+            
+        Ok(note)
     }
 
     #[instrument(skip(self), fields(repo_path))]
@@ -357,5 +368,23 @@ mod tests {
             GitlabError::GitlabApi(_) => {} // Expected error from gitlab crate
             _ => panic!("Expected GitlabApi error"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_post_comment_to_merge_request_compiles() {
+        // Just test that our method compiles and can be called
+        // We don't need a real GitLab server for this
+        let settings = Arc::new(create_test_settings("http://localhost:1234".to_string()));
+        let client = GitlabApiClient::new(settings).await;
+        assert!(client.is_ok());
+        
+        // We can't actually test the API call without a server, but we can verify the method exists
+        // This test confirms the method signature and basic structure are correct
+        let client = client.unwrap();
+        
+        // This would fail if the API method doesn't exist or has wrong signature
+        let _result = client.post_comment_to_merge_request(1, 1, "test comment").await;
+        // We expect this to fail with an API error since we don't have a real server
+        // But the important thing is that the method exists and compiles
     }
 }
