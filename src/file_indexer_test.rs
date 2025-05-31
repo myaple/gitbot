@@ -7,7 +7,6 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
-    #[ignore]
     fn test_file_content_index() {
         let index = FileContentIndex::new(1);
 

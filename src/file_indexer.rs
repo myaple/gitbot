@@ -148,12 +148,26 @@ impl FileContentIndex {
         // For each keyword, find files that contain any of its n-grams
         let mut keyword_matches: Vec<HashSet<String>> = Vec::new();
 
-        for ngrams in keyword_ngrams {
+        for (i, ngrams) in keyword_ngrams.iter().enumerate() {
             let mut files_for_keyword = HashSet::new();
+            let keyword = &keywords[i].to_lowercase();
 
-            for ngram in ngrams {
-                if let Some(files) = self.ngram_to_files.get(&ngram) {
-                    files_for_keyword.extend(files.iter().cloned());
+            // Special handling for short keywords (less than NGRAM_SIZE)
+            if keyword.len() < NGRAM_SIZE {
+                // For short keywords, we need to check if any file contains this keyword
+                // by looking at all n-grams that might contain it
+                for item in self.ngram_to_files.iter() {
+                    let ngram = item.key();
+                    if ngram.contains(keyword) {
+                        files_for_keyword.extend(item.value().iter().cloned());
+                    }
+                }
+            } else {
+                // Normal case: look for exact n-gram matches
+                for ngram in ngrams {
+                    if let Some(files) = self.ngram_to_files.get(ngram) {
+                        files_for_keyword.extend(files.iter().cloned());
+                    }
                 }
             }
 
@@ -428,7 +442,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_remove_file() {
         let index = FileContentIndex::new(1);
 
