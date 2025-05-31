@@ -52,7 +52,7 @@ async fn fetch_subsequent_notes_by_type(
     is_issue: &mut bool,
 ) -> Result<Vec<crate::models::GitlabNoteAttributes>> {
     let project_id = event.project.id;
-    
+
     match event.object_attributes.noteable_type.as_str() {
         "Issue" => {
             *is_issue = true;
@@ -122,7 +122,7 @@ async fn check_for_bot_reply_in_notes(
     if !notes.is_empty() {
         debug!("Fetched {} subsequent notes for reply check.", notes.len());
     }
-    
+
     for note in notes {
         // Skip the current mention note itself. This is vital.
         if note.id == current_mention_note_id {
@@ -172,7 +172,7 @@ async fn check_for_bot_reply_in_notes(
             }
         }
     }
-    
+
     // If we've reached this point without returning Ok(true), no relevant bot reply was found.
     info!("No subsequent bot reply found that meets the criteria for duplicate prevention. Proceeding to process mention.");
     Ok(false) // Not replied
@@ -199,7 +199,9 @@ async fn has_bot_already_replied(
         "Preparing to check for subsequent bot replies."
     );
 
-    match fetch_subsequent_notes_by_type(event, gitlab_client, notes_since_timestamp_u64, is_issue).await {
+    match fetch_subsequent_notes_by_type(event, gitlab_client, notes_since_timestamp_u64, is_issue)
+        .await
+    {
         Ok(notes) => {
             check_for_bot_reply_in_notes(
                 notes,
@@ -207,7 +209,8 @@ async fn has_bot_already_replied(
                 mention_timestamp_dt,
                 current_mention_note_id,
                 processed_mentions_cache,
-            ).await
+            )
+            .await
         }
         Err(e) => {
             warn!(
@@ -425,15 +428,8 @@ pub async fn process_mention(
         user_provided_context: &user_provided_context,
         is_issue,
     };
-    
-    generate_and_post_reply(
-        &event,
-        &gitlab_client,
-        &config,
-        project_id,
-        reply_context,
-    )
-    .await?;
+
+    generate_and_post_reply(&event, &gitlab_client, &config, project_id, reply_context).await?;
 
     // Add to cache after successful processing
     processed_mentions_cache.add(mention_id).await;
@@ -575,15 +571,13 @@ async fn get_llm_reply(
         })
 }
 
-async fn handle_issue_mention(
+// Helper function to extract issue details and handle stale label removal
+async fn extract_issue_details_and_handle_stale(
     event: &GitlabNoteEvent,
     gitlab_client: &Arc<GitlabApiClient>,
     config: &Arc<AppSettings>,
     project_id: i64,
-    prompt_parts: &mut Vec<String>,
-    user_provided_context: &Option<String>,
-    file_index_manager: &Arc<FileIndexManager>,
-) -> Result<()> {
+) -> Result<(i64, crate::models::GitlabIssue)> {
     let issue_iid = match event.issue.as_ref().map(|i| i.iid) {
         Some(iid) => iid,
         None => {
@@ -629,117 +623,180 @@ async fn handle_issue_mention(
             anyhow!("Failed to fetch issue details from GitLab: {}", e)
         })?;
 
-    if let Some(context) = user_provided_context {
-        prompt_parts.push(format!(
-            "The user @{} provided the following request regarding this issue: '{}'.",
-            event.user.username, context
-        ));
-        let issue_details = gitlab_client
-            .get_issue(project_id, issue_iid)
-            .await
-            .map_err(|e| {
-                error!("Failed to get issue details for context: {}", e);
-                anyhow!("Failed to fetch issue details from GitLab: {}", e)
-            })?;
+    Ok((issue_iid, issue))
+}
 
-        prompt_parts.push(format!("Title: {}", issue_details.title));
-        prompt_parts.push(format!(
-            "Description: {}",
-            issue_details.description.as_deref().unwrap_or("N/A")
-        ));
+// Helper function to add repository context to prompt
+async fn add_repository_context_to_prompt(
+    gitlab_client: &Arc<GitlabApiClient>,
+    config: &Arc<AppSettings>,
+    file_index_manager: &Arc<FileIndexManager>,
+    issue: &crate::models::GitlabIssue,
+    project: &crate::models::GitlabProject,
+    prompt_parts: &mut Vec<String>,
+) {
+    let repo_context_extractor = RepoContextExtractor::new_with_file_indexer(
+        gitlab_client.clone(),
+        config.clone(),
+        file_index_manager.clone(),
+    );
 
-        prompt_parts.push(format!("State: {}", issue.state));
-        if !issue.labels.is_empty() {
-            prompt_parts.push(format!("Labels: {}", issue.labels.join(", ")));
+    match repo_context_extractor
+        .extract_context_for_issue(issue, project, config.context_repo_path.as_deref())
+        .await
+    {
+        Ok(context_str) => {
+            prompt_parts.push(format!("Repository Context: {}", context_str));
         }
-
-        // Add repository context
-        let repo_context_extractor = RepoContextExtractor::new_with_file_indexer(
-            gitlab_client.clone(),
-            config.clone(),
-            file_index_manager.clone(),
-        );
-        // The extract_context_for_issue function now handles errors internally and will always return Ok
-        // with as much context as it could gather
-        match repo_context_extractor
-            .extract_context_for_issue(&issue, &event.project, config.context_repo_path.as_deref())
-            .await
-        {
-            Ok(context_str) => {
-                prompt_parts.push(format!("Repository Context: {}", context_str));
-            }
-            Err(e) => {
-                // This should now only happen in catastrophic failures
-                warn!(
-                    "Failed to extract repository context: {}. This is a critical error.",
-                    e
-                );
-            }
+        Err(e) => {
+            // This should now only happen in catastrophic failures
+            warn!(
+                "Failed to extract repository context: {}. This is a critical error.",
+                e
+            );
         }
-
-        prompt_parts.push(format!("User's specific request: {}", context));
-    } else {
-        // No specific context, summarize and suggest steps
-        prompt_parts.push(format!(
-            "Please summarize this issue for user @{} and suggest steps to address it. Be specific about which files, functions, or modules need to be modified.",
-            event.user.username
-        ));
-        prompt_parts.push(format!("Issue Title: {}", issue.title));
-        prompt_parts.push(format!(
-            "Issue Description: {}",
-            issue.description.as_deref().unwrap_or("No description.")
-        ));
-        prompt_parts.push(format!("Author: {}", issue.author.name));
-        prompt_parts.push(format!("State: {}", issue.state));
-        if !issue.labels.is_empty() {
-            prompt_parts.push(format!("Labels: {}", issue.labels.join(", ")));
-        }
-
-        // Add repository context
-        let repo_context_extractor = RepoContextExtractor::new_with_file_indexer(
-            gitlab_client.clone(),
-            config.clone(),
-            file_index_manager.clone(),
-        );
-        // The extract_context_for_issue function now handles errors internally and will always return Ok
-        // with as much context as it could gather
-        match repo_context_extractor
-            .extract_context_for_issue(&issue, &event.project, config.context_repo_path.as_deref())
-            .await
-        {
-            Ok(context_str) => {
-                prompt_parts.push(format!("Repository Context: {}", context_str));
-            }
-            Err(e) => {
-                // This should now only happen in catastrophic failures
-                warn!(
-                    "Failed to extract repository context: {}. This is a critical error.",
-                    e
-                );
-            }
-        }
-
-        // Add instructions for steps
-        prompt_parts.push(
-            String::from("Please provide a summary of the issue and suggest specific steps to")
-                + "address it based on the repository context. Again, be specific about"
-                + "which files, functions, or modules need to be modified.",
-        );
     }
+}
+
+// Helper struct for issue prompt building context
+struct IssuePromptContext<'a> {
+    event: &'a GitlabNoteEvent,
+    gitlab_client: &'a Arc<GitlabApiClient>,
+    config: &'a Arc<AppSettings>,
+    project_id: i64,
+    issue_iid: i64,
+    issue: &'a crate::models::GitlabIssue,
+    file_index_manager: &'a Arc<FileIndexManager>,
+}
+
+// Helper function to build issue prompt with user-provided context
+async fn build_issue_prompt_with_context(
+    context: IssuePromptContext<'_>,
+    user_context: &str,
+    prompt_parts: &mut Vec<String>,
+) -> Result<()> {
+    prompt_parts.push(format!(
+        "The user @{} provided the following request regarding this issue: '{}'.",
+        context.event.user.username, user_context
+    ));
+
+    let issue_details = context
+        .gitlab_client
+        .get_issue(context.project_id, context.issue_iid)
+        .await
+        .map_err(|e| {
+            error!("Failed to get issue details for context: {}", e);
+            anyhow!("Failed to fetch issue details from GitLab: {}", e)
+        })?;
+
+    prompt_parts.push(format!("Title: {}", issue_details.title));
+    prompt_parts.push(format!(
+        "Description: {}",
+        issue_details.description.as_deref().unwrap_or("N/A")
+    ));
+
+    prompt_parts.push(format!("State: {}", context.issue.state));
+    if !context.issue.labels.is_empty() {
+        prompt_parts.push(format!("Labels: {}", context.issue.labels.join(", ")));
+    }
+
+    // Add repository context
+    add_repository_context_to_prompt(
+        context.gitlab_client,
+        context.config,
+        context.file_index_manager,
+        context.issue,
+        &context.event.project,
+        prompt_parts,
+    )
+    .await;
+
+    prompt_parts.push(format!("User's specific request: {}", user_context));
+
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn handle_merge_request_mention(
+// Helper function to build issue prompt without user context (default summarization)
+async fn build_issue_prompt_without_context(
+    context: IssuePromptContext<'_>,
+    prompt_parts: &mut Vec<String>,
+) {
+    // No specific context, summarize and suggest steps
+    prompt_parts.push(format!(
+        "Please summarize this issue for user @{} and suggest steps to address it. Be specific about which files, functions, or modules need to be modified.",
+        context.event.user.username
+    ));
+    prompt_parts.push(format!("Issue Title: {}", context.issue.title));
+    prompt_parts.push(format!(
+        "Issue Description: {}",
+        context
+            .issue
+            .description
+            .as_deref()
+            .unwrap_or("No description.")
+    ));
+    prompt_parts.push(format!("Author: {}", context.issue.author.name));
+    prompt_parts.push(format!("State: {}", context.issue.state));
+    if !context.issue.labels.is_empty() {
+        prompt_parts.push(format!("Labels: {}", context.issue.labels.join(", ")));
+    }
+
+    // Add repository context
+    add_repository_context_to_prompt(
+        context.gitlab_client,
+        context.config,
+        context.file_index_manager,
+        context.issue,
+        &context.event.project,
+        prompt_parts,
+    )
+    .await;
+
+    // Add instructions for steps
+    prompt_parts.push(
+        String::from("Please provide a summary of the issue and suggest specific steps to")
+            + "address it based on the repository context. Again, be specific about"
+            + "which files, functions, or modules need to be modified.",
+    );
+}
+
+async fn handle_issue_mention(
     event: &GitlabNoteEvent,
     gitlab_client: &Arc<GitlabApiClient>,
     config: &Arc<AppSettings>,
     project_id: i64,
     prompt_parts: &mut Vec<String>,
-    commit_history: &mut String, // Changed to mutable reference
     user_provided_context: &Option<String>,
     file_index_manager: &Arc<FileIndexManager>,
 ) -> Result<()> {
+    let (issue_iid, issue) =
+        extract_issue_details_and_handle_stale(event, gitlab_client, config, project_id).await?;
+
+    let context = IssuePromptContext {
+        event,
+        gitlab_client,
+        config,
+        project_id,
+        issue_iid,
+        issue: &issue,
+        file_index_manager,
+    };
+
+    if let Some(user_context) = user_provided_context {
+        build_issue_prompt_with_context(context, user_context, prompt_parts).await?;
+    } else {
+        build_issue_prompt_without_context(context, prompt_parts).await;
+    }
+
+    Ok(())
+}
+
+// Helper function to extract merge request details
+async fn extract_merge_request_details(
+    event: &GitlabNoteEvent,
+    gitlab_client: &Arc<GitlabApiClient>,
+    project_id: i64,
+) -> Result<(i64, crate::models::GitlabMergeRequest)> {
     let mr_iid = match event.merge_request.as_ref().map(|mr| mr.iid) {
         Some(iid) => iid,
         None => {
@@ -763,7 +820,14 @@ async fn handle_merge_request_mention(
             anyhow!("Failed to fetch MR details from GitLab: {}", e)
         })?;
 
-    let mut contributing_md_content: Option<String> = None;
+    Ok((mr_iid, mr))
+}
+
+// Helper function to fetch CONTRIBUTING.md content
+async fn fetch_contributing_guidelines(
+    gitlab_client: &Arc<GitlabApiClient>,
+    project_id: i64,
+) -> Option<String> {
     match gitlab_client
         .get_file_content(project_id, "CONTRIBUTING.md")
         .await
@@ -775,12 +839,13 @@ async fn handle_merge_request_mention(
                         "Successfully fetched and decoded CONTRIBUTING.md for project ID {}",
                         project_id
                     );
-                    contributing_md_content = Some(content);
+                    Some(content)
                 } else {
                     info!(
                         "CONTRIBUTING.md is empty for project ID {}. Proceeding without it.",
                         project_id
                     );
+                    None
                 }
             } else {
                 // This case might occur if the API returns a success status but no content field,
@@ -789,6 +854,7 @@ async fn handle_merge_request_mention(
                     "CONTRIBUTING.md has no content or content was null for project ID {}. Proceeding without it.",
                     project_id
                 );
+                None
             }
         }
         Err(e) => match e {
@@ -797,110 +863,192 @@ async fn handle_merge_request_mention(
                     "CONTRIBUTING.md not found (404) for project ID {}. Proceeding without it.",
                     project_id
                 );
+                None
             }
             _ => {
                 warn!(
                     "Failed to fetch CONTRIBUTING.md for project ID {}: {:?}. Proceeding without it.",
                     project_id, e
                 );
+                None
             }
         },
     }
+}
 
-    if let Some(context) = user_provided_context {
-        prompt_parts.push(format!(
-            "The user @{} provided the following request regarding this merge request: '{}'.",
-            event.user.username, context
-        ));
+// Helper function to add MR context to prompt
+async fn add_mr_context_to_prompt(
+    gitlab_client: &Arc<GitlabApiClient>,
+    config: &Arc<AppSettings>,
+    file_index_manager: &Arc<FileIndexManager>,
+    mr: &crate::models::GitlabMergeRequest,
+    project: &crate::models::GitlabProject,
+    prompt_parts: &mut Vec<String>,
+    commit_history: &mut String,
+) {
+    let repo_context_extractor = RepoContextExtractor::new_with_file_indexer(
+        gitlab_client.clone(),
+        config.clone(),
+        file_index_manager.clone(),
+    );
 
-        prompt_parts.push(format!("Title: {}", mr.title));
-        prompt_parts.push(format!(
-            "Description: {}",
-            mr.description.as_deref().unwrap_or("N/A")
-        ));
-        prompt_parts.push(format!("State: {}", mr.state));
-        if !mr.labels.is_empty() {
-            prompt_parts.push(format!("Labels: {}", mr.labels.join(", ")));
+    match repo_context_extractor
+        .extract_context_for_mr(mr, project, config.context_repo_path.as_deref())
+        .await
+    {
+        Ok((context_for_llm, context_for_comment)) => {
+            prompt_parts.push(format!("Code Changes: {}", context_for_llm));
+            *commit_history = context_for_comment; // Update commit_history
         }
-        prompt_parts.push(format!("Source Branch: {}", mr.source_branch));
-        prompt_parts.push(format!("Target Branch: {}", mr.target_branch));
-
-        // Add code diff context
-        let repo_context_extractor = RepoContextExtractor::new_with_file_indexer(
-            gitlab_client.clone(),
-            config.clone(),
-            file_index_manager.clone(),
-        );
-        match repo_context_extractor
-            .extract_context_for_mr(&mr, &event.project, config.context_repo_path.as_deref())
-            .await
-        {
-            Ok((context_for_llm, context_for_comment)) => {
-                prompt_parts.push(format!("Code Changes: {}", context_for_llm));
-                *commit_history = context_for_comment; // Update commit_history
-            }
-            Err(e) => {
-                warn!("Failed to extract merge request diff context: {}", e);
-            }
-        }
-
-        prompt_parts.push(format!("User's specific request: {}", context));
-    } else {
-        // No specific context, summarize with code diffs
-        prompt_parts.push(format!(
-            "Please review this merge request for user @{} and provide a summary of the changes.",
-            event.user.username
-        ));
-        prompt_parts.push(format!("Merge Request Title: {}", mr.title));
-        prompt_parts.push(format!(
-            "Merge Request Description: {}",
-            mr.description.as_deref().unwrap_or("No description.")
-        ));
-        prompt_parts.push(format!("Author: {}", mr.author.name));
-        prompt_parts.push(format!("State: {}", mr.state));
-        if !mr.labels.is_empty() {
-            prompt_parts.push(format!("Labels: {}", mr.labels.join(", ")));
-        }
-        prompt_parts.push(format!("Source Branch: {}", mr.source_branch));
-        prompt_parts.push(format!("Target Branch: {}", mr.target_branch));
-
-        // Add code diff context
-        let repo_context_extractor = RepoContextExtractor::new_with_file_indexer(
-            gitlab_client.clone(),
-            config.clone(),
-            file_index_manager.clone(),
-        );
-        match repo_context_extractor
-            .extract_context_for_mr(&mr, &event.project, config.context_repo_path.as_deref())
-            .await
-        {
-            Ok((context_for_llm, context_for_comment)) => {
-                prompt_parts.push(format!("Code Changes: {}", context_for_llm));
-                *commit_history = context_for_comment; // Update commit_history
-            }
-            Err(e) => {
-                warn!("Failed to extract merge request diff context: {}", e);
-            }
-        }
-
-        // Add instructions for review
-        if let Some(contributing_content) = &contributing_md_content {
-            prompt_parts.push(format!(
-                "The following are the guidelines from CONTRIBUTING.md:\n{}\n\nPlease review how well this MR adheres to these guidelines.",
-                contributing_content
-            ));
-            prompt_parts.push(
-                "Provide specific examples of good adherence and areas for improvement. \
-                Offer constructive criticism and praise regarding its adherence. \
-                Finally, provide an overall summary of the merge request and feedback on the implementation.".to_string()
-            );
-        } else {
-            // Fallback if CONTRIBUTING.md is not available
-            prompt_parts.push(
-                "Please provide a summary of the merge request, review the code changes, and provide feedback on the implementation.".to_string()
-            );
+        Err(e) => {
+            warn!("Failed to extract merge request diff context: {}", e);
         }
     }
+}
+
+// Helper struct for MR prompt building context
+struct MrPromptContext<'a> {
+    event: &'a GitlabNoteEvent,
+    gitlab_client: &'a Arc<GitlabApiClient>,
+    config: &'a Arc<AppSettings>,
+    mr: &'a crate::models::GitlabMergeRequest,
+    file_index_manager: &'a Arc<FileIndexManager>,
+}
+
+// Helper function to build MR prompt with user-provided context
+async fn build_mr_prompt_with_context(
+    context: MrPromptContext<'_>,
+    user_context: &str,
+    prompt_parts: &mut Vec<String>,
+    commit_history: &mut String,
+) {
+    prompt_parts.push(format!(
+        "The user @{} provided the following request regarding this merge request: '{}'.",
+        context.event.user.username, user_context
+    ));
+
+    prompt_parts.push(format!("Title: {}", context.mr.title));
+    prompt_parts.push(format!(
+        "Description: {}",
+        context.mr.description.as_deref().unwrap_or("N/A")
+    ));
+    prompt_parts.push(format!("State: {}", context.mr.state));
+    if !context.mr.labels.is_empty() {
+        prompt_parts.push(format!("Labels: {}", context.mr.labels.join(", ")));
+    }
+    prompt_parts.push(format!("Source Branch: {}", context.mr.source_branch));
+    prompt_parts.push(format!("Target Branch: {}", context.mr.target_branch));
+
+    // Add code diff context
+    add_mr_context_to_prompt(
+        context.gitlab_client,
+        context.config,
+        context.file_index_manager,
+        context.mr,
+        &context.event.project,
+        prompt_parts,
+        commit_history,
+    )
+    .await;
+
+    prompt_parts.push(format!("User's specific request: {}", user_context));
+}
+
+// Helper function to build MR prompt without user context (default review)
+async fn build_mr_prompt_without_context(
+    context: MrPromptContext<'_>,
+    contributing_md_content: Option<String>,
+    prompt_parts: &mut Vec<String>,
+    commit_history: &mut String,
+) {
+    // No specific context, summarize with code diffs
+    prompt_parts.push(format!(
+        "Please review this merge request for user @{} and provide a summary of the changes.",
+        context.event.user.username
+    ));
+    prompt_parts.push(format!("Merge Request Title: {}", context.mr.title));
+    prompt_parts.push(format!(
+        "Merge Request Description: {}",
+        context
+            .mr
+            .description
+            .as_deref()
+            .unwrap_or("No description.")
+    ));
+    prompt_parts.push(format!("Author: {}", context.mr.author.name));
+    prompt_parts.push(format!("State: {}", context.mr.state));
+    if !context.mr.labels.is_empty() {
+        prompt_parts.push(format!("Labels: {}", context.mr.labels.join(", ")));
+    }
+    prompt_parts.push(format!("Source Branch: {}", context.mr.source_branch));
+    prompt_parts.push(format!("Target Branch: {}", context.mr.target_branch));
+
+    // Add code diff context
+    add_mr_context_to_prompt(
+        context.gitlab_client,
+        context.config,
+        context.file_index_manager,
+        context.mr,
+        &context.event.project,
+        prompt_parts,
+        commit_history,
+    )
+    .await;
+
+    // Add instructions for review
+    if let Some(contributing_content) = &contributing_md_content {
+        prompt_parts.push(format!(
+            "The following are the guidelines from CONTRIBUTING.md:\n{}\n\nPlease review how well this MR adheres to these guidelines.",
+            contributing_content
+        ));
+        prompt_parts.push(
+            "Provide specific examples of good adherence and areas for improvement. \
+            Offer constructive criticism and praise regarding its adherence. \
+            Finally, provide an overall summary of the merge request and feedback on the implementation.".to_string()
+        );
+    } else {
+        // Fallback if CONTRIBUTING.md is not available
+        prompt_parts.push(
+            "Please provide a summary of the merge request, review the code changes, and provide feedback on the implementation.".to_string()
+        );
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn handle_merge_request_mention(
+    event: &GitlabNoteEvent,
+    gitlab_client: &Arc<GitlabApiClient>,
+    config: &Arc<AppSettings>,
+    project_id: i64,
+    prompt_parts: &mut Vec<String>,
+    commit_history: &mut String, // Changed to mutable reference
+    user_provided_context: &Option<String>,
+    file_index_manager: &Arc<FileIndexManager>,
+) -> Result<()> {
+    let (_mr_iid, mr) = extract_merge_request_details(event, gitlab_client, project_id).await?;
+
+    let contributing_md_content = fetch_contributing_guidelines(gitlab_client, project_id).await;
+
+    let context = MrPromptContext {
+        event,
+        gitlab_client,
+        config,
+        mr: &mr,
+        file_index_manager,
+    };
+
+    if let Some(user_context) = user_provided_context {
+        build_mr_prompt_with_context(context, user_context, prompt_parts, commit_history).await;
+    } else {
+        build_mr_prompt_without_context(
+            context,
+            contributing_md_content,
+            prompt_parts,
+            commit_history,
+        )
+        .await;
+    }
+
     Ok(())
 }
 
