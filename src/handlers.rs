@@ -1,4 +1,5 @@
 use crate::config::AppSettings;
+use crate::file_indexer::FileIndexManager;
 use crate::gitlab::{GitlabApiClient, GitlabError};
 use crate::mention_cache::MentionCache; // Added
 use crate::models::{GitlabNoteEvent, OpenAIChatMessage, OpenAIChatRequest};
@@ -192,6 +193,7 @@ pub async fn process_mention(
     gitlab_client: Arc<GitlabApiClient>,
     config: Arc<AppSettings>,
     processed_mentions_cache: &MentionCache, // Changed type
+    file_index_manager: Arc<FileIndexManager>,
 ) -> Result<()> {
     // Log Event Details
     info!(
@@ -274,6 +276,7 @@ pub async fn process_mention(
                 project_id,
                 &mut prompt_parts,
                 &user_provided_context,
+                &file_index_manager,
             )
             .await?
         }
@@ -286,6 +289,7 @@ pub async fn process_mention(
                 &mut prompt_parts,
                 &mut commit_history,
                 &user_provided_context,
+                &file_index_manager,
             )
             .await?
         }
@@ -478,6 +482,7 @@ async fn handle_issue_mention(
     project_id: i64,
     prompt_parts: &mut Vec<String>,
     user_provided_context: &Option<String>,
+    file_index_manager: &Arc<FileIndexManager>,
 ) -> Result<()> {
     let issue_iid = match event.issue.as_ref().map(|i| i.iid) {
         Some(iid) => iid,
@@ -549,8 +554,11 @@ async fn handle_issue_mention(
         }
 
         // Add repository context
-        let repo_context_extractor =
-            RepoContextExtractor::new(gitlab_client.clone(), config.clone());
+        let repo_context_extractor = RepoContextExtractor::new_with_file_indexer(
+            gitlab_client.clone(),
+            config.clone(),
+            file_index_manager.clone(),
+        );
         // The extract_context_for_issue function now handles errors internally and will always return Ok
         // with as much context as it could gather
         match repo_context_extractor
@@ -588,8 +596,11 @@ async fn handle_issue_mention(
         }
 
         // Add repository context
-        let repo_context_extractor =
-            RepoContextExtractor::new(gitlab_client.clone(), config.clone());
+        let repo_context_extractor = RepoContextExtractor::new_with_file_indexer(
+            gitlab_client.clone(),
+            config.clone(),
+            file_index_manager.clone(),
+        );
         // The extract_context_for_issue function now handles errors internally and will always return Ok
         // with as much context as it could gather
         match repo_context_extractor
@@ -626,6 +637,7 @@ async fn handle_merge_request_mention(
     prompt_parts: &mut Vec<String>,
     commit_history: &mut String, // Changed to mutable reference
     user_provided_context: &Option<String>,
+    file_index_manager: &Arc<FileIndexManager>,
 ) -> Result<()> {
     let mr_iid = match event.merge_request.as_ref().map(|mr| mr.iid) {
         Some(iid) => iid,
@@ -713,8 +725,11 @@ async fn handle_merge_request_mention(
         prompt_parts.push(format!("Target Branch: {}", mr.target_branch));
 
         // Add code diff context
-        let repo_context_extractor =
-            RepoContextExtractor::new(gitlab_client.clone(), config.clone());
+        let repo_context_extractor = RepoContextExtractor::new_with_file_indexer(
+            gitlab_client.clone(),
+            config.clone(),
+            file_index_manager.clone(),
+        );
         match repo_context_extractor
             .extract_context_for_mr(&mr, &event.project, config.context_repo_path.as_deref())
             .await
@@ -749,8 +764,11 @@ async fn handle_merge_request_mention(
         prompt_parts.push(format!("Target Branch: {}", mr.target_branch));
 
         // Add code diff context
-        let repo_context_extractor =
-            RepoContextExtractor::new(gitlab_client.clone(), config.clone());
+        let repo_context_extractor = RepoContextExtractor::new_with_file_indexer(
+            gitlab_client.clone(),
+            config.clone(),
+            file_index_manager.clone(),
+        );
         match repo_context_extractor
             .extract_context_for_mr(&mr, &event.project, config.context_repo_path.as_deref())
             .await
@@ -1026,8 +1044,12 @@ mod tests {
         // Create a cache for the test
         let cache = MentionCache::new();
 
+        // Create a file index manager for the test
+        let file_index_manager = Arc::new(FileIndexManager::new(gitlab_client.clone(), 3600));
+
         // Process the mention
-        let result = process_mention(event, gitlab_client, config, &cache).await; // Pass as reference
+        let result =
+            process_mention(event, gitlab_client, config, &cache, file_index_manager).await; // Pass as reference
 
         // Should return Ok since we're ignoring comments without mentions
         assert!(result.is_ok());
@@ -1084,9 +1106,11 @@ mod tests {
             default_branch: "main".to_string(),
         };
         let gitlab_client = Arc::new(GitlabApiClient::new(Arc::new(settings.clone())).unwrap());
+        let file_index_manager = Arc::new(FileIndexManager::new(gitlab_client.clone(), 3600));
 
         // Process the mention
-        let result = process_mention(event, gitlab_client, config, &cache).await; // Pass as reference
+        let result =
+            process_mention(event, gitlab_client, config, &cache, file_index_manager).await; // Pass as reference
 
         // Should return Ok since we're ignoring comments without mentions
         assert!(result.is_ok());
@@ -1260,8 +1284,16 @@ mod tests {
             .with_body(json!([]).to_string()) // Empty tree
             .create_async()
             .await;
+        let file_index_manager = Arc::new(FileIndexManager::new(gitlab_client.clone(), 3600));
 
-        let result = process_mention(event, gitlab_client.clone(), config.clone(), &cache).await; // Pass as reference
+        let result = process_mention(
+            event,
+            gitlab_client.clone(),
+            config.clone(),
+            &cache,
+            file_index_manager,
+        )
+        .await; // Pass as reference
 
         assert!(result.is_ok(), "Processing failed: {:?}", result.err());
         assert!(cache.check(TEST_MENTION_ID).await); // Use new check method
@@ -1299,8 +1331,10 @@ mod tests {
             .with_status(500) // Should fail test if called
             .create_async()
             .await;
+        let file_index_manager = Arc::new(FileIndexManager::new(gitlab_client.clone(), 3600));
 
-        let result = process_mention(event, gitlab_client, config, &cache).await; // Pass as reference
+        let result =
+            process_mention(event, gitlab_client, config, &cache, file_index_manager).await; // Pass as reference
 
         assert!(result.is_ok());
         m_get_notes_uncalled.expect(0).assert_async().await; // Explicitly assert not called
@@ -1368,8 +1402,10 @@ mod tests {
             .with_status(500) // Fail if called
             .create_async()
             .await;
+        let file_index_manager = Arc::new(FileIndexManager::new(gitlab_client.clone(), 3600));
 
-        let result = process_mention(event, gitlab_client, config, &cache).await; // Pass as reference
+        let result =
+            process_mention(event, gitlab_client, config, &cache, file_index_manager).await; // Pass as reference
 
         assert!(result.is_ok());
         assert!(cache.check(TEST_MENTION_ID).await); // Original mention ID added to cache
@@ -1421,8 +1457,10 @@ mod tests {
             .with_body("Internal Server Error")
             .create_async()
             .await;
+        let file_index_manager = Arc::new(FileIndexManager::new(gitlab_client.clone(), 3600));
 
-        let result = process_mention(event, gitlab_client, config, &cache).await; // Pass as reference
+        let result =
+            process_mention(event, gitlab_client, config, &cache, file_index_manager).await; // Pass as reference
 
         assert!(result.is_err());
         assert!(!cache.check(TEST_MENTION_ID).await); // Cache should NOT contain the ID

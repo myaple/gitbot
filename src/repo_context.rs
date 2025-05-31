@@ -35,10 +35,11 @@ pub struct RepoContextExtractor {
 }
 
 impl RepoContextExtractor {
-    pub fn new(gitlab_client: Arc<GitlabApiClient>, settings: Arc<AppSettings>) -> Self {
-        // Create a file index manager with a 1-hour refresh interval
-        let file_index_manager = Arc::new(FileIndexManager::new(gitlab_client.clone(), 3600));
-
+    pub fn new_with_file_indexer(
+        gitlab_client: Arc<GitlabApiClient>,
+        settings: Arc<AppSettings>,
+        file_index_manager: Arc<FileIndexManager>,
+    ) -> Self {
         Self {
             gitlab_client,
             settings,
@@ -869,7 +870,12 @@ mod tests {
 
         let settings_arc = Arc::new(settings.clone());
         let gitlab_client = Arc::new(GitlabApiClient::new(settings_arc.clone()).unwrap());
-        let extractor = RepoContextExtractor::new(gitlab_client, settings_arc);
+        let file_index_manager = Arc::new(FileIndexManager::new(gitlab_client.clone(), 3600));
+        let extractor = RepoContextExtractor::new_with_file_indexer(
+            gitlab_client,
+            settings_arc,
+            file_index_manager,
+        );
 
         let keywords = extractor.extract_keywords(&issue);
 
@@ -914,7 +920,12 @@ mod tests {
 
         let settings_arc = Arc::new(settings.clone());
         let gitlab_client = Arc::new(GitlabApiClient::new(settings_arc.clone()).unwrap());
-        let extractor = RepoContextExtractor::new(gitlab_client, settings_arc);
+        let file_index_manager = Arc::new(FileIndexManager::new(gitlab_client.clone(), 3600));
+        let extractor = RepoContextExtractor::new_with_file_indexer(
+            gitlab_client,
+            settings_arc,
+            file_index_manager,
+        );
 
         let keywords = vec![
             "authentication".to_string(),
@@ -1033,7 +1044,12 @@ mod tests {
         let mut server = mockito::Server::new_async().await;
         let settings = test_settings(server.url(), None);
         let gitlab_client = Arc::new(GitlabApiClient::new(settings.clone()).unwrap());
-        let extractor = RepoContextExtractor::new(gitlab_client.clone(), settings.clone());
+        let file_index_manager = Arc::new(FileIndexManager::new(gitlab_client.clone(), 3600));
+        let extractor = RepoContextExtractor::new_with_file_indexer(
+            gitlab_client.clone(),
+            settings.clone(),
+            file_index_manager,
+        );
 
         let project = create_mock_project(1, "test_org/main_repo");
         let issue = create_mock_issue(101, project.id);
@@ -1339,7 +1355,12 @@ mod tests {
         let context_repo_path = "test_org/context_repo";
         let settings = test_settings(server.url(), Some(context_repo_path.to_string()));
         let gitlab_client = Arc::new(GitlabApiClient::new(settings.clone()).unwrap());
-        let extractor = RepoContextExtractor::new(gitlab_client.clone(), settings.clone());
+        let file_index_manager = Arc::new(FileIndexManager::new(gitlab_client.clone(), 3600));
+        let extractor = RepoContextExtractor::new_with_file_indexer(
+            gitlab_client.clone(),
+            settings.clone(),
+            file_index_manager,
+        );
 
         let main_project = create_mock_project(1, "test_org/main_repo");
         let context_project_mock = create_mock_project(2, context_repo_path);
@@ -1472,7 +1493,12 @@ mod tests {
         let mut server = mockito::Server::new_async().await;
         let settings = test_settings(server.url(), None);
         let gitlab_client = Arc::new(GitlabApiClient::new(settings.clone()).unwrap());
-        let extractor = RepoContextExtractor::new(gitlab_client.clone(), settings.clone());
+        let file_index_manager = Arc::new(FileIndexManager::new(gitlab_client.clone(), 3600));
+        let extractor = RepoContextExtractor::new_with_file_indexer(
+            gitlab_client.clone(),
+            settings.clone(),
+            file_index_manager,
+        );
 
         let project = create_mock_project(1, "test_org/main_repo");
         let mr = create_mock_mr(201, project.id);

@@ -1,4 +1,5 @@
 use crate::config::load_config;
+use crate::file_indexer::FileIndexManager;
 use crate::gitlab::GitlabApiClient;
 // use crate::models::GitlabProject;
 use crate::polling::PollingService;
@@ -52,9 +53,15 @@ async fn main() -> Result<()> {
     info!("GitLab API client initialized successfully.");
     let gitlab_client = Arc::new(gitlab_client);
 
-    // Create repo context extractor
-    let repo_context_extractor =
-        RepoContextExtractor::new(gitlab_client.clone(), config_arc.clone());
+    // Create shared file index manager
+    let file_index_manager = Arc::new(FileIndexManager::new(gitlab_client.clone(), 3600));
+
+    // Create repo context extractor with shared file index manager
+    let repo_context_extractor = RepoContextExtractor::new_with_file_indexer(
+        gitlab_client.clone(),
+        config_arc.clone(),
+        file_index_manager.clone(),
+    );
 
     // Initialize file indexes for all repos to poll
     let mut projects = Vec::new();
@@ -101,7 +108,11 @@ async fn main() -> Result<()> {
     });
 
     // Create polling service
-    let polling_service = PollingService::new(gitlab_client, config_arc.clone());
+    let polling_service = PollingService::new(
+        gitlab_client,
+        config_arc.clone(),
+        file_index_manager.clone(),
+    );
 
     info!(
         "Starting polling service with interval of {} seconds...",
