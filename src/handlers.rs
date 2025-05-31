@@ -25,44 +25,35 @@ fn extract_context_after_mention(note: &str, bot_name: &str) -> Option<String> {
     })
 }
 
-// Helper function to check if the bot has already replied to a mention
-async fn has_bot_already_replied(
-    event: &GitlabNoteEvent,
-    gitlab_client: &Arc<GitlabApiClient>,
-    config: &Arc<AppSettings>,
-    processed_mentions_cache: &MentionCache,
-    is_issue: &mut bool, // This function will set this based on noteable_type
-) -> Result<bool> {
-    let mention_timestamp_str = &event.object_attributes.updated_at;
-    let mention_timestamp_dt = match DateTime::parse_from_rfc3339(mention_timestamp_str) {
-        Ok(dt) => dt.with_timezone(&Utc),
+// Helper function to parse mention timestamp
+fn parse_mention_timestamp(timestamp_str: &str) -> Result<DateTime<Utc>> {
+    match DateTime::parse_from_rfc3339(timestamp_str) {
+        Ok(dt) => Ok(dt.with_timezone(&Utc)),
         Err(e) => {
             error!(
-                mention_timestamp = %mention_timestamp_str,
+                mention_timestamp = %timestamp_str,
                 error = %e,
                 "Failed to parse mention timestamp. Cannot reliably check for previous replies. Aborting."
             );
-            // Return an error that will be propagated up by process_mention
-            return Err(anyhow!(
+            Err(anyhow!(
                 "Failed to parse mention timestamp '{}': {}",
-                mention_timestamp_str,
+                timestamp_str,
                 e
-            ));
+            ))
         }
-    };
+    }
+}
 
-    let notes_since_timestamp_u64 = mention_timestamp_dt.timestamp() as u64;
-    let project_id_for_notes = event.project.id;
-    let current_mention_note_id = event.object_attributes.id;
-
-    debug!(
-        mention_id = current_mention_note_id,
-        mention_timestamp = %mention_timestamp_dt,
-        notes_since_unix_ts = notes_since_timestamp_u64,
-        "Preparing to check for subsequent bot replies."
-    );
-
-    let subsequent_notes_result = match event.object_attributes.noteable_type.as_str() {
+// Helper function to fetch subsequent notes based on noteable type
+async fn fetch_subsequent_notes_by_type(
+    event: &GitlabNoteEvent,
+    gitlab_client: &Arc<GitlabApiClient>,
+    timestamp_u64: u64,
+    is_issue: &mut bool,
+) -> Result<Vec<crate::models::GitlabNoteAttributes>> {
+    let project_id = event.project.id;
+    
+    match event.object_attributes.noteable_type.as_str() {
         "Issue" => {
             *is_issue = true;
             let issue_iid = match event.issue.as_ref().map(|i| i.iid) {
@@ -72,21 +63,21 @@ async fn has_bot_already_replied(
                         "Missing issue details (iid) in note event for an Issue. Event: {:?}",
                         event
                     );
-                    // Return an error that will be propagated up by process_mention
                     return Err(anyhow!(
                         "Missing issue details in note event for reply check"
                     ));
                 }
             };
             info!(
-                project_id = project_id_for_notes,
+                project_id = project_id,
                 issue_iid = issue_iid,
-                notes_since_timestamp_u64 = notes_since_timestamp_u64,
+                notes_since_timestamp_u64 = timestamp_u64,
                 "Fetching subsequent notes for issue to check for prior bot replies."
             );
             gitlab_client
-                .get_issue_notes(project_id_for_notes, issue_iid, notes_since_timestamp_u64)
+                .get_issue_notes(project_id, issue_iid, timestamp_u64)
                 .await
+                .map_err(|e| anyhow!("Failed to get issue notes: {}", e))
         }
         "MergeRequest" => {
             *is_issue = false;
@@ -94,21 +85,21 @@ async fn has_bot_already_replied(
                 Some(iid) => iid,
                 None => {
                     error!("Missing merge request details (iid) in note event for a MergeRequest. Event: {:?}", event);
-                    // Return an error that will be propagated up by process_mention
                     return Err(anyhow!(
                         "Missing merge request details in note event for reply check"
                     ));
                 }
             };
             info!(
-                project_id = project_id_for_notes,
+                project_id = project_id,
                 mr_iid = mr_iid,
-                notes_since_timestamp_u64 = notes_since_timestamp_u64,
+                notes_since_timestamp_u64 = timestamp_u64,
                 "Fetching subsequent notes for merge request to check for prior bot replies."
             );
             gitlab_client
-                .get_merge_request_notes(project_id_for_notes, mr_iid, notes_since_timestamp_u64)
+                .get_merge_request_notes(project_id, mr_iid, timestamp_u64)
                 .await
+                .map_err(|e| anyhow!("Failed to get merge request notes: {}", e))
         }
         other_type => {
             warn!(
@@ -117,65 +108,106 @@ async fn has_bot_already_replied(
             );
             Ok(Vec::new()) // Return an empty vec, so the loop below evaluating notes doesn't run
         }
-    };
+    }
+}
 
-    match subsequent_notes_result {
-        Ok(notes) => {
-            if !notes.is_empty() {
-                debug!("Fetched {} subsequent notes for reply check.", notes.len());
-            }
-            for note in notes {
-                // Skip the current mention note itself. This is vital.
-                if note.id == current_mention_note_id {
-                    trace!(
-                        note_id = note.id,
-                        "Skipping current mention note (self) during reply check."
+// Helper function to check for existing bot replies in notes
+async fn check_for_bot_reply_in_notes(
+    notes: Vec<crate::models::GitlabNoteAttributes>,
+    config: &Arc<AppSettings>,
+    mention_timestamp_dt: DateTime<Utc>,
+    current_mention_note_id: i64,
+    processed_mentions_cache: &MentionCache,
+) -> Result<bool> {
+    if !notes.is_empty() {
+        debug!("Fetched {} subsequent notes for reply check.", notes.len());
+    }
+    
+    for note in notes {
+        // Skip the current mention note itself. This is vital.
+        if note.id == current_mention_note_id {
+            trace!(
+                note_id = note.id,
+                "Skipping current mention note (self) during reply check."
+            );
+            continue;
+        }
+
+        // Parse the fetched note's timestamp
+        match DateTime::parse_from_rfc3339(&note.updated_at) {
+            Ok(fetched_note_dt_utc) => {
+                let fetched_note_dt = fetched_note_dt_utc.with_timezone(&Utc);
+
+                // Check if the note is from the bot and was created strictly after the mention
+                if note.author.username == config.bot_username
+                    && fetched_note_dt > mention_timestamp_dt
+                {
+                    info!(
+                       note_id = note.id,
+                       note_author = %note.author.username,
+                       note_timestamp = %fetched_note_dt,
+                       mention_id = current_mention_note_id,
+                       mention_timestamp = %mention_timestamp_dt,
+                       "Bot @{} has already replied (note ID: {}) after this mention (note ID: {}). Ignoring current mention.",
+                       config.bot_username,
+                       note.id,
+                       current_mention_note_id
                     );
-                    continue;
-                }
-
-                // Parse the fetched note's timestamp
-                match DateTime::parse_from_rfc3339(&note.updated_at) {
-                    Ok(fetched_note_dt_utc) => {
-                        let fetched_note_dt = fetched_note_dt_utc.with_timezone(&Utc);
-
-                        // Check if the note is from the bot and was created strictly after the mention
-                        if note.author.username == config.bot_username
-                            && fetched_note_dt > mention_timestamp_dt
-                        {
-                            info!(
-                               note_id = note.id,
-                               note_author = %note.author.username,
-                               note_timestamp = %fetched_note_dt,
-                               mention_id = current_mention_note_id,
-                               mention_timestamp = %mention_timestamp_dt,
-                               "Bot @{} has already replied (note ID: {}) after this mention (note ID: {}). Ignoring current mention.",
-                               config.bot_username,
-                               note.id,
-                               current_mention_note_id
-                            );
-                            // Add to cache because we've confirmed a prior reply exists
-                            processed_mentions_cache.add(current_mention_note_id).await; // Updated logic
-                            info!(
-                                "Mention ID {} (already replied by note ID {}) added to cache.",
-                                current_mention_note_id, note.id
-                            );
-                            return Ok(true); // Already replied
-                        }
-                    }
-                    Err(e) => {
-                        warn!(
-                            note_id = note.id,
-                            note_timestamp_str = %note.updated_at,
-                            error = %e,
-                            "Failed to parse timestamp for a fetched note. Skipping this note in reply check."
-                        );
-                    }
+                    // Add to cache because we've confirmed a prior reply exists
+                    processed_mentions_cache.add(current_mention_note_id).await;
+                    info!(
+                        "Mention ID {} (already replied by note ID {}) added to cache.",
+                        current_mention_note_id, note.id
+                    );
+                    return Ok(true); // Already replied
                 }
             }
-            // If we've reached this point without returning Ok(true), no relevant bot reply was found.
-            info!("No subsequent bot reply found that meets the criteria for duplicate prevention. Proceeding to process mention.");
-            Ok(false) // Not replied
+            Err(e) => {
+                warn!(
+                    note_id = note.id,
+                    note_timestamp_str = %note.updated_at,
+                    error = %e,
+                    "Failed to parse timestamp for a fetched note. Skipping this note in reply check."
+                );
+            }
+        }
+    }
+    
+    // If we've reached this point without returning Ok(true), no relevant bot reply was found.
+    info!("No subsequent bot reply found that meets the criteria for duplicate prevention. Proceeding to process mention.");
+    Ok(false) // Not replied
+}
+
+// Helper function to check if the bot has already replied to a mention
+async fn has_bot_already_replied(
+    event: &GitlabNoteEvent,
+    gitlab_client: &Arc<GitlabApiClient>,
+    config: &Arc<AppSettings>,
+    processed_mentions_cache: &MentionCache,
+    is_issue: &mut bool, // This function will set this based on noteable_type
+) -> Result<bool> {
+    let mention_timestamp_str = &event.object_attributes.updated_at;
+    let mention_timestamp_dt = parse_mention_timestamp(mention_timestamp_str)?;
+
+    let notes_since_timestamp_u64 = mention_timestamp_dt.timestamp() as u64;
+    let current_mention_note_id = event.object_attributes.id;
+
+    debug!(
+        mention_id = current_mention_note_id,
+        mention_timestamp = %mention_timestamp_dt,
+        notes_since_unix_ts = notes_since_timestamp_u64,
+        "Preparing to check for subsequent bot replies."
+    );
+
+    match fetch_subsequent_notes_by_type(event, gitlab_client, notes_since_timestamp_u64, is_issue).await {
+        Ok(notes) => {
+            check_for_bot_reply_in_notes(
+                notes,
+                config,
+                mention_timestamp_dt,
+                current_mention_note_id,
+                processed_mentions_cache,
+            ).await
         }
         Err(e) => {
             warn!(
@@ -186,6 +218,141 @@ async fn has_bot_already_replied(
             Ok(false) // Proceed as if not replied, but with a warning
         }
     }
+}
+
+// Helper function to validate mention and check initial conditions
+fn validate_and_check_mention(
+    event: &GitlabNoteEvent,
+    config: &Arc<AppSettings>,
+) -> Result<(Option<String>, bool)> {
+    // Verify Object Kind and Event Type
+    if event.object_kind != "note" || event.event_type != "note" {
+        warn!(
+            "Received event with object_kind: '{}' and event_type: '{}'. Expected 'note' for both. Ignoring.",
+            event.object_kind, event.event_type
+        );
+        return Err(anyhow!("Event is not a standard note event"));
+    }
+    info!("Event object_kind and event_type verified as 'note'.");
+
+    // Extract Note Details and check if bot is mentioned
+    let note_content = &event.object_attributes.note;
+    let user_provided_context = extract_context_after_mention(note_content, &config.bot_username);
+
+    if user_provided_context.is_none()
+        && !note_content.contains(&format!("@{}", config.bot_username))
+    {
+        info!(
+            "Bot @{} was not directly mentioned with a command or the command was empty. Ignoring.",
+            config.bot_username
+        );
+        return Ok((None, false)); // Signal to exit early
+    }
+    info!("Bot @{} was mentioned.", config.bot_username);
+
+    Ok((user_provided_context, true))
+}
+
+// Helper function to build the prompt based on noteable type
+async fn build_prompt_for_mention(
+    event: &GitlabNoteEvent,
+    gitlab_client: &Arc<GitlabApiClient>,
+    config: &Arc<AppSettings>,
+    project_id: i64,
+    user_provided_context: &Option<String>,
+    file_index_manager: &Arc<FileIndexManager>,
+) -> Result<(Vec<String>, String)> {
+    let mut prompt_parts = Vec::new();
+    let mut commit_history = String::new();
+    let note_attributes = &event.object_attributes;
+
+    // Prompt Assembly Logic
+    match note_attributes.noteable_type.as_str() {
+        "Issue" => {
+            handle_issue_mention(
+                event,
+                gitlab_client,
+                config,
+                project_id,
+                &mut prompt_parts,
+                user_provided_context,
+                file_index_manager,
+            )
+            .await?
+        }
+        "MergeRequest" => {
+            handle_merge_request_mention(
+                event,
+                gitlab_client,
+                config,
+                project_id,
+                &mut prompt_parts,
+                &mut commit_history,
+                user_provided_context,
+                file_index_manager,
+            )
+            .await?
+        }
+        other_type => {
+            info!(
+                "Note on unsupported noteable_type: {}, ignoring.",
+                other_type
+            );
+            return Err(anyhow!("Unsupported noteable_type: {}", other_type));
+        }
+    };
+
+    Ok((prompt_parts, commit_history))
+}
+
+// Helper struct for reply generation parameters
+struct ReplyContext<'a> {
+    prompt_parts: Vec<String>,
+    commit_history: String,
+    user_provided_context: &'a Option<String>,
+    is_issue: bool,
+}
+
+// Helper function to generate and post reply
+async fn generate_and_post_reply(
+    event: &GitlabNoteEvent,
+    gitlab_client: &Arc<GitlabApiClient>,
+    config: &Arc<AppSettings>,
+    project_id: i64,
+    reply_context: ReplyContext<'_>,
+) -> Result<()> {
+    let final_prompt_text = format!(
+        "{}\n\nContext:\n{}",
+        reply_context.prompt_parts.join("\n---\n"),
+        reply_context.commit_history
+    );
+    trace!("Formatted prompt for LLM:\n{}", final_prompt_text);
+    trace!("Full prompt for LLM (debug):\n{}", final_prompt_text);
+
+    // Create OpenAI client
+    let openai_client = OpenAIApiClient::new(config)
+        .map_err(|e| anyhow!("Failed to create OpenAI client: {}", e))?;
+
+    let llm_reply = get_llm_reply(&openai_client, config, &final_prompt_text).await?;
+
+    // Format final comment
+    let final_comment_body = format_final_reply_body(
+        &event.user.username,
+        &llm_reply,
+        reply_context.is_issue,
+        reply_context.user_provided_context,
+        &reply_context.commit_history,
+    );
+
+    // Post the comment
+    post_reply_to_gitlab(
+        event,
+        gitlab_client,
+        project_id,
+        reply_context.is_issue,
+        &final_comment_body,
+    )
+    .await
 }
 
 pub async fn process_mention(
@@ -213,46 +380,21 @@ pub async fn process_mention(
     // Cache Check
     let mention_id = event.object_attributes.id;
     if processed_mentions_cache.check(mention_id).await {
-        // Updated logic
         info!("Mention ID {} found in cache, skipping.", mention_id);
         return Ok(());
     }
 
     // Initialize variables at the top level
     let project_id = event.project.id;
-    let mut prompt_parts = Vec::new();
-    let mut commit_history = String::new();
     let mut is_issue = false;
 
-    // Verify Object Kind and Event Type
-    if event.object_kind != "note" || event.event_type != "note" {
-        warn!(
-            "Received event with object_kind: '{}' and event_type: '{}'. Expected 'note' for both. Ignoring.",
-            event.object_kind, event.event_type
-        );
-        return Err(anyhow!("Event is not a standard note event"));
+    // Validate and check mention
+    let (user_provided_context, should_continue) = validate_and_check_mention(&event, &config)?;
+    if !should_continue {
+        return Ok(()); // Early return if bot not mentioned properly
     }
-    info!("Event object_kind and event_type verified as 'note'.");
 
-    // Extract Note Details
-    let note_attributes = &event.object_attributes;
-    let note_content = &note_attributes.note;
-
-    // Check if bot is mentioned
-    let user_provided_context = extract_context_after_mention(note_content, &config.bot_username);
-
-    if user_provided_context.is_none()
-        && !note_content.contains(&format!("@{}", config.bot_username))
-    {
-        info!(
-            "Bot @{} was not directly mentioned with a command or the command was empty. Ignoring.",
-            config.bot_username
-        );
-        return Ok(());
-    }
-    info!("Bot @{} was mentioned.", config.bot_username);
-
-    // --- START: Check if already replied ---
+    // Check if already replied
     if has_bot_already_replied(
         &event,
         &gitlab_client,
@@ -264,79 +406,37 @@ pub async fn process_mention(
     {
         return Ok(());
     }
-    // --- END: Check if already replied ---
 
-    // Prompt Assembly Logic
-    match note_attributes.noteable_type.as_str() {
-        "Issue" => {
-            handle_issue_mention(
-                &event,
-                &gitlab_client,
-                &config,
-                project_id,
-                &mut prompt_parts,
-                &user_provided_context,
-                &file_index_manager,
-            )
-            .await?
-        }
-        "MergeRequest" => {
-            handle_merge_request_mention(
-                &event,
-                &gitlab_client,
-                &config,
-                project_id,
-                &mut prompt_parts,
-                &mut commit_history,
-                &user_provided_context,
-                &file_index_manager,
-            )
-            .await?
-        }
-        other_type => {
-            info!(
-                "Note on unsupported noteable_type: {}, ignoring.",
-                other_type
-            );
-            return Ok(());
-        }
-    };
-
-    let final_prompt_text = format!(
-        "{}\n\nContext:\n{}",
-        prompt_parts.join("\n---\n"),
-        commit_history
-    );
-    trace!("Formatted prompt for LLM:\n{}", final_prompt_text);
-    trace!("Full prompt for LLM (debug):\n{}", final_prompt_text);
-
-    // Create OpenAI client
-    let openai_client = OpenAIApiClient::new(&config)
-        .map_err(|e| anyhow!("Failed to create OpenAI client: {}", e))?;
-
-    let llm_reply = get_llm_reply(&openai_client, &config, &final_prompt_text).await?;
-
-    // Format final comment
-    let final_comment_body = format_final_reply_body(
-        &event.user.username,
-        &llm_reply,
-        is_issue,
-        &user_provided_context,
-        &commit_history,
-    );
-
-    // Post the comment
-    post_reply_to_gitlab(
+    // Build prompt
+    let (prompt_parts, commit_history) = build_prompt_for_mention(
         &event,
         &gitlab_client,
+        &config,
         project_id,
+        &user_provided_context,
+        &file_index_manager,
+    )
+    .await?;
+
+    // Generate and post reply
+    let reply_context = ReplyContext {
+        prompt_parts,
+        commit_history,
+        user_provided_context: &user_provided_context,
         is_issue,
-        &final_comment_body,
+    };
+    
+    generate_and_post_reply(
+        &event,
+        &gitlab_client,
+        &config,
+        project_id,
+        reply_context,
     )
     .await?;
 
     // Add to cache after successful processing
-    processed_mentions_cache.add(mention_id).await; // Updated logic
+    processed_mentions_cache.add(mention_id).await;
     info!("Mention ID {} added to cache.", mention_id);
 
     Ok(())
