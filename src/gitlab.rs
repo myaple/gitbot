@@ -5,8 +5,11 @@ use crate::models::{
 use crate::repo_context::{GitlabDiff, GitlabFile};
 use std::sync::Arc;
 use thiserror::Error;
-use tracing::{error, instrument};
+use tracing::{debug, error, instrument};
 use chrono::{DateTime, Utc};
+use reqwest::{header, Method};
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 
 // GitLab crate imports for full API usage
 use gitlab::{Gitlab, GitlabBuilder, GitlabError as GitlabCrateError};
@@ -24,10 +27,12 @@ use gitlab::api::projects::repository::commits::Commits;
 pub enum GitlabError {
     #[error("GitLab API error: {0}")]
     GitlabApi(#[from] GitlabCrateError),
-    #[error("API error: {message}")]
-    Api { message: String },
+    #[error("API error: {status} - {body}")]
+    Api { status: reqwest::StatusCode, body: String },
     #[error("URL parsing error: {0}")]
     UrlParse(#[from] url::ParseError),
+    #[error("HTTP request error: {0}")]
+    Request(#[from] reqwest::Error),
     #[error("Failed to deserialize response: {0}")]
     Deserialization(String),
     #[error("Serialization error: {0}")]
@@ -46,14 +51,20 @@ pub struct GitlabApiClient {
     gitlab_url: String,
     private_token: String,
     settings: Arc<AppSettings>,
+    client: reqwest::Client, // Add reqwest client for direct API calls
+    gitlab_url_parsed: url::Url, // Parsed URL for reqwest requests
 }
 
 impl GitlabApiClient {
     pub fn new(settings: Arc<AppSettings>) -> Result<Self, GitlabError> {
+        let gitlab_url_parsed = url::Url::parse(&settings.gitlab_url)?;
+        
         Ok(Self {
             gitlab_url: settings.gitlab_url.clone(),
             private_token: settings.gitlab_token.clone(),
             settings,
+            client: reqwest::Client::new(),
+            gitlab_url_parsed,
         })
     }
 
@@ -61,6 +72,59 @@ impl GitlabApiClient {
         GitlabBuilder::new(&self.gitlab_url, &self.private_token)
             .build()
             .map_err(GitlabError::GitlabApi)
+    }
+
+    // Direct HTTP request method for endpoints not supported by gitlab crate
+    async fn send_request<T: DeserializeOwned>(
+        &self,
+        method: Method,
+        path: &str,
+        query_params: Option<&[(&str, &str)]>,
+        body: Option<impl Serialize + std::fmt::Debug>, // Added Debug for logging
+    ) -> Result<T, GitlabError> {
+        let mut url = self.gitlab_url_parsed.join(path)?;
+        if let Some(params) = query_params {
+            url.query_pairs_mut().extend_pairs(params);
+        }
+
+        debug!("Sending request to URL: {}", url);
+        if let Some(b) = &body {
+            debug!("Request body: {:?}", b);
+        }
+
+        let mut request_builder = self
+            .client
+            .request(method, url)
+            .header("PRIVATE-TOKEN", &self.private_token);
+
+        if body.is_some() {
+            request_builder = request_builder.header(header::CONTENT_TYPE, "application/json");
+        }
+
+        if let Some(b) = body {
+            request_builder = request_builder.json(&b);
+        }
+
+        let response = request_builder.send().await.map_err(GitlabError::Request)?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let response_body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Could not read error body".to_string());
+            error!("API Error: {} - {}", status, response_body);
+            return Err(GitlabError::Api {
+                status,
+                body: response_body,
+            });
+        }
+
+        let parsed_response = response
+            .json::<T>()
+            .await
+            .map_err(|e| GitlabError::Deserialization(e.to_string()))?;
+        Ok(parsed_response)
     }
 
     #[instrument(skip(self), fields(project_id, issue_iid))]
@@ -76,18 +140,18 @@ impl GitlabApiClient {
         let result = tokio::task::spawn_blocking(move || {
             let client = GitlabBuilder::new(&gitlab_url, &private_token)
                 .build()
-                .map_err(|e| GitlabError::Api { message: format!("Failed to create gitlab client: {}", e) })?;
+                .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Failed to create gitlab client: {}", e) })?;
             
             let endpoint = Issue::builder()
                 .project(project_id as u64)
                 .issue(issue_iid as u64)
                 .build()
-                .map_err(|e| GitlabError::Api { message: format!("Failed to build issue endpoint: {}", e) })?;
+                .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Failed to build issue endpoint: {}", e) })?;
 
             // Query the gitlab API (this is synchronous in the gitlab crate)
             let issue_data: serde_json::Value = endpoint
                 .query(&client)
-                .map_err(|e| GitlabError::Api { message: format!("GitLab API query failed: {}", e) })?;
+                .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("GitLab API query failed: {}", e) })?;
 
             // Convert the JSON response to our GitlabIssue struct
             let gitlab_issue = GitlabIssue {
@@ -112,7 +176,7 @@ impl GitlabApiClient {
 
             Ok::<GitlabIssue, GitlabError>(gitlab_issue)
         }).await
-        .map_err(|e| GitlabError::Api { message: format!("Blocking task failed: {}", e) })??;
+        .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Blocking task failed: {}", e) })??;
 
         Ok(result)
     }
@@ -130,18 +194,18 @@ impl GitlabApiClient {
         let result = tokio::task::spawn_blocking(move || {
             let client = GitlabBuilder::new(&gitlab_url, &private_token)
                 .build()
-                .map_err(|e| GitlabError::Api { message: format!("Failed to create gitlab client: {}", e) })?;
+                .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Failed to create gitlab client: {}", e) })?;
             
             let endpoint = MergeRequest::builder()
                 .project(project_id as u64)
                 .merge_request(mr_iid as u64)
                 .build()
-                .map_err(|e| GitlabError::Api { message: format!("Failed to build merge request endpoint: {}", e) })?;
+                .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Failed to build merge request endpoint: {}", e) })?;
 
             // Query the gitlab API
             let mr_data: serde_json::Value = endpoint
                 .query(&client)
-                .map_err(|e| GitlabError::Api { message: format!("GitLab API query failed: {}", e) })?;
+                .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("GitLab API query failed: {}", e) })?;
 
             // Convert the JSON response to our GitlabMergeRequest struct
             let gitlab_mr = GitlabMergeRequest {
@@ -170,7 +234,7 @@ impl GitlabApiClient {
 
             Ok::<GitlabMergeRequest, GitlabError>(gitlab_mr)
         }).await
-        .map_err(|e| GitlabError::Api { message: format!("Blocking task failed: {}", e) })??;
+        .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Blocking task failed: {}", e) })??;
 
         Ok(result)
     }
@@ -190,19 +254,19 @@ impl GitlabApiClient {
         let result = tokio::task::spawn_blocking(move || {
             let client = GitlabBuilder::new(&gitlab_url, &private_token)
                 .build()
-                .map_err(|e| GitlabError::Api { message: format!("Failed to create gitlab client: {}", e) })?;
+                .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Failed to create gitlab client: {}", e) })?;
             
             let endpoint = CreateIssueNote::builder()
                 .project(project_id as u64)
                 .issue(issue_iid as u64)
                 .body(body)
                 .build()
-                .map_err(|e| GitlabError::Api { message: format!("Failed to build create note endpoint: {}", e) })?;
+                .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Failed to build create note endpoint: {}", e) })?;
 
             // Query the gitlab API
             let note_data: serde_json::Value = endpoint
                 .query(&client)
-                .map_err(|e| GitlabError::Api { message: format!("GitLab API query failed: {}", e) })?;
+                .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("GitLab API query failed: {}", e) })?;
 
             // Convert the JSON response to our GitlabNoteAttributes struct
             let gitlab_note = GitlabNoteAttributes {
@@ -224,7 +288,7 @@ impl GitlabApiClient {
 
             Ok::<GitlabNoteAttributes, GitlabError>(gitlab_note)
         }).await
-        .map_err(|e| GitlabError::Api { message: format!("Blocking task failed: {}", e) })??;
+        .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Blocking task failed: {}", e) })??;
 
         Ok(result)
     }
@@ -244,19 +308,19 @@ impl GitlabApiClient {
         let result = tokio::task::spawn_blocking(move || {
             let client = GitlabBuilder::new(&gitlab_url, &private_token)
                 .build()
-                .map_err(|e| GitlabError::Api { message: format!("Failed to create gitlab client: {}", e) })?;
+                .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Failed to create gitlab client: {}", e) })?;
             
             let endpoint = CreateMergeRequestNote::builder()
                 .project(project_id as u64)
                 .merge_request(mr_iid as u64)
                 .body(body)
                 .build()
-                .map_err(|e| GitlabError::Api { message: format!("Failed to build create note endpoint: {}", e) })?;
+                .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Failed to build create note endpoint: {}", e) })?;
 
             // Query the gitlab API
             let note_data: serde_json::Value = endpoint
                 .query(&client)
-                .map_err(|e| GitlabError::Api { message: format!("GitLab API query failed: {}", e) })?;
+                .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("GitLab API query failed: {}", e) })?;
 
             // Convert the JSON response to our GitlabNoteAttributes struct
             let gitlab_note = GitlabNoteAttributes {
@@ -278,7 +342,7 @@ impl GitlabApiClient {
 
             Ok::<GitlabNoteAttributes, GitlabError>(gitlab_note)
         }).await
-        .map_err(|e| GitlabError::Api { message: format!("Blocking task failed: {}", e) })??;
+        .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Blocking task failed: {}", e) })??;
 
         Ok(result)
     }
@@ -293,17 +357,17 @@ impl GitlabApiClient {
         let result = tokio::task::spawn_blocking(move || {
             let client = GitlabBuilder::new(&gitlab_url, &private_token)
                 .build()
-                .map_err(|e| GitlabError::Api { message: format!("Failed to create gitlab client: {}", e) })?;
+                .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Failed to create gitlab client: {}", e) })?;
             
             let endpoint = Project::builder()
                 .project(&path)
                 .build()
-                .map_err(|e| GitlabError::Api { message: format!("Failed to build project endpoint: {}", e) })?;
+                .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Failed to build project endpoint: {}", e) })?;
 
             // Query the gitlab API
             let project_data: serde_json::Value = endpoint
                 .query(&client)
-                .map_err(|e| GitlabError::Api { message: format!("GitLab API query failed: {}", e) })?;
+                .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("GitLab API query failed: {}", e) })?;
 
             // Convert the JSON response to our GitlabProject struct
             let gitlab_project = GitlabProject {
@@ -314,7 +378,7 @@ impl GitlabApiClient {
 
             Ok::<GitlabProject, GitlabError>(gitlab_project)
         }).await
-        .map_err(|e| GitlabError::Api { message: format!("Blocking task failed: {}", e) })??;
+        .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Blocking task failed: {}", e) })??;
 
         Ok(result)
     }
@@ -332,7 +396,7 @@ impl GitlabApiClient {
         let result = tokio::task::spawn_blocking(move || {
             let client = GitlabBuilder::new(&gitlab_url, &private_token)
                 .build()
-                .map_err(|e| GitlabError::Api { message: format!("Failed to create gitlab client: {}", e) })?;
+                .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Failed to create gitlab client: {}", e) })?;
             
             // Convert timestamp to DateTime<Utc>
             let updated_after = DateTime::from_timestamp(since_timestamp as i64, 0)
@@ -342,12 +406,12 @@ impl GitlabApiClient {
                 .project(project_id as u64)
                 .updated_after(updated_after)
                 .build()
-                .map_err(|e| GitlabError::Api { message: format!("Failed to build issues endpoint: {}", e) })?;
+                .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Failed to build issues endpoint: {}", e) })?;
 
             // Query the gitlab API
             let issues_data: serde_json::Value = endpoint
                 .query(&client)
-                .map_err(|e| GitlabError::Api { message: format!("GitLab API query failed: {}", e) })?;
+                .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("GitLab API query failed: {}", e) })?;
 
             // Convert the JSON response to our GitlabIssue structs
             let mut issues = Vec::new();
@@ -378,7 +442,7 @@ impl GitlabApiClient {
 
             Ok::<Vec<GitlabIssue>, GitlabError>(issues)
         }).await
-        .map_err(|e| GitlabError::Api { message: format!("Blocking task failed: {}", e) })??;
+        .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Blocking task failed: {}", e) })??;
 
         Ok(result)
     }
@@ -396,7 +460,7 @@ impl GitlabApiClient {
         let result = tokio::task::spawn_blocking(move || {
             let client = GitlabBuilder::new(&gitlab_url, &private_token)
                 .build()
-                .map_err(|e| GitlabError::Api { message: format!("Failed to create gitlab client: {}", e) })?;
+                .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Failed to create gitlab client: {}", e) })?;
             
             // Convert timestamp to DateTime<Utc>
             let updated_after = DateTime::from_timestamp(since_timestamp as i64, 0)
@@ -406,12 +470,12 @@ impl GitlabApiClient {
                 .project(project_id as u64)
                 .updated_after(updated_after)
                 .build()
-                .map_err(|e| GitlabError::Api { message: format!("Failed to build merge requests endpoint: {}", e) })?;
+                .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Failed to build merge requests endpoint: {}", e) })?;
 
             // Query the gitlab API
             let mrs_data: serde_json::Value = endpoint
                 .query(&client)
-                .map_err(|e| GitlabError::Api { message: format!("GitLab API query failed: {}", e) })?;
+                .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("GitLab API query failed: {}", e) })?;
 
             // Convert the JSON response to our GitlabMergeRequest structs
             let mut merge_requests = Vec::new();
@@ -446,7 +510,7 @@ impl GitlabApiClient {
 
             Ok::<Vec<GitlabMergeRequest>, GitlabError>(merge_requests)
         }).await
-        .map_err(|e| GitlabError::Api { message: format!("Blocking task failed: {}", e) })??;
+        .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Blocking task failed: {}", e) })??;
 
         Ok(result)
     }
@@ -456,7 +520,7 @@ impl GitlabApiClient {
         &self,
         project_id: i64,
         issue_iid: i64,
-        _since_timestamp: u64,
+        since_timestamp: u64,
     ) -> Result<Vec<GitlabNoteAttributes>, GitlabError> {
         let gitlab_url = self.gitlab_url.clone();
         let private_token = self.private_token.clone();
@@ -465,23 +529,33 @@ impl GitlabApiClient {
         let result = tokio::task::spawn_blocking(move || {
             let client = GitlabBuilder::new(&gitlab_url, &private_token)
                 .build()
-                .map_err(|e| GitlabError::Api { message: format!("Failed to create gitlab client: {}", e) })?;
+                .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Failed to create gitlab client: {}", e) })?;
             
             let endpoint = IssueNotes::builder()
                 .project(project_id as u64)
                 .issue(issue_iid as u64)
                 .build()
-                .map_err(|e| GitlabError::Api { message: format!("Failed to build issue notes endpoint: {}", e) })?;
+                .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Failed to build issue notes endpoint: {}", e) })?;
 
             // Query the gitlab API
             let notes_data: serde_json::Value = endpoint
                 .query(&client)
-                .map_err(|e| GitlabError::Api { message: format!("GitLab API query failed: {}", e) })?;
+                .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("GitLab API query failed: {}", e) })?;
 
             // Convert the JSON response to our GitlabNoteAttributes structs
             let mut notes = Vec::new();
             if let Some(notes_array) = notes_data.as_array() {
                 for note_data in notes_array {
+                    // Filter by since_timestamp
+                    if let Some(updated_at_str) = note_data["updated_at"].as_str() {
+                        if let Ok(updated_at) = DateTime::parse_from_rfc3339(updated_at_str) {
+                            let updated_timestamp = updated_at.timestamp() as u64;
+                            if updated_timestamp < since_timestamp {
+                                continue; // Skip notes older than since_timestamp
+                            }
+                        }
+                    }
+                    
                     let gitlab_note = GitlabNoteAttributes {
                         id: note_data["id"].as_i64().unwrap_or(0),
                         note: note_data["body"].as_str().unwrap_or("").to_string(),
@@ -504,7 +578,7 @@ impl GitlabApiClient {
 
             Ok::<Vec<GitlabNoteAttributes>, GitlabError>(notes)
         }).await
-        .map_err(|e| GitlabError::Api { message: format!("Blocking task failed: {}", e) })??;
+        .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Blocking task failed: {}", e) })??;
 
         Ok(result)
     }
@@ -514,7 +588,7 @@ impl GitlabApiClient {
         &self,
         project_id: i64,
         mr_iid: i64,
-        _since_timestamp: u64,
+        since_timestamp: u64,
     ) -> Result<Vec<GitlabNoteAttributes>, GitlabError> {
         let gitlab_url = self.gitlab_url.clone();
         let private_token = self.private_token.clone();
@@ -523,23 +597,33 @@ impl GitlabApiClient {
         let result = tokio::task::spawn_blocking(move || {
             let client = GitlabBuilder::new(&gitlab_url, &private_token)
                 .build()
-                .map_err(|e| GitlabError::Api { message: format!("Failed to create gitlab client: {}", e) })?;
+                .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Failed to create gitlab client: {}", e) })?;
             
             let endpoint = MergeRequestNotes::builder()
                 .project(project_id as u64)
                 .merge_request(mr_iid as u64)
                 .build()
-                .map_err(|e| GitlabError::Api { message: format!("Failed to build merge request notes endpoint: {}", e) })?;
+                .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Failed to build merge request notes endpoint: {}", e) })?;
 
             // Query the gitlab API
             let notes_data: serde_json::Value = endpoint
                 .query(&client)
-                .map_err(|e| GitlabError::Api { message: format!("GitLab API query failed: {}", e) })?;
+                .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("GitLab API query failed: {}", e) })?;
 
             // Convert the JSON response to our GitlabNoteAttributes structs
             let mut notes = Vec::new();
             if let Some(notes_array) = notes_data.as_array() {
                 for note_data in notes_array {
+                    // Filter by since_timestamp
+                    if let Some(updated_at_str) = note_data["updated_at"].as_str() {
+                        if let Ok(updated_at) = DateTime::parse_from_rfc3339(updated_at_str) {
+                            let updated_timestamp = updated_at.timestamp() as u64;
+                            if updated_timestamp < since_timestamp {
+                                continue; // Skip notes older than since_timestamp
+                            }
+                        }
+                    }
+                    
                     let gitlab_note = GitlabNoteAttributes {
                         id: note_data["id"].as_i64().unwrap_or(0),
                         note: note_data["body"].as_str().unwrap_or("").to_string(),
@@ -562,7 +646,7 @@ impl GitlabApiClient {
 
             Ok::<Vec<GitlabNoteAttributes>, GitlabError>(notes)
         }).await
-        .map_err(|e| GitlabError::Api { message: format!("Blocking task failed: {}", e) })??;
+        .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Blocking task failed: {}", e) })??;
 
         Ok(result)
     }
@@ -577,18 +661,18 @@ impl GitlabApiClient {
         let result = tokio::task::spawn_blocking(move || {
             let client = GitlabBuilder::new(&gitlab_url, &private_token)
                 .build()
-                .map_err(|e| GitlabError::Api { message: format!("Failed to create gitlab client: {}", e) })?;
+                .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Failed to create gitlab client: {}", e) })?;
             
             let endpoint = Tree::builder()
                 .project(project_id as u64)
                 .recursive(true)
                 .build()
-                .map_err(|e| GitlabError::Api { message: format!("Failed to build tree endpoint: {}", e) })?;
+                .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Failed to build tree endpoint: {}", e) })?;
 
             // Query the gitlab API
             let tree_data: serde_json::Value = endpoint
                 .query(&client)
-                .map_err(|e| GitlabError::Api { message: format!("GitLab API query failed: {}", e) })?;
+                .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("GitLab API query failed: {}", e) })?;
 
             // Extract file paths from the tree response
             let mut file_paths = Vec::new();
@@ -605,7 +689,7 @@ impl GitlabApiClient {
 
             Ok::<Vec<String>, GitlabError>(file_paths)
         }).await
-        .map_err(|e| GitlabError::Api { message: format!("Blocking task failed: {}", e) })??;
+        .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Blocking task failed: {}", e) })??;
 
         Ok(result)
     }
@@ -625,18 +709,18 @@ impl GitlabApiClient {
         let result = tokio::task::spawn_blocking(move || {
             let client = GitlabBuilder::new(&gitlab_url, &private_token)
                 .build()
-                .map_err(|e| GitlabError::Api { message: format!("Failed to create gitlab client: {}", e) })?;
+                .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Failed to create gitlab client: {}", e) })?;
             
             let endpoint = FileRaw::builder()
                 .project(project_id as u64)
                 .file_path(&path)
                 .build()
-                .map_err(|e| GitlabError::Api { message: format!("Failed to build file endpoint: {}", e) })?;
+                .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Failed to build file endpoint: {}", e) })?;
 
             // Query the gitlab API
             let file_data: serde_json::Value = endpoint
                 .query(&client)
-                .map_err(|e| GitlabError::Api { message: format!("GitLab API query failed: {}", e) })?;
+                .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("GitLab API query failed: {}", e) })?;
 
             // Extract content from file response
             let content = if let Some(content_b64) = file_data["content"].as_str() {
@@ -658,7 +742,7 @@ impl GitlabApiClient {
 
             Ok::<GitlabFile, GitlabError>(gitlab_file)
         }).await
-        .map_err(|e| GitlabError::Api { message: format!("Blocking task failed: {}", e) })??;
+        .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Blocking task failed: {}", e) })??;
 
         Ok(result)
     }
@@ -670,31 +754,24 @@ impl GitlabApiClient {
         project_id: i64,
         query: &str,
     ) -> Result<Vec<String>, GitlabError> {
-        let gitlab_url = self.gitlab_url.clone();
-        let private_token = self.private_token.clone();
-        let search_query = query.to_string();
-        
-        // Run the gitlab crate operations in a blocking context
-        let result = tokio::task::spawn_blocking(move || {
-            // Create gitlab client for authentication context
-            let _client = GitlabBuilder::new(&gitlab_url, &private_token)
-                .build()
-                .map_err(|e| GitlabError::Api { message: format!("Failed to create gitlab client: {}", e) })?;
-            
-            // Use the gitlab client's HTTP client to make a manual search request
-            // Note: Search API may not be exposed through gitlab crate endpoints yet
-            let search_url = format!("{}/api/v4/projects/{}/search?scope=blobs&search={}", 
-                gitlab_url, project_id, urlencoding::encode(&search_query));
-            
-            // For now, return an error indicating this needs HTTP implementation
-            // This would require access to the internal HTTP client from gitlab crate
-            Err(GitlabError::Api {
-                message: format!("File name search requires direct HTTP access - endpoint: {}", search_url),
-            })
-        }).await
-        .map_err(|e| GitlabError::Api { message: format!("Blocking task failed: {}", e) })??;
+        let path = format!("/api/v4/projects/{}/search", project_id);
+        let query_params = &[
+            ("scope", "blobs"),
+            ("search", query),
+            ("ref", "main"),
+            ("per_page", "20"),
+        ];
 
-        Ok(result)
+        let results: Vec<serde_json::Value> = self
+            .send_request(Method::GET, &path, Some(query_params), None::<()>)
+            .await?;
+
+        let file_paths = results
+            .into_iter()
+            .filter_map(|item| item["path"].as_str().map(|s| s.to_string()))
+            .collect();
+
+        Ok(file_paths)
     }
 
     /// Search for files by content
@@ -704,31 +781,24 @@ impl GitlabApiClient {
         project_id: i64,
         query: &str,
     ) -> Result<Vec<String>, GitlabError> {
-        let gitlab_url = self.gitlab_url.clone();
-        let private_token = self.private_token.clone();
-        let search_query = query.to_string();
-        
-        // Run the gitlab crate operations in a blocking context
-        let result = tokio::task::spawn_blocking(move || {
-            // Create gitlab client for authentication context
-            let _client = GitlabBuilder::new(&gitlab_url, &private_token)
-                .build()
-                .map_err(|e| GitlabError::Api { message: format!("Failed to create gitlab client: {}", e) })?;
-            
-            // Use the gitlab client's HTTP client to make a manual search request
-            // Note: Content search API may not be exposed through gitlab crate endpoints yet
-            let search_url = format!("{}/api/v4/projects/{}/search?scope=blobs&search={}", 
-                gitlab_url, project_id, urlencoding::encode(&search_query));
-            
-            // For now, return an error indicating this needs HTTP implementation
-            // This would require access to the internal HTTP client from gitlab crate
-            Err(GitlabError::Api {
-                message: format!("File content search requires direct HTTP access - endpoint: {}", search_url),
-            })
-        }).await
-        .map_err(|e| GitlabError::Api { message: format!("Blocking task failed: {}", e) })??;
+        let path = format!("/api/v4/projects/{}/search", project_id);
+        let query_params = &[
+            ("scope", "blobs"),
+            ("search", query),
+            ("ref", "main"),
+            ("per_page", "20"),
+        ];
 
-        Ok(result)
+        let results: Vec<serde_json::Value> = self
+            .send_request(Method::GET, &path, Some(query_params), None::<()>)
+            .await?;
+
+        let file_paths = results
+            .into_iter()
+            .filter_map(|item| item["path"].as_str().map(|s| s.to_string()))
+            .collect();
+
+        Ok(file_paths)
     }
 
     /// Get changes for a merge request
@@ -738,30 +808,32 @@ impl GitlabApiClient {
         project_id: i64,
         merge_request_iid: i64,
     ) -> Result<Vec<GitlabDiff>, GitlabError> {
-        let gitlab_url = self.gitlab_url.clone();
-        let private_token = self.private_token.clone();
-        
-        // Run the gitlab crate operations in a blocking context
-        let result = tokio::task::spawn_blocking(move || {
-            // Create gitlab client for authentication context
-            let _client = GitlabBuilder::new(&gitlab_url, &private_token)
-                .build()
-                .map_err(|e| GitlabError::Api { message: format!("Failed to create gitlab client: {}", e) })?;
-            
-            // Use the gitlab client's HTTP client to make a manual changes request
-            // Note: MR changes/diffs API may not be exposed through gitlab crate endpoints yet
-            let changes_url = format!("{}/api/v4/projects/{}/merge_requests/{}/changes", 
-                gitlab_url, project_id, merge_request_iid);
-            
-            // For now, return an error indicating this needs HTTP implementation
-            // This would require access to the internal HTTP client from gitlab crate
-            Err(GitlabError::Api {
-                message: format!("MR changes requires direct HTTP access - endpoint: {}", changes_url),
-            })
-        }).await
-        .map_err(|e| GitlabError::Api { message: format!("Blocking task failed: {}", e) })??;
+        let path = format!(
+            "/api/v4/projects/{}/merge_requests/{}/changes",
+            project_id, merge_request_iid
+        );
 
-        Ok(result)
+        let response: serde_json::Value = self
+            .send_request(Method::GET, &path, None, None::<()>)
+            .await?;
+
+        // Extract changes from the response
+        let changes = response["changes"]
+            .as_array()
+            .map(|changes| {
+                changes
+                    .iter()
+                    .filter_map(|change| {
+                        let new_path = change["new_path"].as_str()?.to_string();
+                        let diff = change["diff"].as_str()?.to_string();
+
+                        Some(GitlabDiff { new_path, diff })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        Ok(changes)
     }
 
     #[instrument(skip(self), fields(project_id, issue_iid, label_name))]
@@ -779,19 +851,19 @@ impl GitlabApiClient {
         let result = tokio::task::spawn_blocking(move || {
             let client = GitlabBuilder::new(&gitlab_url, &private_token)
                 .build()
-                .map_err(|e| GitlabError::Api { message: format!("Failed to create gitlab client: {}", e) })?;
+                .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Failed to create gitlab client: {}", e) })?;
             
             let endpoint = EditIssue::builder()
                 .project(project_id as u64)
                 .issue(issue_iid as u64)
                 .add_label(label)
                 .build()
-                .map_err(|e| GitlabError::Api { message: format!("Failed to build edit issue endpoint: {}", e) })?;
+                .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Failed to build edit issue endpoint: {}", e) })?;
 
             // Query the gitlab API
             let issue_data: serde_json::Value = endpoint
                 .query(&client)
-                .map_err(|e| GitlabError::Api { message: format!("GitLab API query failed: {}", e) })?;
+                .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("GitLab API query failed: {}", e) })?;
 
             // Convert the JSON response to our GitlabIssue struct
             let gitlab_issue = GitlabIssue {
@@ -816,7 +888,7 @@ impl GitlabApiClient {
 
             Ok::<GitlabIssue, GitlabError>(gitlab_issue)
         }).await
-        .map_err(|e| GitlabError::Api { message: format!("Blocking task failed: {}", e) })??;
+        .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Blocking task failed: {}", e) })??;
 
         Ok(result)
     }
@@ -836,19 +908,19 @@ impl GitlabApiClient {
         let result = tokio::task::spawn_blocking(move || {
             let client = GitlabBuilder::new(&gitlab_url, &private_token)
                 .build()
-                .map_err(|e| GitlabError::Api { message: format!("Failed to create gitlab client: {}", e) })?;
+                .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Failed to create gitlab client: {}", e) })?;
             
             let endpoint = EditIssue::builder()
                 .project(project_id as u64)
                 .issue(issue_iid as u64)
                 .remove_label(label)
                 .build()
-                .map_err(|e| GitlabError::Api { message: format!("Failed to build edit issue endpoint: {}", e) })?;
+                .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Failed to build edit issue endpoint: {}", e) })?;
 
             // Query the gitlab API
             let issue_data: serde_json::Value = endpoint
                 .query(&client)
-                .map_err(|e| GitlabError::Api { message: format!("GitLab API query failed: {}", e) })?;
+                .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("GitLab API query failed: {}", e) })?;
 
             // Convert the JSON response to our GitlabIssue struct
             let gitlab_issue = GitlabIssue {
@@ -873,7 +945,7 @@ impl GitlabApiClient {
 
             Ok::<GitlabIssue, GitlabError>(gitlab_issue)
         }).await
-        .map_err(|e| GitlabError::Api { message: format!("Blocking task failed: {}", e) })??;
+        .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Blocking task failed: {}", e) })??;
 
         Ok(result)
     }
@@ -894,7 +966,7 @@ impl GitlabApiClient {
         let result = tokio::task::spawn_blocking(move || {
             let client = GitlabBuilder::new(&gitlab_url, &private_token)
                 .build()
-                .map_err(|e| GitlabError::Api { message: format!("Failed to create gitlab client: {}", e) })?;
+                .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Failed to create gitlab client: {}", e) })?;
             
             // Note: per_page method may not be available, limiting handled by GitLab API defaults
             let _ = limit; // Acknowledge but don't use for now
@@ -903,12 +975,12 @@ impl GitlabApiClient {
                 .project(project_id as u64)
                 .path(&path)
                 .build()
-                .map_err(|e| GitlabError::Api { message: format!("Failed to build commits endpoint: {}", e) })?;
+                .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Failed to build commits endpoint: {}", e) })?;
 
             // Query the gitlab API
             let commits_data: serde_json::Value = endpoint
                 .query(&client)
-                .map_err(|e| GitlabError::Api { message: format!("GitLab API query failed: {}", e) })?;
+                .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("GitLab API query failed: {}", e) })?;
 
             // Convert the JSON response to our GitlabCommit structs
             let mut commits = Vec::new();
@@ -932,7 +1004,7 @@ impl GitlabApiClient {
 
             Ok::<Vec<GitlabCommit>, GitlabError>(commits)
         }).await
-        .map_err(|e| GitlabError::Api { message: format!("Blocking task failed: {}", e) })??;
+        .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Blocking task failed: {}", e) })??;
 
         Ok(result)
     }
@@ -1037,9 +1109,9 @@ mod tests {
         let result = client.get_issue(2, 202).await;
         assert!(result.is_err());
         match result.err().unwrap() {
-            GitlabError::Api { message } => {
-                assert!(message.contains("404"));
-                assert!(message.contains("Issue not found"));
+            GitlabError::Api { status: _, body } => {
+                assert!(body.contains("404"));
+                assert!(body.contains("Issue not found"));
             }
             _ => panic!("Expected Api"),
         }
@@ -1151,9 +1223,9 @@ mod tests {
         mock.assert_async().await;
         assert!(result.is_err());
         match result.err().unwrap() {
-            GitlabError::Api { message } => {
-                assert!(message.contains("500"));
-                assert!(message.contains("Server error processing note"));
+            GitlabError::Api { status: _, body } => {
+                assert!(body.contains("500"));
+                assert!(body.contains("Server error processing note"));
             }
             _ => panic!("Expected Api"),
         }
@@ -1503,9 +1575,9 @@ mod tests {
         let result = client.add_issue_label(99, 999, label_to_add).await;
         assert!(result.is_err());
         match result.err().unwrap() {
-            GitlabError::Api { message } => {
-                assert!(message.contains("404"));
-                assert!(message.contains("Issue not found"));
+            GitlabError::Api { status: _, body } => {
+                assert!(body.contains("404"));
+                assert!(body.contains("Issue not found"));
             }
             _ => panic!("Expected Api Error for not found"),
         }
@@ -1532,9 +1604,9 @@ mod tests {
         let result = client.remove_issue_label(88, 888, label_to_remove).await;
         assert!(result.is_err());
         match result.err().unwrap() {
-            GitlabError::Api { message } => {
-                assert!(message.contains("404"));
-                assert!(message.contains("Issue not found"));
+            GitlabError::Api { status: _, body } => {
+                assert!(body.contains("404"));
+                assert!(body.contains("Issue not found"));
             }
             _ => panic!("Expected Api Error for not found"),
         }

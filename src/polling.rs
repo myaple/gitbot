@@ -955,7 +955,7 @@ mod tests {
         let result = check_stale_issues(PROJECT_ID, client, config).await;
         assert!(result.is_err());
         match result.err().unwrap().downcast_ref::<GitlabError>() {
-            Some(GitlabError::Api { message, .. }) => assert!(message.contains("500") || message.contains("error")),
+            Some(GitlabError::Api { status, body }) => assert!(status.as_u16() == 500 || body.contains("error")),
             _ => panic!("Expected GitlabError::Api"),
         }
     }
