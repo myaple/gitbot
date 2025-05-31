@@ -38,7 +38,6 @@ async fn main() -> Result<()> {
     // Initialize GitLab API Client
     let config_arc = Arc::new(app_settings);
     let gitlab_client = GitlabApiClient::new(config_arc.clone())
-        .await
         .with_context(|| "Failed to create GitLab client")?;
 
     info!("GitLab API client initialized successfully.");
