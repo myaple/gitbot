@@ -8,7 +8,11 @@ use chrono::{DateTime, TimeZone, Utc};
 use gitlab::{AsyncGitlab, GitlabBuilder};
 // Try importing API components we attempted before
 use gitlab::api::{Query, AsyncQuery};
-use gitlab::api::projects::issues::Issue;
+use gitlab::api::projects::issues::{Issue, Issues};
+use gitlab::api::projects::merge_requests::MergeRequest;
+use gitlab::api::projects::Project;
+use gitlab::api::projects::issues::notes::CreateIssueNote;
+use gitlab::api::{Pagination};
 use std::sync::Arc;
 use thiserror::Error;
 use tracing::{debug, error, instrument};
@@ -79,9 +83,18 @@ impl GitlabApiClient {
         project_id: i64,
         mr_iid: i64,
     ) -> Result<GitlabMergeRequest, GitlabError> {
-        Err(GitlabError::Api { 
-            message: format!("GitLab crate integration in progress for get_merge_request({}, {})", project_id, mr_iid) 
-        })
+        let endpoint = MergeRequest::builder()
+            .project(project_id as u64)
+            .merge_request(mr_iid as u64)
+            .build()
+            .map_err(|e| GitlabError::Api { message: format!("Failed to build merge request endpoint: {}", e) })?;
+            
+        let mr: GitlabMergeRequest = endpoint
+            .query_async(&self.client)
+            .await
+            .map_err(|e| GitlabError::Api { message: format!("API error: {}", e) })?;
+            
+        Ok(mr)
     }
 
     #[instrument(skip(self), fields(project_id, issue_iid))]
@@ -91,9 +104,19 @@ impl GitlabApiClient {
         issue_iid: i64,
         comment_body: &str,
     ) -> Result<GitlabNoteAttributes, GitlabError> {
-        Err(GitlabError::Api { 
-            message: format!("GitLab crate integration in progress for post_comment_to_issue({}, {}, len={})", project_id, issue_iid, comment_body.len()) 
-        })
+        let endpoint = CreateIssueNote::builder()
+            .project(project_id as u64)
+            .issue(issue_iid as u64)
+            .body(comment_body)
+            .build()
+            .map_err(|e| GitlabError::Api { message: format!("Failed to build create issue note endpoint: {}", e) })?;
+            
+        let note: GitlabNoteAttributes = endpoint
+            .query_async(&self.client)
+            .await
+            .map_err(|e| GitlabError::Api { message: format!("API error: {}", e) })?;
+            
+        Ok(note)
     }
 
     #[instrument(skip(self), fields(project_id, mr_iid))]
@@ -110,9 +133,17 @@ impl GitlabApiClient {
 
     #[instrument(skip(self), fields(repo_path))]
     pub async fn get_project_by_path(&self, repo_path: &str) -> Result<GitlabProject, GitlabError> {
-        Err(GitlabError::Api { 
-            message: format!("GitLab crate integration in progress for get_project_by_path({})", repo_path) 
-        })
+        let endpoint = Project::builder()
+            .project(repo_path)
+            .build()
+            .map_err(|e| GitlabError::Api { message: format!("Failed to build project endpoint: {}", e) })?;
+            
+        let project: GitlabProject = endpoint
+            .query_async(&self.client)
+            .await
+            .map_err(|e| GitlabError::Api { message: format!("API error: {}", e) })?;
+            
+        Ok(project)
     }
 
     #[instrument(skip(self), fields(project_id, since_timestamp))]
@@ -121,9 +152,25 @@ impl GitlabApiClient {
         project_id: i64,
         since_timestamp: u64,
     ) -> Result<Vec<GitlabIssue>, GitlabError> {
-        Err(GitlabError::Api { 
-            message: format!("GitLab crate integration in progress for get_issues({}, {})", project_id, since_timestamp) 
-        })
+        let dt = DateTime::from_timestamp(since_timestamp as i64, 0).unwrap_or_else(|| {
+            Utc.timestamp_opt(0, 0)
+                .single()
+                .expect("Fallback timestamp failed for 0")
+        });
+        
+        let endpoint = Issues::builder()
+            .project(project_id as u64)
+            .updated_after(dt)
+            .sort(gitlab::api::common::SortOrder::Ascending)
+            .build()
+            .map_err(|e| GitlabError::Api { message: format!("Failed to build issues endpoint: {}", e) })?;
+            
+        let issues: Vec<GitlabIssue> = gitlab::api::paged(endpoint, Pagination::All)
+            .query_async(&self.client)
+            .await
+            .map_err(|e| GitlabError::Api { message: format!("API error: {}", e) })?;
+            
+        Ok(issues)
     }
 
     #[instrument(skip(self), fields(project_id, since_timestamp))]
