@@ -5,7 +5,10 @@ use crate::models::{
 use crate::repo_context::{GitlabDiff, GitlabFile};
 use chrono::{DateTime, TimeZone, Utc};
 // GitLab API client implementation using the gitlab crate
-use gitlab::{Gitlab, GitlabBuilder};
+use gitlab::{AsyncGitlab, GitlabBuilder};
+// Try importing API components we attempted before
+use gitlab::api::{Query, AsyncQuery};
+use gitlab::api::projects::issues::Issue;
 use std::sync::Arc;
 use thiserror::Error;
 use tracing::{debug, error, instrument};
@@ -25,15 +28,15 @@ pub enum GitlabError {
 
 #[derive(Debug)]
 pub struct GitlabApiClient {
-    client: Gitlab,
+    client: AsyncGitlab,
     settings: Arc<AppSettings>,
 }
 
 impl GitlabApiClient {
-    pub fn new(settings: Arc<AppSettings>) -> Result<Self, GitlabError> {
+    pub async fn new(settings: Arc<AppSettings>) -> Result<Self, GitlabError> {
         let client = GitlabBuilder::new(&settings.gitlab_url, &settings.gitlab_token)
-            .insecure()  // Add if needed for testing
-            .build()
+            .build_async()
+            .await
             .map_err(GitlabError::GitlabApi)?;
         
         Ok(Self {
@@ -48,11 +51,26 @@ impl GitlabApiClient {
         project_id: i64,
         issue_iid: i64,
     ) -> Result<GitlabIssue, GitlabError> {
-        // Try using the gitlab crate in a simpler way first
-        // For now, return a temporary implementation error
-        Err(GitlabError::Api { 
-            message: format!("GitLab crate integration in progress for get_issue({}, {})", project_id, issue_iid) 
-        })
+        // Try the most common pattern: direct HTTP request methods
+        // Many GitLab clients provide get/post/put/delete methods
+        
+        let url = format!("/api/v4/projects/{}/issues/{}", project_id, issue_iid);
+        
+        // Try to see what methods are available
+        // This will generate helpful compiler errors showing available methods
+        // Use the gitlab crate API pattern with endpoint builders
+        let endpoint = Issue::builder()
+            .project(project_id as u64)
+            .issue(issue_iid as u64)
+            .build()
+            .map_err(|e| GitlabError::Api { message: format!("Failed to build issue endpoint: {}", e) })?;
+            
+        let issue: GitlabIssue = endpoint
+            .query_async(&self.client)
+            .await
+            .map_err(|e| GitlabError::Api { message: format!("API error: {}", e) })?;
+            
+        Ok(issue)
     }
 
     #[instrument(skip(self), fields(project_id, mr_iid))]
@@ -250,33 +268,43 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_gitlab_crate_exploration() {
-        // Simple test to understand what the gitlab crate provides
+    async fn test_gitlab_crate_api_exploration() {
+        // Create a gitlab client to explore available methods
         let result = GitlabBuilder::new("http://localhost:1234", "test_token")
             .build();
             
-        match result {
-            Ok(_client) => {
-                // GitLab client created successfully
-                println!("GitLab crate client created successfully");
-            },
-            Err(e) => {
-                println!("Failed to create gitlab client: {:?}", e);
-            }
+        if let Ok(client) = result {
+            // Try to understand what methods are available
+            // Let's see what happens when we try common method names
+            
+            // Attempt 1: Check if there are direct method calls
+            // client.issues() // This will show us if issues() exists
+            // client.projects() // This will show us if projects() exists
+            // client.get() // This will show us if get() exists
+            
+            // Attempt 2: Check if it implements common traits
+            // let _: &dyn Query = &client; // This will tell us about Query trait
+            
+            println!("GitLab client type: {:?}", std::any::type_name_of_val(&client));
+            
+            // For now, just ensure we can create the client
+            assert!(true, "GitLab client created successfully");
+        } else {
+            panic!("Failed to create GitLab client");
         }
     }
 
     #[tokio::test]
     async fn test_new_gitlab_api_client_valid_url() {
         let settings = Arc::new(create_test_settings("http://localhost:1234".to_string()));
-        let client = GitlabApiClient::new(settings);
+        let client = GitlabApiClient::new(settings).await;
         assert!(client.is_ok());
     }
 
     #[tokio::test]
     async fn test_new_gitlab_api_client_invalid_url() {
         let settings = Arc::new(create_test_settings("not a url".to_string()));
-        let result = GitlabApiClient::new(settings);
+        let result = GitlabApiClient::new(settings).await;
         assert!(result.is_err());
         match result.err().unwrap() {
             GitlabError::GitlabApi(_) => {} // Expected error from gitlab crate
