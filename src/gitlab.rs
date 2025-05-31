@@ -48,28 +48,47 @@ pub enum GitlabError {
 /// - Future-proofing against GitLab API changes
 #[derive(Debug)]
 pub struct GitlabApiClient {
-    gitlab_url: String,
+    gitlab_url: url::Url,
     private_token: String,
     settings: Arc<AppSettings>,
     client: reqwest::Client, // Add reqwest client for direct API calls
-    gitlab_url_parsed: url::Url, // Parsed URL for reqwest requests
 }
 
 impl GitlabApiClient {
     pub fn new(settings: Arc<AppSettings>) -> Result<Self, GitlabError> {
-        let gitlab_url_parsed = url::Url::parse(&settings.gitlab_url)?;
+        let gitlab_url = url::Url::parse(&settings.gitlab_url)?;
         
         Ok(Self {
-            gitlab_url: settings.gitlab_url.clone(),
+            gitlab_url,
             private_token: settings.gitlab_token.clone(),
             settings,
             client: reqwest::Client::new(),
-            gitlab_url_parsed,
+        })
+    }
+
+    fn get_gitlab_host(&self) -> Result<String, GitlabError> {
+        // GitlabBuilder expects hostname without protocol, it adds https:// automatically
+        let host = self.gitlab_url.host_str()
+            .ok_or_else(|| GitlabError::Api { 
+                status: reqwest::StatusCode::BAD_REQUEST, 
+                body: "Invalid GitLab URL: no host found".to_string() 
+            })?;
+        
+        Ok(if let Some(port) = self.gitlab_url.port() {
+            format!("{}:{}", host, port)
+        } else {
+            host.to_string()
         })
     }
 
     fn create_client(&self) -> Result<Gitlab, GitlabError> {
-        GitlabBuilder::new(&self.gitlab_url, &self.private_token)
+        self.create_gitlab_client()
+    }
+
+    fn create_gitlab_client(&self) -> Result<Gitlab, GitlabError> {
+        let host = self.get_gitlab_host()?;
+        debug!("Creating client with host: {}", host);
+        GitlabBuilder::new(&host, &self.private_token)
             .build()
             .map_err(GitlabError::GitlabApi)
     }
@@ -82,7 +101,7 @@ impl GitlabApiClient {
         query_params: Option<&[(&str, &str)]>,
         body: Option<impl Serialize + std::fmt::Debug>, // Added Debug for logging
     ) -> Result<T, GitlabError> {
-        let mut url = self.gitlab_url_parsed.join(path)?;
+        let mut url = self.gitlab_url.join(path)?;
         if let Some(params) = query_params {
             url.query_pairs_mut().extend_pairs(params);
         }
@@ -133,12 +152,12 @@ impl GitlabApiClient {
         project_id: i64,
         issue_iid: i64,
     ) -> Result<GitlabIssue, GitlabError> {
-        let gitlab_url = self.gitlab_url.clone();
+        let gitlab_host = self.get_gitlab_host()?;
         let private_token = self.private_token.clone();
         
         // Run the gitlab crate operations in a blocking context
         let result = tokio::task::spawn_blocking(move || {
-            let client = GitlabBuilder::new(&gitlab_url, &private_token)
+            let client = GitlabBuilder::new(&gitlab_host, &private_token)
                 .build()
                 .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Failed to create gitlab client: {}", e) })?;
             
@@ -187,12 +206,12 @@ impl GitlabApiClient {
         project_id: i64,
         mr_iid: i64,
     ) -> Result<GitlabMergeRequest, GitlabError> {
-        let gitlab_url = self.gitlab_url.clone();
+        let gitlab_host = self.get_gitlab_host()?;
         let private_token = self.private_token.clone();
         
         // Run the gitlab crate operations in a blocking context
         let result = tokio::task::spawn_blocking(move || {
-            let client = GitlabBuilder::new(&gitlab_url, &private_token)
+            let client = GitlabBuilder::new(&gitlab_host, &private_token)
                 .build()
                 .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Failed to create gitlab client: {}", e) })?;
             
@@ -246,13 +265,13 @@ impl GitlabApiClient {
         issue_iid: i64,
         comment_body: &str,
     ) -> Result<GitlabNoteAttributes, GitlabError> {
-        let gitlab_url = self.gitlab_url.clone();
+        let gitlab_host = self.get_gitlab_host()?;
         let private_token = self.private_token.clone();
         let body = comment_body.to_string();
         
         // Run the gitlab crate operations in a blocking context
         let result = tokio::task::spawn_blocking(move || {
-            let client = GitlabBuilder::new(&gitlab_url, &private_token)
+            let client = GitlabBuilder::new(&gitlab_host, &private_token)
                 .build()
                 .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Failed to create gitlab client: {}", e) })?;
             
@@ -300,13 +319,13 @@ impl GitlabApiClient {
         mr_iid: i64,
         comment_body: &str,
     ) -> Result<GitlabNoteAttributes, GitlabError> {
-        let gitlab_url = self.gitlab_url.clone();
+        let gitlab_host = self.get_gitlab_host()?;
         let private_token = self.private_token.clone();
         let body = comment_body.to_string();
         
         // Run the gitlab crate operations in a blocking context
         let result = tokio::task::spawn_blocking(move || {
-            let client = GitlabBuilder::new(&gitlab_url, &private_token)
+            let client = GitlabBuilder::new(&gitlab_host, &private_token)
                 .build()
                 .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Failed to create gitlab client: {}", e) })?;
             
@@ -349,13 +368,13 @@ impl GitlabApiClient {
 
     #[instrument(skip(self), fields(repo_path))]
     pub async fn get_project_by_path(&self, repo_path: &str) -> Result<GitlabProject, GitlabError> {
-        let gitlab_url = self.gitlab_url.clone();
+        let gitlab_host = self.get_gitlab_host()?;
         let private_token = self.private_token.clone();
         let path = repo_path.to_string();
         
         // Run the gitlab crate operations in a blocking context
         let result = tokio::task::spawn_blocking(move || {
-            let client = GitlabBuilder::new(&gitlab_url, &private_token)
+            let client = GitlabBuilder::new(&gitlab_host, &private_token)
                 .build()
                 .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Failed to create gitlab client: {}", e) })?;
             
@@ -389,12 +408,12 @@ impl GitlabApiClient {
         project_id: i64,
         since_timestamp: u64,
     ) -> Result<Vec<GitlabIssue>, GitlabError> {
-        let gitlab_url = self.gitlab_url.clone();
+        let gitlab_host = self.get_gitlab_host()?;
         let private_token = self.private_token.clone();
         
         // Run the gitlab crate operations in a blocking context
         let result = tokio::task::spawn_blocking(move || {
-            let client = GitlabBuilder::new(&gitlab_url, &private_token)
+            let client = GitlabBuilder::new(&gitlab_host, &private_token)
                 .build()
                 .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Failed to create gitlab client: {}", e) })?;
             
@@ -453,12 +472,12 @@ impl GitlabApiClient {
         project_id: i64,
         since_timestamp: u64,
     ) -> Result<Vec<GitlabMergeRequest>, GitlabError> {
-        let gitlab_url = self.gitlab_url.clone();
+        let gitlab_host = self.get_gitlab_host()?;
         let private_token = self.private_token.clone();
         
         // Run the gitlab crate operations in a blocking context
         let result = tokio::task::spawn_blocking(move || {
-            let client = GitlabBuilder::new(&gitlab_url, &private_token)
+            let client = GitlabBuilder::new(&gitlab_host, &private_token)
                 .build()
                 .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Failed to create gitlab client: {}", e) })?;
             
@@ -522,12 +541,12 @@ impl GitlabApiClient {
         issue_iid: i64,
         since_timestamp: u64,
     ) -> Result<Vec<GitlabNoteAttributes>, GitlabError> {
-        let gitlab_url = self.gitlab_url.clone();
+        let gitlab_host = self.get_gitlab_host()?;
         let private_token = self.private_token.clone();
         
         // Run the gitlab crate operations in a blocking context
         let result = tokio::task::spawn_blocking(move || {
-            let client = GitlabBuilder::new(&gitlab_url, &private_token)
+            let client = GitlabBuilder::new(&gitlab_host, &private_token)
                 .build()
                 .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Failed to create gitlab client: {}", e) })?;
             
@@ -590,12 +609,12 @@ impl GitlabApiClient {
         mr_iid: i64,
         since_timestamp: u64,
     ) -> Result<Vec<GitlabNoteAttributes>, GitlabError> {
-        let gitlab_url = self.gitlab_url.clone();
+        let gitlab_host = self.get_gitlab_host()?;
         let private_token = self.private_token.clone();
         
         // Run the gitlab crate operations in a blocking context
         let result = tokio::task::spawn_blocking(move || {
-            let client = GitlabBuilder::new(&gitlab_url, &private_token)
+            let client = GitlabBuilder::new(&gitlab_host, &private_token)
                 .build()
                 .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Failed to create gitlab client: {}", e) })?;
             
@@ -654,12 +673,12 @@ impl GitlabApiClient {
     /// Get the repository file tree with pagination
     #[instrument(skip(self), fields(project_id))]
     pub async fn get_repository_tree(&self, project_id: i64) -> Result<Vec<String>, GitlabError> {
-        let gitlab_url = self.gitlab_url.clone();
+        let gitlab_host = self.get_gitlab_host()?;
         let private_token = self.private_token.clone();
         
         // Run the gitlab crate operations in a blocking context
         let result = tokio::task::spawn_blocking(move || {
-            let client = GitlabBuilder::new(&gitlab_url, &private_token)
+            let client = GitlabBuilder::new(&gitlab_host, &private_token)
                 .build()
                 .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Failed to create gitlab client: {}", e) })?;
             
@@ -701,13 +720,13 @@ impl GitlabApiClient {
         project_id: i64,
         file_path: &str,
     ) -> Result<GitlabFile, GitlabError> {
-        let gitlab_url = self.gitlab_url.clone();
+        let gitlab_host = self.get_gitlab_host()?;
         let private_token = self.private_token.clone();
         let path = file_path.to_string();
         
         // Run the gitlab crate operations in a blocking context
         let result = tokio::task::spawn_blocking(move || {
-            let client = GitlabBuilder::new(&gitlab_url, &private_token)
+            let client = GitlabBuilder::new(&gitlab_host, &private_token)
                 .build()
                 .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Failed to create gitlab client: {}", e) })?;
             
@@ -843,13 +862,13 @@ impl GitlabApiClient {
         issue_iid: i64,
         label_name: &str,
     ) -> Result<GitlabIssue, GitlabError> {
-        let gitlab_url = self.gitlab_url.clone();
+        let gitlab_host = self.get_gitlab_host()?;
         let private_token = self.private_token.clone();
         let label = label_name.to_string();
         
         // Run the gitlab crate operations in a blocking context
         let result = tokio::task::spawn_blocking(move || {
-            let client = GitlabBuilder::new(&gitlab_url, &private_token)
+            let client = GitlabBuilder::new(&gitlab_host, &private_token)
                 .build()
                 .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Failed to create gitlab client: {}", e) })?;
             
@@ -900,13 +919,13 @@ impl GitlabApiClient {
         issue_iid: i64,
         label_name: &str,
     ) -> Result<GitlabIssue, GitlabError> {
-        let gitlab_url = self.gitlab_url.clone();
+        let gitlab_host = self.get_gitlab_host()?;
         let private_token = self.private_token.clone();
         let label = label_name.to_string();
         
         // Run the gitlab crate operations in a blocking context
         let result = tokio::task::spawn_blocking(move || {
-            let client = GitlabBuilder::new(&gitlab_url, &private_token)
+            let client = GitlabBuilder::new(&gitlab_host, &private_token)
                 .build()
                 .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Failed to create gitlab client: {}", e) })?;
             
@@ -958,13 +977,13 @@ impl GitlabApiClient {
         file_path: &str,
         limit: Option<usize>,
     ) -> Result<Vec<GitlabCommit>, GitlabError> {
-        let gitlab_url = self.gitlab_url.clone();
+        let gitlab_host = self.get_gitlab_host()?;
         let private_token = self.private_token.clone();
         let path = file_path.to_string();
         
         // Run the gitlab crate operations in a blocking context
         let result = tokio::task::spawn_blocking(move || {
-            let client = GitlabBuilder::new(&gitlab_url, &private_token)
+            let client = GitlabBuilder::new(&gitlab_host, &private_token)
                 .build()
                 .map_err(|e| GitlabError::Api { status: reqwest::StatusCode::INTERNAL_SERVER_ERROR, body: format!("Failed to create gitlab client: {}", e) })?;
             
@@ -1076,6 +1095,15 @@ mod tests {
             },
             "task_completion_status": {"count": 0, "completed_count": 0}
         });
+
+        // Mock the user endpoint that gitlab crate uses for authentication
+        let _user_mock = server
+            .mock("GET", "/api/v4/user")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(json!({"id": 1, "username": "test_user"}).to_string())
+            .create_async()
+            .await;
 
         let _m = server
             .mock("GET", "/api/v4/projects/1/issues/101")
