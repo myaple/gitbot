@@ -28,6 +28,8 @@ mod file_indexer_simple_test;
 mod file_indexer_test;
 #[cfg(test)]
 mod polling_test;
+#[cfg(test)]
+mod tests;
 
 #[tokio::main]
 async fn main() -> Result<()> {
