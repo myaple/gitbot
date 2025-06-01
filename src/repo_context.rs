@@ -1137,7 +1137,6 @@ mod tests {
         );
     }
 
-    #[ignore = "Known issue with SCC HashMap - under investigation"]
     #[tokio::test]
     async fn test_file_indexing_in_find_relevant_files_for_issue() {
         // This test specifically tests the file indexing functionality in find_relevant_files_for_issue
@@ -1193,20 +1192,25 @@ mod tests {
         let index = file_index_manager.get_or_create_index(project.id);
 
         // Add files to the index with content that matches keywords in the issue
-        index.add_file("src/auth/login.rs", "fn authenticate_user_login(username: &str, password: &str) -> Result<Token> { /* login authentication token implementation */ }");
-        index.add_file(
-            "src/auth/jwt.rs",
-            "fn validate_jwt_token_login(token: &str) -> Result<Claims> { /* jwt token authentication login implementation */ }",
-        );
-        index.add_file(
-            "src/models/user.rs",
-            "struct User { id: i32, username: String, password_hash: String }",
-        );
-        index.add_file(
-            "src/utils/crypto.rs",
-            "fn hash_password(password: &str) -> String { /* implementation */ }",
-        );
-        index.add_file("README.md", "# Test Project\nThis is a test project.");
+        let login_content = "fn authenticate_user_login(username: &str, password: &str) -> Result<Token> { /* login authentication jwt token implementation */ }";
+        let jwt_content = "fn validate_jwt_token_login(token: &str) -> Result<Claims> { /* jwt token authentication login implementation */ }";
+        let user_content = "struct User { id: i32, username: String, password_hash: String }";
+        let crypto_content = "fn hash_password(password: &str) -> String { /* implementation */ }";
+        let readme_content = "# Test Project\nThis is a test project.";
+        
+        println!("Adding files to index...");
+        index.add_file("src/auth/login.rs", login_content);
+        println!("After adding login.rs, checking 'uth' n-gram: {:?}", index.debug_get_files_for_ngram("uth"));
+        
+        index.add_file("src/auth/jwt.rs", jwt_content);
+        println!("After adding jwt.rs, checking 'uth' n-gram: {:?}", index.debug_get_files_for_ngram("uth"));
+        
+        index.add_file("src/models/user.rs", user_content);
+        index.add_file("src/utils/crypto.rs", crypto_content);
+        index.add_file("README.md", readme_content);
+        
+        println!("Login content n-grams: {:?}", crate::file_indexer::FileContentIndex::generate_ngrams(login_content));
+        println!("JWT content n-grams: {:?}", crate::file_indexer::FileContentIndex::generate_ngrams(jwt_content));
 
         // Update the last updated timestamp to make the index appear fresh
         index.mark_updated().await;
@@ -1227,6 +1231,42 @@ mod tests {
         // Search with our test keywords to ensure the index is working
         let search_results = index.search(&test_keywords);
         println!("Search results with test keywords: {:?}", search_results);
+        
+        // Let's also check what n-grams are generated for our test keywords
+        for keyword in &test_keywords {
+            let ngrams = crate::file_indexer::FileContentIndex::generate_ngrams(keyword);
+            println!("N-grams for '{}': {:?}", keyword, ngrams);
+            
+            // Check which files contain each n-gram
+            for ngram in &ngrams {
+                if let Some(files) = index.debug_get_files_for_ngram(ngram) {
+                    println!("  N-gram '{}' found in files: {:?}", ngram, files);
+                } else {
+                    println!("  N-gram '{}' NOT found in index", ngram);
+                }
+            }
+        }
+        
+        // Let's also debug which keywords have matches in each file
+        println!("\nKeyword matches per file:");
+        for keyword in &test_keywords {
+            let ngrams = crate::file_indexer::FileContentIndex::generate_ngrams(keyword);
+            let mut login_matches = false;
+            let mut jwt_matches = false;
+            
+            for ngram in &ngrams {
+                if let Some(files) = index.debug_get_files_for_ngram(ngram) {
+                    if files.contains("src/auth/login.rs") {
+                        login_matches = true;
+                    }
+                    if files.contains("src/auth/jwt.rs") {
+                        jwt_matches = true;
+                    }
+                }
+            }
+            
+            println!("  '{}': login.rs={}, jwt.rs={}", keyword, login_matches, jwt_matches);
+        }
 
         // Verify that the index contains the expected files
         assert!(
