@@ -109,61 +109,26 @@ impl FileContentIndex {
         // Add each n-gram to the index
         for ngram in ngrams {
             let file_path_string = file_path.to_string();
-            
-            #[cfg(test)]
-            println!("Adding n-gram '{}' for file '{}'", ngram, file_path_string);
 
-            // Simple approach: get existing value, build new set, and try to insert/replace
-            let mut attempts = 0;
-            while attempts < 10 {
-                // Get the current value if it exists
-                let current_files = self.ngram_to_files.get(&ngram)
-                    .map(|entry| entry.clone())
-                    .unwrap_or_else(HashSet::new);
-                    
-                // Create new set with current file added
-                let mut new_files = current_files.clone();
-                new_files.insert(file_path_string.clone());
-                
-                #[cfg(test)]
-                println!("  Attempting to set files: {:?}", new_files);
-                
-                // Try to insert/replace
-                match self.ngram_to_files.insert(ngram.clone(), new_files.clone()) {
-                    Ok(_) => {
-                        // Successfully inserted (key didn't exist)
-                        #[cfg(test)]
-                        println!("  Successfully inserted new entry");
-                        break;
-                    }
-                    Err((_, old_value)) => {
-                        // Key already exists, try to update if our view is still current
-                        if old_value == current_files {
-                            // Our view was current but someone else won the race, try update
-                            let update_result = self.ngram_to_files.update(&ngram, |_, existing_files| {
-                                let mut updated_files = existing_files.clone();
-                                updated_files.insert(file_path_string.clone());
-                                updated_files
-                            });
-                            
-                            if update_result.is_some() {
-                                #[cfg(test)]
-                                println!("  Successfully updated existing entry via update");
-                                break;
-                            }
-                        }
-                        
-                        // Either our view was stale or update failed, retry
-                        attempts += 1;
-                        #[cfg(test)]
-                        println!("  Retry attempt {}", attempts);
-                    }
-                }
-            }
+            // Simplified approach: try insert, if it fails, remove and re-insert with correct merged value
+            let mut new_files = HashSet::new();
+            new_files.insert(file_path_string.clone());
             
-            if attempts >= 10 {
-                #[cfg(test)]
-                println!("  WARNING: Failed to add n-gram '{}' for file '{}' after 10 attempts", ngram, file_path_string);
+            if let Err(_) = self.ngram_to_files.insert(ngram.clone(), new_files) {
+                // Entry already exists, remove it to get the actual current value, then re-insert merged
+                if let Some((_, actual_existing_files)) = self.ngram_to_files.remove(&ngram) {
+                    // Merge the actual existing files with the new file
+                    let mut merged_files = actual_existing_files;
+                    merged_files.insert(file_path_string.clone());
+                    
+                    // Re-insert the merged set
+                    let _ = self.ngram_to_files.insert(ngram.clone(), merged_files);
+                } else {
+                    // Shouldn't happen, but handle gracefully
+                    let mut fallback_files = HashSet::new();
+                    fallback_files.insert(file_path_string.clone());
+                    let _ = self.ngram_to_files.insert(ngram.clone(), fallback_files);
+                }
             }
         }
 
@@ -273,12 +238,6 @@ impl FileContentIndex {
     pub async fn mark_updated(&self) {
         let mut last_updated = self.last_updated.write().await;
         *last_updated = Instant::now();
-    }
-    
-    /// Debug method to check if an n-gram exists in the index
-    #[cfg(test)]
-    pub fn debug_get_files_for_ngram(&self, ngram: &str) -> Option<HashSet<String>> {
-        self.ngram_to_files.get(ngram).map(|files| files.clone())
     }
 
     /// Get the project ID this index belongs to
