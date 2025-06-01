@@ -1197,7 +1197,7 @@ mod tests {
         let user_content = "struct User { id: i32, username: String, password_hash: String }";
         let crypto_content = "fn hash_password(password: &str) -> String { /* implementation */ }";
         let readme_content = "# Test Project\nThis is a test project.";
-        
+
         index.add_file("src/auth/login.rs", login_content);
         index.add_file("src/auth/jwt.rs", jwt_content);
         index.add_file("src/models/user.rs", user_content);
