@@ -21,13 +21,7 @@ mod polling;
 mod repo_context;
 
 #[cfg(test)]
-mod file_indexer_search_test;
-#[cfg(test)]
-mod file_indexer_simple_test;
-#[cfg(test)]
-mod file_indexer_test;
-#[cfg(test)]
-mod polling_test;
+mod tests;
 
 #[tokio::main]
 async fn main() -> Result<()> {
