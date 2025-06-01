@@ -37,19 +37,15 @@ pub struct FileContentIndex {
     file_hashes: Arc<DashMap<String, u64>>,
     /// When the index was last updated
     last_updated: Arc<RwLock<Instant>>,
-    /// Project ID this index belongs to
-    #[allow(dead_code)]
-    project_id: i64,
 }
 
 impl FileContentIndex {
     /// Create a new empty file content index
-    pub fn new(project_id: i64) -> Self {
+    pub fn new(_project_id: i64) -> Self {
         Self {
             ngram_to_files: Arc::new(DashMap::new()),
             file_hashes: Arc::new(DashMap::new()),
             last_updated: Arc::new(RwLock::new(Instant::now())),
-            project_id,
         }
     }
 
@@ -118,7 +114,8 @@ impl FileContentIndex {
     }
 
     /// Remove a file from the index
-    #[allow(dead_code)]
+    /// This method is primarily used for testing and cleanup operations.
+    #[cfg(test)]
     pub fn remove_file(&self, file_path: &str) {
         // Remove file from file_hashes
         self.file_hashes.remove(file_path);
@@ -200,12 +197,6 @@ impl FileContentIndex {
     pub async fn mark_updated(&self) {
         let mut last_updated = self.last_updated.write().await;
         *last_updated = Instant::now();
-    }
-
-    /// Get the project ID this index belongs to
-    #[allow(dead_code)]
-    pub fn project_id(&self) -> i64 {
-        self.project_id
     }
 }
 

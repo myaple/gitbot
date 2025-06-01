@@ -112,8 +112,7 @@ mod tests {
         let index_manager = Arc::new(FileIndexManager::new(gitlab_client.clone(), 60));
 
         // Test getting or creating an index
-        let index = index_manager.get_or_create_index(1);
-        assert_eq!(index.project_id(), 1);
+        let _index = index_manager.get_or_create_index(1);
     }
 
     #[test]
