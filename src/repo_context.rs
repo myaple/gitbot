@@ -12,7 +12,7 @@ use tracing::{debug, info, warn};
 
 const MAX_SOURCE_FILES: usize = 250; // Maximum number of source files to include in context
 const AGENTS_MD_FILE: &str = "AGENTS.md";
-const CONTEXT_LINES: usize = 3; // Number of lines to include before and after keyword matches
+const CONTEXT_LINES: usize = 10; // Number of lines to include before and after keyword matches
 
 #[derive(Debug, Deserialize)]
 pub struct GitlabFile {
