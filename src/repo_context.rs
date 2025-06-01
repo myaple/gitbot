@@ -1210,6 +1210,13 @@ mod tests {
         // Update the last updated timestamp to make the index appear fresh
         index.mark_updated().await;
 
+        // Debug: Verify what's actually stored in the index for 'tok' ngram
+        if let Some(files_in_tok) = index.debug_get_files_for_ngram("tok") {
+            eprintln!("DEBUG: Files stored for 'tok' ngram after indexing: {:?}", files_in_tok);
+        } else {
+            eprintln!("DEBUG: No 'tok' ngram found in index");
+        }
+
         // Test the index directly to verify our setup
         let keywords = extractor.extract_keywords(&issue);
         println!("Keywords extracted from issue: {:?}", keywords);
@@ -1226,6 +1233,10 @@ mod tests {
         // Search with our test keywords to ensure the index is working
         let search_results = index.search(&test_keywords);
         println!("Search results with test keywords: {:?}", search_results);
+
+        // Debug: Try searching for just "token" to see if JWT file is found
+        let token_only_results = index.search(&["token".to_string()]);
+        println!("Search results for 'token' only: {:?}", token_only_results);
 
         // Verify that the index contains the expected files
         assert!(

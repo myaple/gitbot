@@ -2,7 +2,7 @@ use crate::gitlab::GitlabApiClient;
 use crate::models::GitlabProject;
 use crate::repo_context::GitlabFile;
 use anyhow::Result;
-use dashmap::DashMap;
+use scc::HashMap;
 use futures::stream::{self, StreamExt};
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -30,9 +30,9 @@ const INDEXABLE_EXTENSIONS: [&str; 22] = [
 #[derive(Debug, Clone)]
 pub struct FileContentIndex {
     /// Maps n-grams to file paths that contain them
-    ngram_to_files: Arc<DashMap<String, HashSet<String>>>,
+    ngram_to_files: Arc<HashMap<String, HashSet<String>>>,
     /// Maps file paths to their last indexed content hash
-    file_hashes: Arc<DashMap<String, u64>>,
+    file_hashes: Arc<HashMap<String, u64>>,
     /// When the index was last updated
     last_updated: Arc<RwLock<Instant>>,
     /// Project ID this index belongs to
@@ -44,8 +44,8 @@ impl FileContentIndex {
     /// Create a new empty file content index
     pub fn new(project_id: i64) -> Self {
         Self {
-            ngram_to_files: Arc::new(DashMap::new()),
-            file_hashes: Arc::new(DashMap::new()),
+            ngram_to_files: Arc::new(HashMap::new()),
+            file_hashes: Arc::new(HashMap::new()),
             last_updated: Arc::new(RwLock::new(Instant::now())),
             project_id,
         }
@@ -89,7 +89,9 @@ impl FileContentIndex {
 
     /// Add a file to the index
     pub fn add_file(&self, file_path: &str, content: &str) {
+        eprintln!("DEBUG: Adding file '{}' with content: '{}'", file_path, content);
         if !Self::should_index_file(file_path) {
+            eprintln!("DEBUG: Skipping file '{}' - not indexable", file_path);
             return;
         }
 
@@ -98,6 +100,7 @@ impl FileContentIndex {
         // Check if we've already indexed this file with the same content
         if let Some(existing_hash) = self.file_hashes.get(file_path) {
             if *existing_hash == content_hash {
+                eprintln!("DEBUG: Skipping file '{}' - content unchanged", file_path);
                 // Content hasn't changed, no need to reindex
                 return;
             }
@@ -105,17 +108,30 @@ impl FileContentIndex {
 
         // Generate n-grams from the file content
         let ngrams = Self::generate_ngrams(content);
+        eprintln!("DEBUG: Generated {} ngrams for file '{}': {:?}", ngrams.len(), file_path, ngrams);
 
         // Add each n-gram to the index
         for ngram in ngrams {
-            self.ngram_to_files
-                .entry(ngram)
-                .or_default()
-                .insert(file_path.to_string());
+            let file_path_string = file_path.to_string();
+            
+            // Get existing files for this ngram, or create new set
+            let mut files_for_ngram = if let Some(existing_files) = self.ngram_to_files.get(&ngram) {
+                existing_files.clone()
+            } else {
+                HashSet::new()
+            };
+            
+            // Add this file to the set
+            files_for_ngram.insert(file_path_string.clone());
+            
+            // Insert/update the ngram with the new file set
+            let _ = self.ngram_to_files.insert(ngram.clone(), files_for_ngram);
+            eprintln!("DEBUG: Added file '{}' to ngram '{}'", file_path, ngram);
         }
 
         // Update the file hash
-        self.file_hashes.insert(file_path.to_string(), content_hash);
+        let _ = self.file_hashes.insert(file_path.to_string(), content_hash);
+        eprintln!("DEBUG: Updated file hash for '{}'", file_path);
     }
 
     /// Remove a file from the index
@@ -124,17 +140,38 @@ impl FileContentIndex {
         // Remove file from file_hashes
         self.file_hashes.remove(file_path);
 
-        // Remove file from all n-gram entries
-        for mut entry in self.ngram_to_files.iter_mut() {
-            entry.value_mut().remove(file_path);
+        // First, collect all ngrams that contain this file
+        let mut ngrams_with_file = Vec::new();
+        self.ngram_to_files.scan(|key, value| {
+            if value.contains(file_path) {
+                ngrams_with_file.push(key.clone());
+            }
+        });
+        
+        // Then, update each ngram to remove the file
+        let mut empty_ngrams = Vec::new();
+        for ngram in ngrams_with_file {
+            if let Some(old_files) = self.ngram_to_files.get(&ngram) {
+                let mut new_files = old_files.clone();
+                new_files.remove(file_path);
+                
+                if new_files.is_empty() {
+                    empty_ngrams.push(ngram);
+                } else {
+                    let _ = self.ngram_to_files.insert(ngram, new_files);
+                }
+            }
         }
-
-        // Clean up empty n-gram entries
-        self.ngram_to_files.retain(|_, files| !files.is_empty());
+        
+        // Finally, remove empty ngram entries
+        for ngram in empty_ngrams {
+            self.ngram_to_files.remove(&ngram);
+        }
     }
 
     /// Search for files containing all the given keywords
     pub fn search(&self, keywords: &[String]) -> Vec<String> {
+        eprintln!("DEBUG: Starting search with keywords: {:?}", keywords);
         if keywords.is_empty() {
             return Vec::new();
         }
@@ -151,30 +188,41 @@ impl FileContentIndex {
         for (i, ngrams) in keyword_ngrams.iter().enumerate() {
             let mut files_for_keyword = HashSet::new();
             let keyword = &keywords[i].to_lowercase();
+            eprintln!("DEBUG: Processing keyword '{}' with {} ngrams", keyword, ngrams.len());
 
             // Special handling for short keywords (less than NGRAM_SIZE)
             if keyword.len() < NGRAM_SIZE {
                 // For short keywords, we need to check if any file contains this keyword
                 // by looking at all n-grams that might contain it
-                for item in self.ngram_to_files.iter() {
-                    let ngram = item.key();
+                let mut scan_count = 0;
+                self.ngram_to_files.scan(|ngram, files| {
+                    scan_count += 1;
                     if ngram.contains(keyword) {
-                        files_for_keyword.extend(item.value().iter().cloned());
+                        files_for_keyword.extend(files.iter().cloned());
                     }
-                }
+                });
+                // Debug: print scan count
+                eprintln!("DEBUG: Scanned {} entries for keyword '{}'", scan_count, keyword);
             } else {
                 // Normal case: look for exact n-gram matches
                 for ngram in ngrams {
+                    eprintln!("DEBUG: Looking for ngram '{}' for keyword '{}'", ngram, keyword);
                     if let Some(files) = self.ngram_to_files.get(ngram) {
+                        eprintln!("DEBUG: Found {} files for ngram '{}': {:?}", files.len(), ngram, files);
                         files_for_keyword.extend(files.iter().cloned());
+                    } else {
+                        eprintln!("DEBUG: No files found for ngram '{}'", ngram);
                     }
                 }
             }
 
+            eprintln!("DEBUG: Keyword '{}' matched {} files: {:?}", keyword, files_for_keyword.len(), files_for_keyword);
             if !files_for_keyword.is_empty() {
                 keyword_matches.push(files_for_keyword);
             }
         }
+
+        eprintln!("DEBUG: Found {} keyword matches", keyword_matches.len());
 
         // If no matches found for any keyword, return empty result
         if keyword_matches.is_empty() {
@@ -183,12 +231,17 @@ impl FileContentIndex {
 
         // Find files that match all keywords (intersection of all sets)
         let mut result = keyword_matches[0].clone();
+        eprintln!("DEBUG: Starting intersection with {} files", result.len());
         for files in &keyword_matches[1..] {
+            eprintln!("DEBUG: Intersecting with {} files", files.len());
             result = result.intersection(files).cloned().collect();
+            eprintln!("DEBUG: Intersection result: {} files", result.len());
         }
 
         // Convert to Vec without sorting (for test consistency)
-        result.into_iter().collect()
+        let final_result: Vec<String> = result.into_iter().collect();
+        eprintln!("DEBUG: Final result: {:?}", final_result);
+        final_result
     }
 
     /// Get the time since the index was last updated
@@ -208,12 +261,18 @@ impl FileContentIndex {
     pub fn project_id(&self) -> i64 {
         self.project_id
     }
+
+    /// Debug method to check what files are stored for a specific ngram
+    #[allow(dead_code)]
+    pub fn debug_get_files_for_ngram(&self, ngram: &str) -> Option<HashSet<String>> {
+        self.ngram_to_files.get(ngram).map(|files| files.clone())
+    }
 }
 
 /// Manages file content indexes for multiple projects
 pub struct FileIndexManager {
     /// Maps project IDs to their file content indexes
-    indexes: Arc<DashMap<i64, FileContentIndex>>,
+    indexes: Arc<HashMap<i64, FileContentIndex>>,
     /// GitLab API client for fetching file content
     gitlab_client: Arc<GitlabApiClient>,
     /// Refresh interval in seconds
@@ -224,7 +283,7 @@ impl FileIndexManager {
     /// Create a new file index manager
     pub fn new(gitlab_client: Arc<GitlabApiClient>, refresh_interval: u64) -> Self {
         Self {
-            indexes: Arc::new(DashMap::new()),
+            indexes: Arc::new(HashMap::new()),
             gitlab_client,
             refresh_interval,
         }
@@ -232,10 +291,23 @@ impl FileIndexManager {
 
     /// Get or create an index for a project
     pub fn get_or_create_index(&self, project_id: i64) -> FileContentIndex {
-        self.indexes
-            .entry(project_id)
-            .or_insert_with(|| FileContentIndex::new(project_id))
-            .clone()
+        // Try to get existing index
+        if let Some(existing_index) = self.indexes.get(&project_id) {
+            return existing_index.clone();
+        }
+        
+        // Create new index if it doesn't exist
+        let new_index = FileContentIndex::new(project_id);
+        let result = self.indexes.insert(project_id, new_index.clone());
+        
+        // If insert failed due to concurrent insertion, get the existing one
+        if result.is_err() {
+            if let Some(existing_index) = self.indexes.get(&project_id) {
+                return existing_index.clone();
+            }
+        }
+        
+        new_index
     }
 
     /// Build or refresh the index for a project
