@@ -114,7 +114,11 @@ impl FileContentIndex {
             let mut new_files = HashSet::new();
             new_files.insert(file_path_string.clone());
 
-            if let Err(_) = self.ngram_to_files.insert(ngram.clone(), new_files) {
+            if self
+                .ngram_to_files
+                .insert(ngram.clone(), new_files)
+                .is_err()
+            {
                 // Entry already exists, remove it to get the actual current value, then re-insert merged
                 if let Some((_, actual_existing_files)) = self.ngram_to_files.remove(&ngram) {
                     // Merge the actual existing files with the new file
