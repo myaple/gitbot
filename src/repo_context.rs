@@ -1859,7 +1859,10 @@ fn decode_jwt(token: &str) -> Result<Claims> {
         );
 
         // Should have significant reduction
-        assert!(extracted_size < original_size / 2, "Should reduce content by at least 50%");
+        assert!(
+            extracted_size < original_size / 2,
+            "Should reduce content by at least 50%"
+        );
         assert!(!matches.is_empty(), "Should find relevant sections");
     }
 }
