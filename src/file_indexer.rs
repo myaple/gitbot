@@ -385,5 +385,3 @@ impl FileIndexManager {
         Ok(files_with_content)
     }
 }
-
-

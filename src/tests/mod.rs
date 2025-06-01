@@ -1,5 +1,5 @@
 //! Test modules for GitBot
-//! 
+//!
 //! This module contains all tests that were previously embedded in source files.
 //! Tests are organized by the module they test.
 

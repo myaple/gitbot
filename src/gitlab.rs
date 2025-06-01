@@ -537,5 +537,3 @@ impl GitlabApiClient {
             .await
     }
 }
-
-

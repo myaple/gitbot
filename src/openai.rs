@@ -89,5 +89,3 @@ impl OpenAIApiClient {
         Ok(parsed_response)
     }
 }
-
-

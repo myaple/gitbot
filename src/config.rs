@@ -89,5 +89,3 @@ pub fn load_config() -> anyhow::Result<AppSettings> {
     let app_settings = AppSettings::parse();
     Ok(app_settings)
 }
-
-
