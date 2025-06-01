@@ -2,8 +2,8 @@ use crate::gitlab::GitlabApiClient;
 use crate::models::GitlabProject;
 use crate::repo_context::GitlabFile;
 use anyhow::Result;
-use scc::HashMap;
 use futures::stream::{self, StreamExt};
+use scc::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -89,9 +89,7 @@ impl FileContentIndex {
 
     /// Add a file to the index
     pub fn add_file(&self, file_path: &str, content: &str) {
-        eprintln!("DEBUG: Adding file '{}' with content: '{}'", file_path, content);
         if !Self::should_index_file(file_path) {
-            eprintln!("DEBUG: Skipping file '{}' - not indexable", file_path);
             return;
         }
 
@@ -100,7 +98,6 @@ impl FileContentIndex {
         // Check if we've already indexed this file with the same content
         if let Some(existing_hash) = self.file_hashes.get(file_path) {
             if *existing_hash == content_hash {
-                eprintln!("DEBUG: Skipping file '{}' - content unchanged", file_path);
                 // Content hasn't changed, no need to reindex
                 return;
             }
@@ -108,30 +105,44 @@ impl FileContentIndex {
 
         // Generate n-grams from the file content
         let ngrams = Self::generate_ngrams(content);
-        eprintln!("DEBUG: Generated {} ngrams for file '{}': {:?}", ngrams.len(), file_path, ngrams);
 
         // Add each n-gram to the index
         for ngram in ngrams {
             let file_path_string = file_path.to_string();
-            
-            // Get existing files for this ngram, or create new set
-            let mut files_for_ngram = if let Some(existing_files) = self.ngram_to_files.get(&ngram) {
-                existing_files.clone()
+
+            // First try to update existing entry
+            if self
+                .ngram_to_files
+                .update(&ngram, |_, existing_files| {
+                    let mut new_files = existing_files.clone();
+                    new_files.insert(file_path_string.clone());
+                    new_files
+                })
+                .is_some()
+            {
+                // Successfully updated existing entry
             } else {
-                HashSet::new()
-            };
-            
-            // Add this file to the set
-            files_for_ngram.insert(file_path_string.clone());
-            
-            // Insert/update the ngram with the new file set
-            let _ = self.ngram_to_files.insert(ngram.clone(), files_for_ngram);
-            eprintln!("DEBUG: Added file '{}' to ngram '{}'", file_path, ngram);
+                // Entry doesn't exist, create new one
+                let mut new_files = HashSet::new();
+                new_files.insert(file_path_string.clone());
+                match self.ngram_to_files.insert(ngram.clone(), new_files) {
+                    Ok(_) => {
+                        // Successfully inserted new entry
+                    }
+                    Err(_) => {
+                        // Insert failed, someone else created it, try update again
+                        let _ = self.ngram_to_files.update(&ngram, |_, existing_files| {
+                            let mut new_files = existing_files.clone();
+                            new_files.insert(file_path_string.clone());
+                            new_files
+                        });
+                    }
+                }
+            }
         }
 
         // Update the file hash
         let _ = self.file_hashes.insert(file_path.to_string(), content_hash);
-        eprintln!("DEBUG: Updated file hash for '{}'", file_path);
     }
 
     /// Remove a file from the index
@@ -147,14 +158,14 @@ impl FileContentIndex {
                 ngrams_with_file.push(key.clone());
             }
         });
-        
+
         // Then, update each ngram to remove the file
         let mut empty_ngrams = Vec::new();
         for ngram in ngrams_with_file {
             if let Some(old_files) = self.ngram_to_files.get(&ngram) {
                 let mut new_files = old_files.clone();
                 new_files.remove(file_path);
-                
+
                 if new_files.is_empty() {
                     empty_ngrams.push(ngram);
                 } else {
@@ -162,7 +173,7 @@ impl FileContentIndex {
                 }
             }
         }
-        
+
         // Finally, remove empty ngram entries
         for ngram in empty_ngrams {
             self.ngram_to_files.remove(&ngram);
@@ -171,7 +182,6 @@ impl FileContentIndex {
 
     /// Search for files containing all the given keywords
     pub fn search(&self, keywords: &[String]) -> Vec<String> {
-        eprintln!("DEBUG: Starting search with keywords: {:?}", keywords);
         if keywords.is_empty() {
             return Vec::new();
         }
@@ -188,41 +198,29 @@ impl FileContentIndex {
         for (i, ngrams) in keyword_ngrams.iter().enumerate() {
             let mut files_for_keyword = HashSet::new();
             let keyword = &keywords[i].to_lowercase();
-            eprintln!("DEBUG: Processing keyword '{}' with {} ngrams", keyword, ngrams.len());
 
             // Special handling for short keywords (less than NGRAM_SIZE)
             if keyword.len() < NGRAM_SIZE {
                 // For short keywords, we need to check if any file contains this keyword
                 // by looking at all n-grams that might contain it
-                let mut scan_count = 0;
                 self.ngram_to_files.scan(|ngram, files| {
-                    scan_count += 1;
                     if ngram.contains(keyword) {
                         files_for_keyword.extend(files.iter().cloned());
                     }
                 });
-                // Debug: print scan count
-                eprintln!("DEBUG: Scanned {} entries for keyword '{}'", scan_count, keyword);
             } else {
                 // Normal case: look for exact n-gram matches
                 for ngram in ngrams {
-                    eprintln!("DEBUG: Looking for ngram '{}' for keyword '{}'", ngram, keyword);
                     if let Some(files) = self.ngram_to_files.get(ngram) {
-                        eprintln!("DEBUG: Found {} files for ngram '{}': {:?}", files.len(), ngram, files);
                         files_for_keyword.extend(files.iter().cloned());
-                    } else {
-                        eprintln!("DEBUG: No files found for ngram '{}'", ngram);
                     }
                 }
             }
 
-            eprintln!("DEBUG: Keyword '{}' matched {} files: {:?}", keyword, files_for_keyword.len(), files_for_keyword);
             if !files_for_keyword.is_empty() {
                 keyword_matches.push(files_for_keyword);
             }
         }
-
-        eprintln!("DEBUG: Found {} keyword matches", keyword_matches.len());
 
         // If no matches found for any keyword, return empty result
         if keyword_matches.is_empty() {
@@ -231,17 +229,12 @@ impl FileContentIndex {
 
         // Find files that match all keywords (intersection of all sets)
         let mut result = keyword_matches[0].clone();
-        eprintln!("DEBUG: Starting intersection with {} files", result.len());
         for files in &keyword_matches[1..] {
-            eprintln!("DEBUG: Intersecting with {} files", files.len());
             result = result.intersection(files).cloned().collect();
-            eprintln!("DEBUG: Intersection result: {} files", result.len());
         }
 
         // Convert to Vec without sorting (for test consistency)
-        let final_result: Vec<String> = result.into_iter().collect();
-        eprintln!("DEBUG: Final result: {:?}", final_result);
-        final_result
+        result.into_iter().collect()
     }
 
     /// Get the time since the index was last updated
@@ -260,12 +253,6 @@ impl FileContentIndex {
     #[allow(dead_code)]
     pub fn project_id(&self) -> i64 {
         self.project_id
-    }
-
-    /// Debug method to check what files are stored for a specific ngram
-    #[allow(dead_code)]
-    pub fn debug_get_files_for_ngram(&self, ngram: &str) -> Option<HashSet<String>> {
-        self.ngram_to_files.get(ngram).map(|files| files.clone())
     }
 }
 
@@ -295,18 +282,18 @@ impl FileIndexManager {
         if let Some(existing_index) = self.indexes.get(&project_id) {
             return existing_index.clone();
         }
-        
+
         // Create new index if it doesn't exist
         let new_index = FileContentIndex::new(project_id);
         let result = self.indexes.insert(project_id, new_index.clone());
-        
+
         // If insert failed due to concurrent insertion, get the existing one
         if result.is_err() {
             if let Some(existing_index) = self.indexes.get(&project_id) {
                 return existing_index.clone();
             }
         }
-        
+
         new_index
     }
 
