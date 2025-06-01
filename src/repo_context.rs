@@ -16,7 +16,6 @@ const CONTEXT_LINES: usize = 10; // Number of lines to include before and after 
 
 #[derive(Debug, Deserialize)]
 pub struct GitlabFile {
-    // pub file_name: String, // Removed unused field
     pub file_path: String,
     pub size: usize,
     pub content: Option<String>,
@@ -35,7 +34,6 @@ pub struct FileContentMatch {
 
 #[derive(Debug, Deserialize)]
 pub struct GitlabDiff {
-    // pub old_path: String, // Removed unused field
     pub new_path: String,
     pub diff: String,
 }

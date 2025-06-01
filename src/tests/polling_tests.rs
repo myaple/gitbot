@@ -635,19 +635,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_max_age_hours_calculation() {
-        // Get current time and calculate a timestamp from 24 hours ago
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        let _old_timestamp = now - (24 * 3600); // 24 hours ago
-
-        // Calculate what the effective timestamp should be (12 hours ago)
-        let _expected_timestamp = now - (12 * 3600);
-    }
-
-    #[tokio::test]
     async fn test_get_issues_since_timestamp() {
         let server = mockito::Server::new_async().await;
         let base_url = server.url();

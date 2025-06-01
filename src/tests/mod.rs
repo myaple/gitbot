@@ -12,8 +12,6 @@ pub mod file_indexer_simple_test;
 #[cfg(test)]
 pub mod file_indexer_test;
 #[cfg(test)]
-pub mod file_indexer_tests;
-#[cfg(test)]
 pub mod gitlab_tests;
 #[cfg(test)]
 pub mod handlers_tests;

@@ -3,7 +3,6 @@ mod tests {
     use crate::file_indexer::{FileContentIndex, FileIndexManager};
     use crate::gitlab::GitlabApiClient;
     use crate::models::GitlabProject;
-    // use crate::repo_context::GitlabFile;
     use std::sync::Arc;
 
     #[test]
@@ -115,5 +114,19 @@ mod tests {
         // Test getting or creating an index
         let index = index_manager.get_or_create_index(1);
         assert_eq!(index.project_id(), 1);
+    }
+
+    #[test]
+    fn test_content_hash() {
+        let content1 = "fn main() { println!(\"Hello, world!\"); }";
+        let content2 = "fn main() { println!(\"Hello, world!\"); }";
+        let content3 = "fn main() { println!(\"Hello, Rust!\"); }";
+
+        let hash1 = FileContentIndex::calculate_content_hash(content1);
+        let hash2 = FileContentIndex::calculate_content_hash(content2);
+        let hash3 = FileContentIndex::calculate_content_hash(content3);
+
+        assert_eq!(hash1, hash2);
+        assert_ne!(hash1, hash3);
     }
 }
