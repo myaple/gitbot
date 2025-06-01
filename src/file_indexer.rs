@@ -1,15 +1,17 @@
-use crate::gitlab::GitlabApiClient;
-use crate::models::GitlabProject;
-use crate::repo_context::GitlabFile;
 use anyhow::Result;
 use dashmap::DashMap;
 use futures::stream::{self, StreamExt};
-use std::collections::HashSet;
+use std::collections::{hash_map::DefaultHasher, HashSet};
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tokio::time::interval;
 use tracing::{debug, error, info, warn};
+
+use crate::gitlab::GitlabApiClient;
+use crate::models::GitlabProject;
+use crate::repo_context::GitlabFile;
 
 /// The size of n-grams to use for indexing
 const NGRAM_SIZE: usize = 3;
@@ -79,9 +81,6 @@ impl FileContentIndex {
 
     /// Calculate a simple hash of file content for change detection
     pub fn calculate_content_hash(content: &str) -> u64 {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-
         let mut hasher = DefaultHasher::new();
         content.hash(&mut hasher);
         hasher.finish()

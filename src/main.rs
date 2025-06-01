@@ -1,18 +1,17 @@
-use crate::config::load_config;
-use crate::file_indexer::FileIndexManager;
-use crate::gitlab::GitlabApiClient;
-// use crate::models::GitlabProject;
-use crate::polling::PollingService;
-use crate::repo_context::RepoContextExtractor;
 use anyhow::{Context, Result};
 use std::sync::Arc;
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
+use crate::config::load_config;
+use crate::file_indexer::FileIndexManager;
+use crate::gitlab::GitlabApiClient;
+use crate::polling::PollingService;
+use crate::repo_context::RepoContextExtractor;
+
 mod config;
 mod file_indexer;
 mod gitlab;
-mod gitlab_ext;
 mod handlers;
 mod mention_cache;
 mod models;

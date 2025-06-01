@@ -1,8 +1,3 @@
-use crate::config::AppSettings;
-use crate::models::{
-    GitlabCommit, GitlabIssue, GitlabMergeRequest, GitlabNoteAttributes, GitlabProject,
-};
-use crate::repo_context::{GitlabDiff, GitlabFile};
 use chrono::{DateTime, TimeZone, Utc};
 use reqwest::{header, Client, Method, StatusCode};
 use serde::de::DeserializeOwned;
@@ -13,6 +8,12 @@ use thiserror::Error;
 use tracing::{debug, error, instrument};
 use url::Url;
 use urlencoding::encode;
+
+use crate::config::AppSettings;
+use crate::models::{
+    GitlabCommit, GitlabIssue, GitlabMergeRequest, GitlabNoteAttributes, GitlabProject,
+};
+use crate::repo_context::{GitlabDiff, GitlabFile};
 
 #[derive(Error, Debug)]
 pub enum GitlabError {
