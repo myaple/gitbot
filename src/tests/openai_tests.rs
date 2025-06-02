@@ -23,6 +23,9 @@ fn create_test_settings(base_url: String) -> AppSettings {
         context_repo_path: None,
         max_context_size: 60000,
         default_branch: "main".to_string(),
+        client_cert_path: None,
+        client_key_path: None,
+        client_key_password: None,
     }
 }
 
@@ -350,4 +353,80 @@ async fn test_send_chat_completion_empty_choices() {
     //     OpenAIClient::NoChoicesReturned => {} // Expected
     //     e => panic!("Expected NoChoicesReturned, got {:?}", e),
     // }
+}
+
+#[tokio::test]
+async fn test_new_openai_api_client_with_client_cert_config() {
+    // Test that client can be created when client certificate paths are provided
+    // but files don't exist (should not fail creation, only when making actual requests)
+    let settings = AppSettings {
+        openai_custom_url: "https://api.openai.com/v1".to_string(),
+        openai_api_key: "test_api_key".to_string(),
+        openai_model: "gpt-3.5-turbo".to_string(),
+        openai_temperature: 0.7,
+        openai_max_tokens: 1024,
+        gitlab_url: "https://gitlab.example.com".to_string(),
+        gitlab_token: "gitlab_token".to_string(),
+        repos_to_poll: vec!["org/repo1".to_string()],
+        log_level: "debug".to_string(),
+        bot_username: "openai_bot".to_string(),
+        poll_interval_seconds: 60,
+        stale_issue_days: 30,
+        max_age_hours: 24,
+        context_repo_path: None,
+        max_context_size: 60000,
+        default_branch: "main".to_string(),
+        client_cert_path: Some("/nonexistent/cert.pem".to_string()),
+        client_key_path: Some("/nonexistent/key.pem".to_string()),
+        client_key_password: Some("test_password".to_string()),
+    };
+
+    // This should fail because the certificate files don't exist
+    let result = OpenAIApiClient::new(&settings);
+    assert!(
+        result.is_err(),
+        "Expected error when certificate files don't exist"
+    );
+
+    // Check that it's an I/O error (file not found)
+    match result.err().unwrap() {
+        OpenAIClient::Io(_) => {
+            // Expected - certificate files don't exist
+        }
+        e => panic!("Expected Io error, got {:?}", e),
+    }
+}
+
+#[tokio::test]
+async fn test_new_openai_api_client_without_client_cert() {
+    // Test that client creation works without client certificates
+    let settings = AppSettings {
+        openai_custom_url: "https://api.openai.com/v1".to_string(),
+        openai_api_key: "test_api_key".to_string(),
+        openai_model: "gpt-3.5-turbo".to_string(),
+        openai_temperature: 0.7,
+        openai_max_tokens: 1024,
+        gitlab_url: "https://gitlab.example.com".to_string(),
+        gitlab_token: "gitlab_token".to_string(),
+        repos_to_poll: vec!["org/repo1".to_string()],
+        log_level: "debug".to_string(),
+        bot_username: "openai_bot".to_string(),
+        poll_interval_seconds: 60,
+        stale_issue_days: 30,
+        max_age_hours: 24,
+        context_repo_path: None,
+        max_context_size: 60000,
+        default_branch: "main".to_string(),
+        client_cert_path: None,
+        client_key_path: None,
+        client_key_password: None,
+    };
+
+    // This should succeed - no client certificates required
+    let result = OpenAIApiClient::new(&settings);
+    assert!(
+        result.is_ok(),
+        "Expected success when no client cert configured: {:?}",
+        result.err()
+    );
 }

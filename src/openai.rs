@@ -1,4 +1,5 @@
-use reqwest::{header, Client, StatusCode};
+use reqwest::{header, Client, Identity, StatusCode};
+use std::fs;
 use thiserror::Error;
 use tracing::{debug, error, instrument};
 use url::Url;
@@ -16,6 +17,8 @@ pub enum OpenAIClient {
     UrlParse(#[from] url::ParseError),
     #[error("Failed to deserialize response: {0}")]
     Deserialization(reqwest::Error),
+    #[error("File I/O error: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 #[derive(Debug)]
@@ -30,7 +33,47 @@ pub const OPENAI_CHAT_COMPLETIONS_PATH: &str = "chat/completions";
 impl OpenAIApiClient {
     pub fn new(settings: &AppSettings) -> Result<Self, OpenAIClient> {
         let openai_custom_url = Url::parse(&settings.openai_custom_url)?;
-        let client = Client::new();
+
+        // Build the client with optional client certificate
+        let mut client_builder = Client::builder();
+
+        // Add client certificate if both cert and key paths are provided
+        if let (Some(cert_path), Some(key_path)) =
+            (&settings.client_cert_path, &settings.client_key_path)
+        {
+            debug!("Loading client certificate from: {}", cert_path);
+            debug!("Loading client private key from: {}", key_path);
+
+            // Read certificate file
+            let cert_data = fs::read(cert_path)?;
+
+            // Read private key file
+            let key_data = fs::read(key_path)?;
+
+            // Create identity based on available data
+            let identity = if cert_path.ends_with(".p12") || cert_path.ends_with(".pfx") {
+                // PKCS#12 format - requires password
+                let password = settings.client_key_password.as_deref().unwrap_or("");
+                Identity::from_pkcs12_der(&cert_data, password)
+            } else {
+                // Try PEM format with separate cert and key files
+                Identity::from_pkcs8_pem(&cert_data, &key_data)
+            };
+
+            match identity {
+                Ok(id) => {
+                    debug!("Successfully loaded client certificate");
+                    client_builder = client_builder.identity(id);
+                }
+                Err(e) => {
+                    error!("Failed to load client certificate: {}", e);
+                    return Err(OpenAIClient::Request(e));
+                }
+            }
+        }
+
+        let client = client_builder.build().map_err(OpenAIClient::Request)?;
+
         Ok(Self {
             client,
             openai_custom_url,
