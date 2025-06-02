@@ -1,14 +1,14 @@
-use crate::config::AppSettings;
-use crate::file_indexer::FileIndexManager;
-use crate::gitlab::GitlabApiClient;
-use crate::gitlab::GitlabError;
-use crate::models::{GitlabIssue, GitlabMergeRequest, GitlabProject};
-
 use anyhow::Result;
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
+
+use crate::config::AppSettings;
+use crate::file_indexer::FileIndexManager;
+use crate::gitlab::GitlabApiClient;
+use crate::gitlab::GitlabError;
+use crate::models::{GitlabIssue, GitlabMergeRequest, GitlabProject};
 
 pub(crate) const MAX_SOURCE_FILES: usize = 250; // Maximum number of source files to include in context
 pub(crate) const AGENTS_MD_FILE: &str = "AGENTS.md";
@@ -16,7 +16,6 @@ const CONTEXT_LINES: usize = 10; // Number of lines to include before and after 
 
 #[derive(Debug, Deserialize)]
 pub struct GitlabFile {
-    // pub file_name: String, // Removed unused field
     pub file_path: String,
     pub size: usize,
     pub content: Option<String>,
@@ -35,7 +34,6 @@ pub struct FileContentMatch {
 
 #[derive(Debug, Deserialize)]
 pub struct GitlabDiff {
-    // pub old_path: String, // Removed unused field
     pub new_path: String,
     pub diff: String,
 }

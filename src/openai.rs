@@ -1,9 +1,10 @@
-use crate::config::AppSettings;
-use crate::models::{OpenAIChatRequest, OpenAIChatResponse};
 use reqwest::{header, Client, StatusCode};
 use thiserror::Error;
 use tracing::{debug, error, instrument};
 use url::Url;
+
+use crate::config::AppSettings;
+use crate::models::{OpenAIChatRequest, OpenAIChatResponse};
 
 #[derive(Error, Debug)]
 pub enum OpenAIClient {

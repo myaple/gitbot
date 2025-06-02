@@ -1,15 +1,15 @@
-use crate::config::AppSettings;
-use crate::file_indexer::FileIndexManager;
-use crate::gitlab::{GitlabApiClient, GitlabError};
-use crate::mention_cache::MentionCache; // Added
-use crate::models::{GitlabNoteEvent, OpenAIChatMessage, OpenAIChatRequest};
-use crate::openai::OpenAIApiClient;
-use crate::repo_context::RepoContextExtractor;
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
 use std::sync::Arc;
-// Removed std::collections::HashSet and tokio::sync::Mutex
 use tracing::{debug, error, info, trace, warn};
+
+use crate::config::AppSettings;
+use crate::file_indexer::FileIndexManager;
+use crate::gitlab::{GitlabApiClient, GitlabError};
+use crate::mention_cache::MentionCache;
+use crate::models::{GitlabNoteEvent, OpenAIChatMessage, OpenAIChatRequest};
+use crate::openai::OpenAIApiClient;
+use crate::repo_context::RepoContextExtractor;
 
 // Helper function to extract context after bot mention
 pub(crate) fn extract_context_after_mention(note: &str, bot_name: &str) -> Option<String> {

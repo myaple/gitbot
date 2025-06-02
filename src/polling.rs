@@ -1,3 +1,11 @@
+use anyhow::Result;
+use chrono::{DateTime, Duration as ChronoDuration, Utc};
+use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tokio::sync::Mutex;
+use tokio::time;
+use tracing::{debug, error, info, warn};
+
 use crate::config::AppSettings;
 use crate::file_indexer::FileIndexManager;
 use crate::gitlab::GitlabApiClient;
@@ -7,13 +15,6 @@ use crate::models::{
     GitlabIssue, GitlabMergeRequest, GitlabNoteAttributes, GitlabNoteEvent, GitlabNoteObject,
     GitlabProject, GitlabUser,
 };
-use anyhow::Result;
-use chrono::{DateTime, Duration as ChronoDuration, Utc};
-use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::sync::Mutex;
-use tokio::time;
-use tracing::{debug, error, info, warn};
 
 #[derive(Clone)]
 pub struct PollingService {

@@ -8,17 +8,16 @@ GitBot is a Rust-based GitLab bot that provides Copilot-like LLM assistance for 
 
 ### Core Application Files
 
-- **`src/main.rs`** - Entry point that sets up logging, loads configuration, and starts the polling service
-- **`src/config.rs`** - Configuration management using clap for CLI arguments and environment variables
-- **`src/gitlab.rs`** - GitLab API client implementation with methods for issues, merge requests, notes, and repository operations (~1200 lines)
-- **`src/handlers.rs`** - Event handlers for processing mentions in issues and merge requests, integrating with OpenAI API (~1400 lines)
-- **`src/polling.rs`** - Polling service that monitors GitLab repositories for new activity and stale issues (~1200 lines)
-- **`src/repo_context.rs`** - Repository context extraction that gathers relevant code and documentation for AI prompts (~1300 lines)
-- **`src/openai.rs`** - OpenAI API client for LLM interactions and chat completions (~450 lines)
-- **`src/models.rs`** - Data structures and serialization models for GitLab API responses (~150 lines)
+- **`src/main.rs`** - Entry point that sets up logging, loads configuration, and starts the polling service (~119 lines)
+- **`src/config.rs`** - Configuration management using clap for CLI arguments and environment variables (~91 lines)
+- **`src/gitlab.rs`** - GitLab API client implementation with methods for issues, merge requests, notes, and repository operations (~540 lines)
+- **`src/handlers.rs`** - Event handlers for processing mentions in issues and merge requests, integrating with OpenAI API (~1053 lines)
+- **`src/polling.rs`** - Polling service that monitors GitLab repositories for new activity and stale issues (~497 lines)
+- **`src/repo_context.rs`** - Repository context extraction that gathers relevant code and documentation for AI prompts (~925 lines)
+- **`src/file_indexer.rs`** - File content indexing system for efficient repository search (~386 lines)
+- **`src/openai.rs`** - OpenAI API client for LLM interactions and chat completions (~92 lines)
+- **`src/models.rs`** - Data structures and serialization models for GitLab API responses (~148 lines)
 - **`src/mention_cache.rs`** - Simple cache for preventing duplicate responses to the same mentions (~26 lines)
-- **`src/gitlab_ext.rs`** - Legacy file containing mostly tests, methods moved to `gitlab.rs` (~200 lines)
-- **`src/polling_test.rs`** - Additional polling service tests (~48 lines)
 
 ### Configuration and Documentation
 
@@ -37,7 +36,7 @@ cargo build --release    # Release build
 
 ### Testing
 ```bash
-cargo test               # Run all tests (currently 54 tests)
+cargo test               # Run all tests (currently 64 tests)
 ```
 
 ### Code Quality

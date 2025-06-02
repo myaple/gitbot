@@ -1,15 +1,17 @@
-use crate::gitlab::GitlabApiClient;
-use crate::models::GitlabProject;
-use crate::repo_context::GitlabFile;
 use anyhow::Result;
 use dashmap::DashMap;
 use futures::stream::{self, StreamExt};
-use std::collections::HashSet;
+use std::collections::{hash_map::DefaultHasher, HashSet};
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tokio::time::interval;
 use tracing::{debug, error, info, warn};
+
+use crate::gitlab::GitlabApiClient;
+use crate::models::GitlabProject;
+use crate::repo_context::GitlabFile;
 
 /// The size of n-grams to use for indexing
 const NGRAM_SIZE: usize = 3;
@@ -35,19 +37,15 @@ pub struct FileContentIndex {
     file_hashes: Arc<DashMap<String, u64>>,
     /// When the index was last updated
     last_updated: Arc<RwLock<Instant>>,
-    /// Project ID this index belongs to
-    #[allow(dead_code)]
-    project_id: i64,
 }
 
 impl FileContentIndex {
     /// Create a new empty file content index
-    pub fn new(project_id: i64) -> Self {
+    pub fn new(_project_id: i64) -> Self {
         Self {
             ngram_to_files: Arc::new(DashMap::new()),
             file_hashes: Arc::new(DashMap::new()),
             last_updated: Arc::new(RwLock::new(Instant::now())),
-            project_id,
         }
     }
 
@@ -79,9 +77,6 @@ impl FileContentIndex {
 
     /// Calculate a simple hash of file content for change detection
     pub fn calculate_content_hash(content: &str) -> u64 {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-
         let mut hasher = DefaultHasher::new();
         content.hash(&mut hasher);
         hasher.finish()
@@ -119,7 +114,8 @@ impl FileContentIndex {
     }
 
     /// Remove a file from the index
-    #[allow(dead_code)]
+    /// This method is primarily used for testing and cleanup operations.
+    #[cfg(test)]
     pub fn remove_file(&self, file_path: &str) {
         // Remove file from file_hashes
         self.file_hashes.remove(file_path);
@@ -201,12 +197,6 @@ impl FileContentIndex {
     pub async fn mark_updated(&self) {
         let mut last_updated = self.last_updated.write().await;
         *last_updated = Instant::now();
-    }
-
-    /// Get the project ID this index belongs to
-    #[allow(dead_code)]
-    pub fn project_id(&self) -> i64 {
-        self.project_id
     }
 }
 
