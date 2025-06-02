@@ -1,5 +1,6 @@
 use clap::Parser;
 use std::fmt::Debug;
+use std::env;
 
 #[derive(Debug, Clone, Parser)]
 #[command(
@@ -75,6 +76,19 @@ pub struct AppSettings {
     /// Default branch name to use for repository operations (default: main)
     #[arg(long, env = "GITBOT_DEFAULT_BRANCH", default_value = "main")]
     pub default_branch: String,
+
+    /// Path to client certificate file for OpenAI API authentication
+    #[arg(long, env = "GITBOT_CLIENT_CERT_PATH")]
+    pub client_cert_path: Option<String>,
+
+    /// Path to client private key file for OpenAI API authentication
+    #[arg(long, env = "GITBOT_CLIENT_KEY_PATH")]
+    pub client_key_path: Option<String>,
+
+    /// Password for client private key (environment variable only)
+    /// This field is populated from GITBOT_CLIENT_KEY_PASSWORD environment variable
+    /// No CLI argument is provided for security reasons
+    pub client_key_password: Option<String>,
 }
 
 // fn parse_repos_list(s: &str) -> Result<Vec<String>, String> {
@@ -86,6 +100,10 @@ pub struct AppSettings {
 
 pub fn load_config() -> anyhow::Result<AppSettings> {
     // Parse command line arguments and environment variables
-    let app_settings = AppSettings::parse();
+    let mut app_settings = AppSettings::parse();
+    
+    // Load client key password from environment variable only (no CLI argument for security)
+    app_settings.client_key_password = env::var("GITBOT_CLIENT_KEY_PASSWORD").ok();
+    
     Ok(app_settings)
 }

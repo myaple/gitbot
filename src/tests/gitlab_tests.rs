@@ -24,6 +24,9 @@ fn create_test_settings(base_url: String) -> AppSettings {
         max_age_hours: 24,
         context_repo_path: None,
         max_context_size: 60000,
+        client_cert_path: None,
+        client_key_path: None,
+        client_key_password: None,
     }
 }
 

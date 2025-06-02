@@ -30,6 +30,9 @@ fn test_create_app_settings() {
         context_repo_path: Some("org/context-repo".to_string()),
         max_context_size: 60000,
         default_branch: "main".to_string(),
+        client_cert_path: None,
+        client_key_path: None,
+        client_key_password: None,
     };
 
     assert_eq!(settings.gitlab_url, "https://gitlab.example.com");
@@ -49,4 +52,37 @@ fn test_create_app_settings() {
         settings.context_repo_path,
         Some("org/context-repo".to_string())
     );
+    assert_eq!(settings.client_cert_path, None);
+    assert_eq!(settings.client_key_path, None);
+    assert_eq!(settings.client_key_password, None);
+}
+
+#[test]
+fn test_client_certificate_config_with_env_vars() {
+    // Test with client certificate configuration
+    let settings = AppSettings {
+        gitlab_url: "https://gitlab.example.com".to_string(),
+        gitlab_token: "test_gitlab_token".to_string(),
+        openai_api_key: "test_openai_key".to_string(),
+        openai_custom_url: "https://api.openai.com/v1".to_string(),
+        openai_model: "gpt-3.5-turbo".to_string(),
+        openai_temperature: 0.7,
+        openai_max_tokens: 1024,
+        repos_to_poll: vec!["org/repo1".to_string()],
+        log_level: "debug".to_string(),
+        bot_username: "test_bot".to_string(),
+        poll_interval_seconds: 300,
+        stale_issue_days: 30,
+        max_age_hours: 24,
+        context_repo_path: None,
+        max_context_size: 60000,
+        default_branch: "main".to_string(),
+        client_cert_path: Some("/path/to/cert.pem".to_string()),
+        client_key_path: Some("/path/to/key.pem".to_string()),
+        client_key_password: Some("password123".to_string()),
+    };
+
+    assert_eq!(settings.client_cert_path, Some("/path/to/cert.pem".to_string()));
+    assert_eq!(settings.client_key_path, Some("/path/to/key.pem".to_string()));
+    assert_eq!(settings.client_key_password, Some("password123".to_string()));
 }

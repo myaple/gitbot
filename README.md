@@ -104,6 +104,9 @@ GitBot supports extensive configuration through command line arguments or enviro
 | `GITBOT_CONTEXT_REPO_PATH` | `--context-repo-path` | - | Additional repository for context |
 | `GITBOT_MAX_CONTEXT_SIZE` | `--max-context-size` | `60000` | Maximum context characters |
 | `GITBOT_DEFAULT_BRANCH` | `--default-branch` | `main` | Default branch name |
+| `GITBOT_CLIENT_CERT_PATH` | `--client-cert-path` | - | Path to client certificate file for OpenAI API |
+| `GITBOT_CLIENT_KEY_PATH` | `--client-key-path` | - | Path to client private key file for OpenAI API |
+| `GITBOT_CLIENT_KEY_PASSWORD` | *env only* | - | Password for client private key (environment variable only) |
 
 </details>
 
@@ -121,6 +124,22 @@ GitBot supports extensive configuration through command line arguments or enviro
 @gitbot What files are relevant to this feature request?
 @gitbot Summarize the recent changes in this merge request
 ```
+
+### Client Certificate Authentication
+
+GitBot supports client certificate authentication for OpenAI-compatible endpoints that require mTLS (mutual TLS) authentication:
+
+```bash
+export GITBOT_CLIENT_CERT_PATH=/path/to/client.crt
+export GITBOT_CLIENT_KEY_PATH=/path/to/client.key
+export GITBOT_CLIENT_KEY_PASSWORD=your_key_password  # Optional, for encrypted keys
+```
+
+**Supported certificate formats:**
+- **PKCS#12** (`.p12`, `.pfx`): Combined certificate and key file with password protection
+- **PEM**: Separate certificate (`.crt`, `.pem`) and private key (`.key`) files
+
+**Note:** The `GITBOT_CLIENT_KEY_PASSWORD` environment variable is only available as an environment variable for security reasons (no CLI argument).
 
 ## 🛠️ Development
 
