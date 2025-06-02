@@ -383,8 +383,11 @@ async fn test_new_openai_api_client_with_client_cert_config() {
 
     // This should fail because the certificate files don't exist
     let result = OpenAIApiClient::new(&settings);
-    assert!(result.is_err(), "Expected error when certificate files don't exist");
-    
+    assert!(
+        result.is_err(),
+        "Expected error when certificate files don't exist"
+    );
+
     // Check that it's an I/O error (file not found)
     match result.err().unwrap() {
         OpenAIClient::Io(_) => {
@@ -421,5 +424,9 @@ async fn test_new_openai_api_client_without_client_cert() {
 
     // This should succeed - no client certificates required
     let result = OpenAIApiClient::new(&settings);
-    assert!(result.is_ok(), "Expected success when no client cert configured: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Expected success when no client cert configured: {:?}",
+        result.err()
+    );
 }

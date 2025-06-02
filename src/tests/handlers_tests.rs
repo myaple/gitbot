@@ -37,9 +37,9 @@ mod tests {
             bot_username: TEST_BOT_USERNAME.to_string(),
             poll_interval_seconds: 60,
             default_branch: "main".to_string(),
-        client_cert_path: None,
-        client_key_path: None,
-        client_key_password: None,
+            client_cert_path: None,
+            client_key_path: None,
+            client_key_password: None,
             stale_issue_days: 30,
             max_age_hours: 24,
             context_repo_path: None,
@@ -217,9 +217,9 @@ mod tests {
             context_repo_path: None,
             max_context_size: 60000,
             default_branch: "main".to_string(),
-        client_cert_path: None,
-        client_key_path: None,
-        client_key_password: None,
+            client_cert_path: None,
+            client_key_path: None,
+            client_key_password: None,
         });
 
         // Create a mock GitLab client
@@ -242,9 +242,9 @@ mod tests {
             context_repo_path: None,
             max_context_size: 60000,
             default_branch: "main".to_string(),
-        client_cert_path: None,
-        client_key_path: None,
-        client_key_password: None,
+            client_cert_path: None,
+            client_key_path: None,
+            client_key_password: None,
         };
         let gitlab_client = Arc::new(GitlabApiClient::new(Arc::new(settings.clone())).unwrap());
 
@@ -286,9 +286,9 @@ mod tests {
             context_repo_path: None,
             max_context_size: 60000,
             default_branch: "main".to_string(),
-        client_cert_path: None,
-        client_key_path: None,
-        client_key_password: None,
+            client_cert_path: None,
+            client_key_path: None,
+            client_key_password: None,
         });
 
         // Create a cache for the test
@@ -314,9 +314,9 @@ mod tests {
             context_repo_path: None,
             max_context_size: 60000,
             default_branch: "main".to_string(),
-        client_cert_path: None,
-        client_key_path: None,
-        client_key_password: None,
+            client_cert_path: None,
+            client_key_path: None,
+            client_key_password: None,
         };
         let gitlab_client = Arc::new(GitlabApiClient::new(Arc::new(settings.clone())).unwrap());
         let file_index_manager = Arc::new(FileIndexManager::new(gitlab_client.clone(), 3600));

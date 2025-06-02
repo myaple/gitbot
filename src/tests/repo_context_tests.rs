@@ -47,9 +47,9 @@ mod tests {
             context_repo_path: None,
             max_context_size: 60000,
             default_branch: "main".to_string(),
-        client_cert_path: None,
-        client_key_path: None,
-        client_key_password: None,
+            client_cert_path: None,
+            client_key_path: None,
+            client_key_password: None,
         };
 
         let settings_arc = Arc::new(settings.clone());
@@ -100,9 +100,9 @@ mod tests {
             context_repo_path: None,
             max_context_size: 60000,
             default_branch: "main".to_string(),
-        client_cert_path: None,
-        client_key_path: None,
-        client_key_password: None,
+            client_cert_path: None,
+            client_key_path: None,
+            client_key_password: None,
         };
 
         let settings_arc = Arc::new(settings.clone());
@@ -167,9 +167,9 @@ mod tests {
             bot_username: "test_bot".to_string(),
             poll_interval_seconds: 60,
             default_branch: "main".to_string(),
-        client_cert_path: None,
-        client_key_path: None,
-        client_key_password: None,
+            client_cert_path: None,
+            client_key_path: None,
+            client_key_password: None,
             stale_issue_days: 30,
             max_age_hours: 24,
             context_repo_path: context_repo,
@@ -807,9 +807,9 @@ mod tests {
             context_repo_path: None,
             max_context_size: 60000,
             default_branch: "main".to_string(),
-        client_cert_path: None,
-        client_key_path: None,
-        client_key_password: None,
+            client_cert_path: None,
+            client_key_path: None,
+            client_key_password: None,
         };
 
         let settings_arc = Arc::new(settings.clone());
@@ -912,9 +912,9 @@ fn decode_jwt(token: &str) -> Result<Claims> {
             context_repo_path: None,
             max_context_size: 60000,
             default_branch: "main".to_string(),
-        client_cert_path: None,
-        client_key_path: None,
-        client_key_password: None,
+            client_cert_path: None,
+            client_key_path: None,
+            client_key_password: None,
         };
 
         let settings_arc = Arc::new(settings.clone());

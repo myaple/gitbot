@@ -82,7 +82,16 @@ fn test_client_certificate_config_with_env_vars() {
         client_key_password: Some("password123".to_string()),
     };
 
-    assert_eq!(settings.client_cert_path, Some("/path/to/cert.pem".to_string()));
-    assert_eq!(settings.client_key_path, Some("/path/to/key.pem".to_string()));
-    assert_eq!(settings.client_key_password, Some("password123".to_string()));
+    assert_eq!(
+        settings.client_cert_path,
+        Some("/path/to/cert.pem".to_string())
+    );
+    assert_eq!(
+        settings.client_key_path,
+        Some("/path/to/key.pem".to_string())
+    );
+    assert_eq!(
+        settings.client_key_password,
+        Some("password123".to_string())
+    );
 }

@@ -1,6 +1,6 @@
 use clap::Parser;
-use std::fmt::Debug;
 use std::env;
+use std::fmt::Debug;
 
 #[derive(Debug, Clone, Parser)]
 #[command(
@@ -101,9 +101,9 @@ pub struct AppSettings {
 pub fn load_config() -> anyhow::Result<AppSettings> {
     // Parse command line arguments and environment variables
     let mut app_settings = AppSettings::parse();
-    
+
     // Load client key password from environment variable only (no CLI argument for security)
     app_settings.client_key_password = env::var("GITBOT_CLIENT_KEY_PASSWORD").ok();
-    
+
     Ok(app_settings)
 }
