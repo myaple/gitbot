@@ -222,7 +222,10 @@ impl PollingService {
                 let project = project.clone();
                 async move {
                     // Get notes for this issue
-                    match gitlab_client.get_issue_notes(project_id, issue.iid, since_timestamp).await {
+                    match gitlab_client
+                        .get_issue_notes(project_id, issue.iid, since_timestamp)
+                        .await
+                    {
                         Ok(notes) => {
                             for note in notes {
                                 // Skip notes by the bot itself
@@ -231,14 +234,18 @@ impl PollingService {
                                 }
 
                                 // Check if note mentions the bot
-                                if note
-                                    .note
-                                    .contains(&format!("@{}", config.bot_username))
-                                {
-                                    info!("Found mention in issue #{} note #{}", issue.iid, note.id);
+                                if note.note.contains(&format!("@{}", config.bot_username)) {
+                                    info!(
+                                        "Found mention in issue #{} note #{}",
+                                        issue.iid, note.id
+                                    );
 
                                     // Create a GitlabNoteEvent from the note
-                                    let event = Self::create_issue_note_event_static(project.clone(), note, issue.clone());
+                                    let event = Self::create_issue_note_event_static(
+                                        project.clone(),
+                                        note,
+                                        issue.clone(),
+                                    );
 
                                     // Process the mention
                                     if let Err(e) = process_mention(
@@ -292,7 +299,10 @@ impl PollingService {
                 let project = project.clone();
                 async move {
                     // Get notes for this merge request
-                    match gitlab_client.get_merge_request_notes(project_id, mr.iid, since_timestamp).await {
+                    match gitlab_client
+                        .get_merge_request_notes(project_id, mr.iid, since_timestamp)
+                        .await
+                    {
                         Ok(notes) => {
                             for note in notes {
                                 // Skip notes by the bot itself
@@ -301,14 +311,15 @@ impl PollingService {
                                 }
 
                                 // Check if note mentions the bot
-                                if note
-                                    .note
-                                    .contains(&format!("@{}", config.bot_username))
-                                {
+                                if note.note.contains(&format!("@{}", config.bot_username)) {
                                     info!("Found mention in MR !{} note #{}", mr.iid, note.id);
 
                                     // Create a GitlabNoteEvent from the note
-                                    let event = Self::create_mr_note_event_static(project.clone(), note, mr.clone());
+                                    let event = Self::create_mr_note_event_static(
+                                        project.clone(),
+                                        note,
+                                        mr.clone(),
+                                    );
 
                                     // Process the mention
                                     if let Err(e) = process_mention(
