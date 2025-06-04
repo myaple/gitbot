@@ -962,4 +962,119 @@ fn decode_jwt(token: &str) -> Result<Claims> {
         );
         assert!(!matches.is_empty(), "Should find relevant sections");
     }
+
+    #[test]
+    fn test_calculate_content_relevance_score() {
+        let settings = AppSettings {
+            openai_model: "gpt-3.5-turbo".to_string(),
+            openai_temperature: 0.7,
+            openai_max_tokens: 1024,
+            gitlab_url: "https://gitlab.com".to_string(),
+            gitlab_token: "test_token".to_string(),
+            openai_api_key: "key".to_string(),
+            openai_custom_url: "url".to_string(),
+            repos_to_poll: vec!["org/repo1".to_string()],
+            log_level: "debug".to_string(),
+            bot_username: "gitbot".to_string(),
+            poll_interval_seconds: 60,
+            stale_issue_days: 30,
+            max_age_hours: 24,
+            context_repo_path: None,
+            max_context_size: 60000,
+            default_branch: "main".to_string(),
+            client_cert_path: None,
+            client_key_path: None,
+            client_key_password: None,
+            max_comment_length: 1000,
+        };
+
+        let settings_arc = Arc::new(settings.clone());
+        let gitlab_client = Arc::new(GitlabApiClient::new(settings_arc.clone()).unwrap());
+        let file_index_manager = Arc::new(FileIndexManager::new(gitlab_client.clone(), 3600));
+        let extractor = RepoContextExtractor::new_with_file_indexer(
+            gitlab_client,
+            settings_arc,
+            file_index_manager,
+        );
+
+        let keywords = vec![
+            "authentication".to_string(),
+            "login".to_string(),
+            "user".to_string(),
+        ];
+
+        // Test content with varying keyword densities
+        let high_relevance_content = "This is about authentication and login functionality for user management. The authentication module handles user login and secure user authentication.";
+        let medium_relevance_content = "This file contains user authentication code. Login functionality is implemented here.";
+        let low_relevance_content = "This is a general utility file. Some user data handling.";
+        let no_relevance_content = "This file handles configuration and settings. No specific functionality mentioned.";
+
+        let high_score = extractor.calculate_content_relevance_score(high_relevance_content, &keywords);
+        let medium_score = extractor.calculate_content_relevance_score(medium_relevance_content, &keywords);
+        let low_score = extractor.calculate_content_relevance_score(low_relevance_content, &keywords);
+        let no_score = extractor.calculate_content_relevance_score(no_relevance_content, &keywords);
+
+        // Verify the scores reflect keyword frequency
+        assert!(high_score > medium_score, "High relevance content should score higher than medium");
+        assert!(medium_score > low_score, "Medium relevance content should score higher than low");
+        assert!(low_score > no_score, "Low relevance content should score higher than none");
+        assert!(no_score == 0, "Content with no keywords should have zero score");
+        
+        // Check specific score values make sense
+        assert!(high_score >= 6, "High relevance content should have significant score (found {})", high_score);
+        assert!(medium_score >= 3, "Medium relevance content should have moderate score");
+        assert!(low_score >= 1, "Low relevance content should have minimal score");
+    }
+
+    #[test]
+    fn test_weighted_file_context_formatting() {
+        let settings = AppSettings {
+            openai_model: "gpt-3.5-turbo".to_string(),
+            openai_temperature: 0.7,
+            openai_max_tokens: 1024,
+            gitlab_url: "https://gitlab.com".to_string(),
+            gitlab_token: "test_token".to_string(),
+            openai_api_key: "key".to_string(),
+            openai_custom_url: "url".to_string(),
+            repos_to_poll: vec!["org/repo1".to_string()],
+            log_level: "debug".to_string(),
+            bot_username: "gitbot".to_string(),
+            poll_interval_seconds: 60,
+            stale_issue_days: 30,
+            max_age_hours: 24,
+            context_repo_path: None,
+            max_context_size: 60000,
+            default_branch: "main".to_string(),
+            client_cert_path: None,
+            client_key_path: None,
+            client_key_password: None,
+            max_comment_length: 1000,
+        };
+
+        let settings_arc = Arc::new(settings.clone());
+        let gitlab_client = Arc::new(GitlabApiClient::new(settings_arc.clone()).unwrap());
+        let file_index_manager = Arc::new(FileIndexManager::new(gitlab_client.clone(), 3600));
+        let extractor = RepoContextExtractor::new_with_file_indexer(
+            gitlab_client,
+            settings_arc,
+            file_index_manager,
+        );
+
+        let file_path = "src/auth.rs";
+        let content = "User authentication module with login functionality";
+        let weight = 25; // Use a smaller weight so it doesn't get capped
+        
+        let formatted = extractor.format_weighted_file_context(file_path, content, weight);
+        
+        println!("Formatted output: '{}'", formatted);
+        
+        // Should include weight information
+        assert!(formatted.contains("Relevance: 50%"), "Should include relevance percentage. Got: {}", formatted);
+        assert!(formatted.contains("src/auth.rs"), "Should include file path");
+        assert!(formatted.contains("authentication"), "Should include content");
+        
+        // Check format structure
+        assert!(formatted.starts_with("--- File:"), "Should start with file marker");
+        assert!(formatted.contains("(Relevance:"), "Should contain relevance marker");
+    }
 }
