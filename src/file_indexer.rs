@@ -357,7 +357,7 @@ impl FileIndexManager {
             return Ok(Vec::new());
         }
 
-        // Fetch content for matching files
+        // Fetch content for matching files and calculate relevance scores
         let mut files_with_content = Vec::new();
 
         // Limit the number of files to fetch
@@ -367,11 +367,50 @@ impl FileIndexManager {
                 .get_file_content(project_id, file_path)
                 .await
             {
-                Ok(file) => files_with_content.push(file),
+                Ok(mut file) => {
+                    // Calculate relevance score based on content
+                    let content_score = if let Some(content) = &file.content {
+                        calculate_content_keyword_frequency(content, keywords)
+                    } else {
+                        0
+                    };
+
+                    // Add base score for being found by the index
+                    let total_score = content_score + 10;
+                    file.relevance_score = Some(total_score);
+
+                    files_with_content.push(file);
+                }
                 Err(e) => warn!("Failed to get content for file {}: {}", file_path, e),
             }
         }
 
+        // Sort by relevance score (highest first)
+        files_with_content.sort_by(|a, b| {
+            b.relevance_score
+                .unwrap_or(0)
+                .cmp(&a.relevance_score.unwrap_or(0))
+        });
+
         Ok(files_with_content)
     }
+}
+
+/// Calculate keyword frequency in content for relevance scoring
+fn calculate_content_keyword_frequency(content: &str, keywords: &[String]) -> usize {
+    if keywords.is_empty() || content.is_empty() {
+        return 0;
+    }
+
+    let content_lower = content.to_lowercase();
+    let mut total_hits = 0;
+
+    // Count occurrences of each keyword
+    for keyword in keywords {
+        let keyword_lower = keyword.to_lowercase();
+        let hits = content_lower.matches(&keyword_lower).count();
+        total_hits += hits;
+    }
+
+    total_hits
 }
