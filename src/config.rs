@@ -69,7 +69,7 @@ pub struct AppSettings {
     #[arg(long, env = "GITBOT_CONTEXT_REPO_PATH")]
     pub context_repo_path: Option<String>,
 
-    /// Maximum number of characters of context to include (default: 60000)
+    /// Maximum number of tokens of context to include (default: 60000)
     #[arg(long, env = "GITBOT_MAX_CONTEXT_SIZE", default_value_t = 60000)]
     pub max_context_size: usize,
 
