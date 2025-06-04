@@ -77,6 +77,10 @@ pub struct AppSettings {
     #[arg(long, env = "GITBOT_MAX_COMMENT_LENGTH", default_value_t = 1000)]
     pub max_comment_length: usize,
 
+    /// Number of lines to include before and after keyword matches in file context (default: 10)
+    #[arg(long, env = "GITBOT_CONTEXT_LINES", default_value_t = 10)]
+    pub context_lines: usize,
+
     /// Default branch name to use for repository operations (default: main)
     #[arg(long, env = "GITBOT_DEFAULT_BRANCH", default_value = "main")]
     pub default_branch: String,

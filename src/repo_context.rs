@@ -12,7 +12,6 @@ use crate::models::{GitlabIssue, GitlabMergeRequest, GitlabProject};
 
 pub(crate) const MAX_SOURCE_FILES: usize = 250; // Maximum number of source files to include in context
 pub(crate) const AGENTS_MD_FILE: &str = "AGENTS.md";
-const CONTEXT_LINES: usize = 10; // Number of lines to include before and after keyword matches
 
 #[derive(Debug, Deserialize)]
 pub struct GitlabFile {
@@ -978,8 +977,8 @@ impl RepoContextExtractor {
         let mut merged_ranges: Vec<(usize, usize)> = Vec::new();
         for &line_idx in &sorted_matches {
             // Calculate range with context
-            let start = line_idx.saturating_sub(CONTEXT_LINES);
-            let end = (line_idx + CONTEXT_LINES).min(lines.len() - 1);
+            let start = line_idx.saturating_sub(self.settings.context_lines);
+            let end = (line_idx + self.settings.context_lines).min(lines.len() - 1);
 
             // Check if this range overlaps with the last range
             if let Some(last_range) = merged_ranges.last_mut() {

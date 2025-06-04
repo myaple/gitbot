@@ -46,7 +46,8 @@ GitBot monitors GitLab repositories for mentions and responds with AI-powered su
      --gitlab-token YOUR_GITLAB_TOKEN \
      --openai-api-key YOUR_OPENAI_KEY \
      --bot-username YOUR_BOT_USERNAME \
-     --repos-to-poll group/project1,group/project2
+     --repos-to-poll group/project1,group/project2 \
+     --context-lines 15
    ```
 
 ### Using Environment Variables
@@ -56,6 +57,7 @@ export GITBOT_GITLAB_TOKEN=YOUR_GITLAB_TOKEN
 export GITBOT_OPENAI_API_KEY=YOUR_OPENAI_KEY  
 export GITBOT_BOT_USERNAME=YOUR_BOT_USERNAME
 export GITBOT_REPOS_TO_POLL=group/project1,group/project2
+export GITBOT_CONTEXT_LINES=15
 ./target/release/gitbot
 ```
 
@@ -73,6 +75,7 @@ export GITBOT_REPOS_TO_POLL=group/project1,group/project2
      -e GITBOT_OPENAI_API_KEY="YOUR_OPENAI_KEY" \
      -e GITBOT_BOT_USERNAME="YOUR_BOT_USERNAME" \
      -e GITBOT_REPOS_TO_POLL="group/project1,group/project2" \
+     -e GITBOT_CONTEXT_LINES="15" \
      gitbot
    ```
 
@@ -90,6 +93,7 @@ GitBot supports extensive configuration through command line arguments or enviro
 | `GITBOT_OPENAI_MODEL` | `--openai-model` | `gpt-3.5-turbo` | OpenAI model to use |
 | `GITBOT_POLL_INTERVAL_SECONDS` | `--poll-interval-seconds` | `60` | Polling interval in seconds |
 | `GITBOT_STALE_ISSUE_DAYS` | `--stale-issue-days` | `30` | Days after which issues are marked stale |
+| `GITBOT_CONTEXT_LINES` | `--context-lines` | `10` | Number of lines before and after keyword matches |
 | `GITBOT_LOG_LEVEL` | `--log-level` | `info` | Log level (trace, debug, info, warn, error) |
 
 <details>

@@ -46,11 +46,12 @@ mod tests {
             max_age_hours: 24,
             context_repo_path: None,
             max_context_size: 60000,
+            max_comment_length: 1000,
+            context_lines: 10,
             default_branch: "main".to_string(),
             client_cert_path: None,
             client_key_path: None,
             client_key_password: None,
-            max_comment_length: 1000,
         };
 
         let settings_arc = Arc::new(settings.clone());
@@ -100,11 +101,12 @@ mod tests {
             max_age_hours: 24,
             context_repo_path: None,
             max_context_size: 60000,
+            max_comment_length: 1000,
+            context_lines: 10,
             default_branch: "main".to_string(),
             client_cert_path: None,
             client_key_path: None,
             client_key_password: None,
-            max_comment_length: 1000,
         };
 
         let settings_arc = Arc::new(settings.clone());
@@ -173,6 +175,7 @@ mod tests {
             client_key_path: None,
             client_key_password: None,
             max_comment_length: 1000,
+            context_lines: 10,
             stale_issue_days: 30,
             max_age_hours: 24,
             context_repo_path: context_repo,
@@ -809,11 +812,12 @@ mod tests {
             max_age_hours: 24,
             context_repo_path: None,
             max_context_size: 60000,
+            max_comment_length: 1000,
+            context_lines: 10,
             default_branch: "main".to_string(),
             client_cert_path: None,
             client_key_path: None,
             client_key_password: None,
-            max_comment_length: 1000,
         };
 
         let settings_arc = Arc::new(settings.clone());
@@ -897,6 +901,122 @@ fn decode_jwt(token: &str) -> Result<Claims> {
     }
 
     #[test]
+    fn test_configurable_context_lines() {
+        // Test that different context_lines settings produce different amounts of context
+        let settings_3_lines = AppSettings {
+            openai_model: "gpt-3.5-turbo".to_string(),
+            openai_temperature: 0.7,
+            openai_max_tokens: 1024,
+            gitlab_url: "https://gitlab.com".to_string(),
+            gitlab_token: "test_token".to_string(),
+            openai_api_key: "key".to_string(),
+            openai_custom_url: "url".to_string(),
+            repos_to_poll: vec!["org/repo1".to_string()],
+            log_level: "debug".to_string(),
+            bot_username: "gitbot".to_string(),
+            poll_interval_seconds: 60,
+            stale_issue_days: 30,
+            max_age_hours: 24,
+            context_repo_path: None,
+            max_context_size: 60000,
+            max_comment_length: 1000,
+            context_lines: 3, // Small context
+            default_branch: "main".to_string(),
+            client_cert_path: None,
+            client_key_path: None,
+            client_key_password: None,
+        };
+
+        let settings_8_lines = AppSettings {
+            openai_model: "gpt-3.5-turbo".to_string(),
+            openai_temperature: 0.7,
+            openai_max_tokens: 1024,
+            gitlab_url: "https://gitlab.com".to_string(),
+            gitlab_token: "test_token".to_string(),
+            openai_api_key: "key".to_string(),
+            openai_custom_url: "url".to_string(),
+            repos_to_poll: vec!["org/repo1".to_string()],
+            log_level: "debug".to_string(),
+            bot_username: "gitbot".to_string(),
+            poll_interval_seconds: 60,
+            stale_issue_days: 30,
+            max_age_hours: 24,
+            context_repo_path: None,
+            max_context_size: 60000,
+            max_comment_length: 1000,
+            context_lines: 8, // Larger context
+            default_branch: "main".to_string(),
+            client_cert_path: None,
+            client_key_path: None,
+            client_key_password: None,
+        };
+
+        // Create test content with keyword on line 10 of 20 lines
+        let file_content = (1..=20)
+            .map(|i| {
+                if i == 10 {
+                    format!("line {}: this line contains the TARGET keyword", i)
+                } else {
+                    format!("line {}: regular content here", i)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let keywords = vec!["target".to_string()];
+
+        // Test with 3 lines of context
+        let settings_arc_3 = Arc::new(settings_3_lines);
+        let gitlab_client_3 = Arc::new(GitlabApiClient::new(settings_arc_3.clone()).unwrap());
+        let file_index_manager_3 = Arc::new(FileIndexManager::new(gitlab_client_3.clone(), 3600));
+        let extractor_3 = RepoContextExtractor::new_with_file_indexer(
+            gitlab_client_3,
+            settings_arc_3,
+            file_index_manager_3,
+        );
+
+        let matches_3 = extractor_3.extract_relevant_file_sections(&file_content, &keywords);
+
+        // Test with 8 lines of context
+        let settings_arc_8 = Arc::new(settings_8_lines);
+        let gitlab_client_8 = Arc::new(GitlabApiClient::new(settings_arc_8.clone()).unwrap());
+        let file_index_manager_8 = Arc::new(FileIndexManager::new(gitlab_client_8.clone(), 3600));
+        let extractor_8 = RepoContextExtractor::new_with_file_indexer(
+            gitlab_client_8,
+            settings_arc_8,
+            file_index_manager_8,
+        );
+
+        let matches_8 = extractor_8.extract_relevant_file_sections(&file_content, &keywords);
+
+        // Verify both found matches
+        assert!(!matches_3.is_empty(), "3-line context should find matches");
+        assert!(!matches_8.is_empty(), "8-line context should find matches");
+
+        // Count total lines returned
+        let lines_3: usize = matches_3.iter().map(|m| m.lines.len()).sum();
+        let lines_8: usize = matches_8.iter().map(|m| m.lines.len()).sum();
+
+        // 8-line context should return more lines than 3-line context
+        assert!(
+            lines_8 > lines_3,
+            "8-line context should return more lines than 3-line context"
+        );
+
+        // With keyword on line 10:
+        // 3-line context should include lines 7-13 (7 lines total)
+        // 8-line context should include lines 2-18 (17 lines total)
+        assert_eq!(
+            lines_3, 7,
+            "3-line context should return 7 lines (3 before + keyword + 3 after)"
+        );
+        assert_eq!(
+            lines_8, 17,
+            "8-line context should return 17 lines (8 before + keyword + 8 after)"
+        );
+    }
+
+    #[test]
     fn test_token_usage_reduction() {
         // This test demonstrates the token usage reduction
         let settings = AppSettings {
@@ -915,11 +1035,12 @@ fn decode_jwt(token: &str) -> Result<Claims> {
             max_age_hours: 24,
             context_repo_path: None,
             max_context_size: 60000,
+            max_comment_length: 1000,
+            context_lines: 10,
             default_branch: "main".to_string(),
             client_cert_path: None,
             client_key_path: None,
             client_key_password: None,
-            max_comment_length: 1000,
         };
 
         let settings_arc = Arc::new(settings.clone());

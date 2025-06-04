@@ -41,6 +41,7 @@ mod tests {
             client_key_path: None,
             client_key_password: None,
             max_comment_length: 1000,
+            context_lines: 10,
             stale_issue_days: 30,
             max_age_hours: 24,
             context_repo_path: None,
@@ -217,11 +218,12 @@ mod tests {
             max_age_hours: 24,
             context_repo_path: None,
             max_context_size: 60000,
+            max_comment_length: 1000,
+            context_lines: 10,
             default_branch: "main".to_string(),
             client_cert_path: None,
             client_key_path: None,
             client_key_password: None,
-            max_comment_length: 1000,
         });
 
         // Create a mock GitLab client
@@ -243,11 +245,12 @@ mod tests {
             stale_issue_days: 30, // Added default for tests
             context_repo_path: None,
             max_context_size: 60000,
+            max_comment_length: 1000,
+            context_lines: 10,
             default_branch: "main".to_string(),
             client_cert_path: None,
             client_key_path: None,
             client_key_password: None,
-            max_comment_length: 1000,
         };
         let gitlab_client = Arc::new(GitlabApiClient::new(Arc::new(settings.clone())).unwrap());
 
@@ -288,11 +291,12 @@ mod tests {
             stale_issue_days: 30, // Added default for tests
             context_repo_path: None,
             max_context_size: 60000,
+            max_comment_length: 1000,
+            context_lines: 10,
             default_branch: "main".to_string(),
             client_cert_path: None,
             client_key_path: None,
             client_key_password: None,
-            max_comment_length: 1000,
         });
 
         // Create a cache for the test
@@ -317,11 +321,12 @@ mod tests {
             stale_issue_days: 30, // Added default for tests
             context_repo_path: None,
             max_context_size: 60000,
+            max_comment_length: 1000,
+            context_lines: 10,
             default_branch: "main".to_string(),
             client_cert_path: None,
             client_key_path: None,
             client_key_password: None,
-            max_comment_length: 1000,
         };
         let gitlab_client = Arc::new(GitlabApiClient::new(Arc::new(settings.clone())).unwrap());
         let file_index_manager = Arc::new(FileIndexManager::new(gitlab_client.clone(), 3600));
