@@ -27,6 +27,7 @@ fn create_test_settings(base_url: String) -> AppSettings {
         client_key_path: None,
         client_key_password: None,
         max_comment_length: 1000,
+        context_lines: 10,
     }
 }
 
@@ -376,11 +377,12 @@ async fn test_new_openai_api_client_with_client_cert_config() {
         max_age_hours: 24,
         context_repo_path: None,
         max_context_size: 60000,
+        max_comment_length: 1000,
+        context_lines: 10,
         default_branch: "main".to_string(),
         client_cert_path: Some("/nonexistent/cert.pem".to_string()),
         client_key_path: Some("/nonexistent/key.pem".to_string()),
         client_key_password: Some("test_password".to_string()),
-        max_comment_length: 1000,
     };
 
     // This should fail because the certificate files don't exist
@@ -418,11 +420,12 @@ async fn test_new_openai_api_client_without_client_cert() {
         max_age_hours: 24,
         context_repo_path: None,
         max_context_size: 60000,
+        max_comment_length: 1000,
+        context_lines: 10,
         default_branch: "main".to_string(),
         client_cert_path: None,
         client_key_path: None,
         client_key_password: None,
-        max_comment_length: 1000,
     };
 
     // This should succeed - no client certificates required

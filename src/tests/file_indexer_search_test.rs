@@ -24,11 +24,12 @@ mod tests {
             max_age_hours: 24,
             context_repo_path: None,
             max_context_size: 60000,
+            max_comment_length: 1000,
+            context_lines: 10,
             default_branch: "main".to_string(),
             client_cert_path: None,
             client_key_path: None,
             client_key_password: None,
-            max_comment_length: 1000,
         };
 
         let settings_arc = Arc::new(settings);
