@@ -998,13 +998,22 @@ fn decode_jwt(token: &str) -> Result<Claims> {
         let lines_8: usize = matches_8.iter().map(|m| m.lines.len()).sum();
 
         // 8-line context should return more lines than 3-line context
-        assert!(lines_8 > lines_3, "8-line context should return more lines than 3-line context");
+        assert!(
+            lines_8 > lines_3,
+            "8-line context should return more lines than 3-line context"
+        );
 
         // With keyword on line 10:
         // 3-line context should include lines 7-13 (7 lines total)
         // 8-line context should include lines 2-18 (17 lines total)
-        assert_eq!(lines_3, 7, "3-line context should return 7 lines (3 before + keyword + 3 after)");
-        assert_eq!(lines_8, 17, "8-line context should return 17 lines (8 before + keyword + 8 after)");
+        assert_eq!(
+            lines_3, 7,
+            "3-line context should return 7 lines (3 before + keyword + 3 after)"
+        );
+        assert_eq!(
+            lines_8, 17,
+            "8-line context should return 17 lines (8 before + keyword + 8 after)"
+        );
     }
 
     #[test]
