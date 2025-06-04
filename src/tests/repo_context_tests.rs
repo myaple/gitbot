@@ -1108,7 +1108,7 @@ fn decode_jwt(token: &str) -> Result<Claims> {
         let code_tokens = estimate_tokens(code);
         assert!(code_tokens > 10); // Should have a reasonable number of tokens
     }
-  
+
     fn test_calculate_content_relevance_score() {
         let settings = AppSettings {
             openai_model: "gpt-3.5-turbo".to_string(),
