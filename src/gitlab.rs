@@ -222,19 +222,33 @@ impl GitlabApiClient {
         issue_iid: i64,
         since_timestamp: u64,
     ) -> Result<Vec<GitlabNoteAttributes>, GitlabError> {
-        let path = format!("/api/v4/projects/{}/issues/{}/notes", project_id, issue_iid);
-        let dt = DateTime::from_timestamp(since_timestamp as i64, 0).unwrap_or_else(|| {
-            Utc.timestamp_opt(0, 0)
-                .single()
-                .expect("Fallback timestamp failed for 0")
-        });
-        let formatted_timestamp_string = dt.to_rfc3339();
+        self.get_issue_notes_with_options(project_id, issue_iid, Some(since_timestamp))
+            .await
+    }
 
-        let query_params_values = [
-            ("created_after", formatted_timestamp_string),
-            ("sort", "asc".to_string()),
-            ("per_page", "100".to_string()),
-        ];
+    /// Get all issue notes or notes since a timestamp
+    #[instrument(skip(self), fields(project_id, issue_iid, since_timestamp))]
+    pub async fn get_issue_notes_with_options(
+        &self,
+        project_id: i64,
+        issue_iid: i64,
+        since_timestamp: Option<u64>,
+    ) -> Result<Vec<GitlabNoteAttributes>, GitlabError> {
+        let path = format!("/api/v4/projects/{}/issues/{}/notes", project_id, issue_iid);
+
+        let mut query_params_values =
+            vec![("sort", "asc".to_string()), ("per_page", "100".to_string())];
+
+        if let Some(timestamp) = since_timestamp {
+            let dt = DateTime::from_timestamp(timestamp as i64, 0).unwrap_or_else(|| {
+                Utc.timestamp_opt(0, 0)
+                    .single()
+                    .expect("Fallback timestamp failed for 0")
+            });
+            let formatted_timestamp_string = dt.to_rfc3339();
+            query_params_values.push(("created_after", formatted_timestamp_string));
+        }
+
         let params: Vec<(&str, &str)> = query_params_values
             .iter()
             .map(|(k, v)| (*k, v.as_str()))
@@ -244,35 +258,70 @@ impl GitlabApiClient {
             .await
     }
 
-    #[instrument(skip(self), fields(project_id, mr_iid, since_timestamp))]
     pub async fn get_merge_request_notes(
         &self,
         project_id: i64,
         mr_iid: i64,
         since_timestamp: u64,
     ) -> Result<Vec<GitlabNoteAttributes>, GitlabError> {
+        self.get_merge_request_notes_with_options(project_id, mr_iid, Some(since_timestamp))
+            .await
+    }
+
+    /// Get all merge request notes or notes since a timestamp
+    #[instrument(skip(self), fields(project_id, mr_iid, since_timestamp))]
+    pub async fn get_merge_request_notes_with_options(
+        &self,
+        project_id: i64,
+        mr_iid: i64,
+        since_timestamp: Option<u64>,
+    ) -> Result<Vec<GitlabNoteAttributes>, GitlabError> {
         let path = format!(
             "/api/v4/projects/{}/merge_requests/{}/notes",
             project_id, mr_iid
         );
-        let dt = DateTime::from_timestamp(since_timestamp as i64, 0).unwrap_or_else(|| {
-            Utc.timestamp_opt(0, 0)
-                .single()
-                .expect("Fallback timestamp failed for 0")
-        });
-        let formatted_timestamp_string = dt.to_rfc3339();
 
-        let query_params_values = [
-            ("created_after", formatted_timestamp_string),
-            ("sort", "asc".to_string()),
-            ("per_page", "100".to_string()),
-        ];
+        let mut query_params_values =
+            vec![("sort", "asc".to_string()), ("per_page", "100".to_string())];
+
+        if let Some(timestamp) = since_timestamp {
+            let dt = DateTime::from_timestamp(timestamp as i64, 0).unwrap_or_else(|| {
+                Utc.timestamp_opt(0, 0)
+                    .single()
+                    .expect("Fallback timestamp failed for 0")
+            });
+            let formatted_timestamp_string = dt.to_rfc3339();
+            query_params_values.push(("created_after", formatted_timestamp_string));
+        }
+
         let params: Vec<(&str, &str)> = query_params_values
             .iter()
             .map(|(k, v)| (*k, v.as_str()))
             .collect();
 
         self.send_request(Method::GET, &path, Some(&params), None::<()>)
+            .await
+    }
+
+    /// Get all issue notes (without timestamp filtering)
+    #[instrument(skip(self), fields(project_id, issue_iid))]
+    pub async fn get_all_issue_notes(
+        &self,
+        project_id: i64,
+        issue_iid: i64,
+    ) -> Result<Vec<GitlabNoteAttributes>, GitlabError> {
+        self.get_issue_notes_with_options(project_id, issue_iid, None)
+            .await
+    }
+
+    /// Get all merge request notes (without timestamp filtering)
+    #[instrument(skip(self), fields(project_id, mr_iid))]
+    pub async fn get_all_merge_request_notes(
+        &self,
+        project_id: i64,
+        mr_iid: i64,
+    ) -> Result<Vec<GitlabNoteAttributes>, GitlabError> {
+        self.get_merge_request_notes_with_options(project_id, mr_iid, None)
             .await
     }
 

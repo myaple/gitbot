@@ -7,7 +7,7 @@ use crate::config::AppSettings;
 use crate::file_indexer::FileIndexManager;
 use crate::gitlab::{GitlabApiClient, GitlabError};
 use crate::mention_cache::MentionCache;
-use crate::models::{GitlabNoteEvent, OpenAIChatMessage, OpenAIChatRequest};
+use crate::models::{GitlabNoteAttributes, GitlabNoteEvent, OpenAIChatMessage, OpenAIChatRequest};
 use crate::openai::OpenAIApiClient;
 use crate::repo_context::RepoContextExtractor;
 
@@ -42,6 +42,77 @@ fn parse_mention_timestamp(timestamp_str: &str) -> Result<DateTime<Utc>> {
             ))
         }
     }
+}
+
+// Helper function to format comments for LLM context
+pub(crate) fn format_comments_for_context(
+    notes: &[GitlabNoteAttributes],
+    max_comment_length: usize,
+    current_note_id: i64,
+) -> String {
+    if notes.is_empty() {
+        return "No previous comments found.".to_string();
+    }
+
+    let mut formatted_comments = Vec::new();
+
+    for note in notes {
+        // Skip the current note that triggered the bot mention
+        if note.id == current_note_id {
+            continue;
+        }
+
+        // Parse the timestamp and format it nicely
+        let timestamp = match chrono::DateTime::parse_from_rfc3339(&note.updated_at) {
+            Ok(dt) => dt.format("%Y-%m-%d %H:%M UTC").to_string(),
+            Err(_) => note.updated_at.clone(),
+        };
+
+        // Truncate comment content if it's too long
+        let content = if note.note.len() > max_comment_length {
+            format!("{}... [truncated]", &note.note[..max_comment_length])
+        } else {
+            note.note.clone()
+        };
+
+        formatted_comments.push(format!(
+            "**Comment by @{} ({})**:\n{}",
+            note.author.username, timestamp, content
+        ));
+    }
+
+    if formatted_comments.is_empty() {
+        "No previous comments found.".to_string()
+    } else {
+        format!(
+            "--- Previous Comments ---\n{}\n--- End of Comments ---",
+            formatted_comments.join("\n\n")
+        )
+    }
+}
+
+// Helper function to fetch all comments for an issue
+async fn fetch_all_issue_comments(
+    gitlab_client: &Arc<GitlabApiClient>,
+    project_id: i64,
+    issue_iid: i64,
+) -> Result<Vec<GitlabNoteAttributes>> {
+    gitlab_client
+        .get_all_issue_notes(project_id, issue_iid)
+        .await
+        .map_err(|e| anyhow!("Failed to get all issue comments: {}", e))
+}
+
+// Helper function to fetch all comments for a merge request
+async fn fetch_all_merge_request_comments(
+    gitlab_client: &Arc<GitlabApiClient>,
+    project_id: i64,
+    mr_iid: i64,
+) -> Result<Vec<GitlabNoteAttributes>> {
+    gitlab_client
+        .get_all_merge_request_notes(project_id, mr_iid)
+        .await
+        .map_err(|e| anyhow!("Failed to get all merge request comments: {}", e))
 }
 
 // Helper function to fetch subsequent notes based on noteable type
@@ -711,6 +782,24 @@ async fn build_issue_prompt_with_context(
     )
     .await;
 
+    // Add comments context
+    match fetch_all_issue_comments(context.gitlab_client, context.project_id, context.issue_iid)
+        .await
+    {
+        Ok(comments) => {
+            let formatted_comments = format_comments_for_context(
+                &comments,
+                context.config.max_comment_length,
+                context.event.object_attributes.id,
+            );
+            prompt_parts.push(formatted_comments);
+        }
+        Err(e) => {
+            warn!("Failed to fetch issue comments for context: {}", e);
+            prompt_parts.push("Previous comments could not be retrieved.".to_string());
+        }
+    }
+
     prompt_parts.push(format!("User's specific request: {}", user_context));
 
     Ok(())
@@ -751,6 +840,24 @@ async fn build_issue_prompt_without_context(
         prompt_parts,
     )
     .await;
+
+    // Add comments context
+    match fetch_all_issue_comments(context.gitlab_client, context.project_id, context.issue_iid)
+        .await
+    {
+        Ok(comments) => {
+            let formatted_comments = format_comments_for_context(
+                &comments,
+                context.config.max_comment_length,
+                context.event.object_attributes.id,
+            );
+            prompt_parts.push(formatted_comments);
+        }
+        Err(e) => {
+            warn!("Failed to fetch issue comments for context: {}", e);
+            prompt_parts.push("Previous comments could not be retrieved.".to_string());
+        }
+    }
 
     // Add instructions for steps
     prompt_parts.push(
@@ -951,6 +1058,28 @@ async fn build_mr_prompt_with_context(
     )
     .await;
 
+    // Add comments context
+    match fetch_all_merge_request_comments(
+        context.gitlab_client,
+        context.event.project.id,
+        context.mr.iid,
+    )
+    .await
+    {
+        Ok(comments) => {
+            let formatted_comments = format_comments_for_context(
+                &comments,
+                context.config.max_comment_length,
+                context.event.object_attributes.id,
+            );
+            prompt_parts.push(formatted_comments);
+        }
+        Err(e) => {
+            warn!("Failed to fetch merge request comments for context: {}", e);
+            prompt_parts.push("Previous comments could not be retrieved.".to_string());
+        }
+    }
+
     prompt_parts.push(format!("User's specific request: {}", user_context));
 }
 
@@ -994,6 +1123,28 @@ async fn build_mr_prompt_without_context(
         commit_history,
     )
     .await;
+
+    // Add comments context
+    match fetch_all_merge_request_comments(
+        context.gitlab_client,
+        context.event.project.id,
+        context.mr.iid,
+    )
+    .await
+    {
+        Ok(comments) => {
+            let formatted_comments = format_comments_for_context(
+                &comments,
+                context.config.max_comment_length,
+                context.event.object_attributes.id,
+            );
+            prompt_parts.push(formatted_comments);
+        }
+        Err(e) => {
+            warn!("Failed to fetch merge request comments for context: {}", e);
+            prompt_parts.push("Previous comments could not be retrieved.".to_string());
+        }
+    }
 
     // Add instructions for review
     if let Some(contributing_content) = &contributing_md_content {
