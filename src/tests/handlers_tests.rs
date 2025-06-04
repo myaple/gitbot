@@ -800,17 +800,17 @@ mod tests {
             parse_slash_command("/summarize"),
             Some((SlashCommand::Summarize, None))
         );
-        
+
         assert_eq!(
             parse_slash_command("/postmortem"),
             Some((SlashCommand::Postmortem, None))
         );
-        
+
         assert_eq!(
             parse_slash_command("/suggestions"),
             Some((SlashCommand::Suggestions, None))
         );
-        
+
         assert_eq!(
             parse_slash_command("/help"),
             Some((SlashCommand::Help, None))
@@ -819,12 +819,18 @@ mod tests {
         // Test slash commands with additional context
         assert_eq!(
             parse_slash_command("/summarize please focus on security"),
-            Some((SlashCommand::Summarize, Some("please focus on security".to_string())))
+            Some((
+                SlashCommand::Summarize,
+                Some("please focus on security".to_string())
+            ))
         );
-        
+
         assert_eq!(
             parse_slash_command("/postmortem with timeline details"),
-            Some((SlashCommand::Postmortem, Some("with timeline details".to_string())))
+            Some((
+                SlashCommand::Postmortem,
+                Some("with timeline details".to_string())
+            ))
         );
 
         // Test case insensitive
@@ -832,7 +838,7 @@ mod tests {
             parse_slash_command("/HELP"),
             Some((SlashCommand::Help, None))
         );
-        
+
         assert_eq!(
             parse_slash_command("/Summarize Please"),
             Some((SlashCommand::Summarize, Some("Please".to_string())))
@@ -855,10 +861,18 @@ mod tests {
 
     #[test]
     fn test_slash_command_get_precanned_prompt() {
-        assert!(SlashCommand::Summarize.get_precanned_prompt().contains("Summarize changes"));
-        assert!(SlashCommand::Postmortem.get_precanned_prompt().contains("postmortem"));
-        assert!(SlashCommand::Suggestions.get_precanned_prompt().contains("solution"));
-        assert!(SlashCommand::Help.get_precanned_prompt().contains("slash commands"));
+        assert!(SlashCommand::Summarize
+            .get_precanned_prompt()
+            .contains("Summarize changes"));
+        assert!(SlashCommand::Postmortem
+            .get_precanned_prompt()
+            .contains("postmortem"));
+        assert!(SlashCommand::Suggestions
+            .get_precanned_prompt()
+            .contains("solution"));
+        assert!(SlashCommand::Help
+            .get_precanned_prompt()
+            .contains("slash commands"));
     }
 
     #[test]
@@ -883,7 +897,10 @@ mod tests {
             TEST_USER_USERNAME,
             "Issue",
             TEST_MENTION_ID,
-            Some(format!("@{} /summarize please focus on security", TEST_BOT_USERNAME)),
+            Some(format!(
+                "@{} /summarize please focus on security",
+                TEST_BOT_USERNAME
+            )),
             Some(event_time.to_rfc3339()),
         );
 

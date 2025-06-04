@@ -72,7 +72,10 @@ pub(crate) fn parse_slash_command(context: &str) -> Option<(SlashCommand, Option
 
     let parts: Vec<&str> = trimmed[1..].splitn(2, ' ').collect();
     let command_name = parts[0];
-    let additional_context = parts.get(1).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let additional_context = parts
+        .get(1)
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
 
     SlashCommand::from_str(command_name).map(|cmd| (cmd, additional_context))
 }
