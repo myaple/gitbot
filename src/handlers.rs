@@ -47,7 +47,7 @@ impl SlashCommand {
                 "Describe a possible solution or implementation to resolve this issue."
             }
             SlashCommand::Help => {
-                "Display all available slash commands and their purposes."
+                "You should respond by listing all available slash commands for GitBot and explaining their purposes. Also offer to help the user understand what GitBot can do for them. Be helpful and welcoming in your response, as the user is trying to understand GitBot's capabilities."
             }
         }
     }
@@ -819,27 +819,26 @@ async fn build_issue_prompt_with_context(
 ) -> Result<()> {
     // Check for slash commands
     if let Some((slash_command, additional_context)) = parse_slash_command(user_context) {
-        match slash_command {
-            SlashCommand::Help => {
-                // For help command, return the help message directly without further processing
-                prompt_parts.push(generate_help_message());
-                return Ok(());
-            }
-            _ => {
-                // Use precanned prompt for other slash commands
-                let precanned_prompt = slash_command.get_precanned_prompt();
-                if let Some(extra_context) = additional_context {
-                    prompt_parts.push(format!(
-                        "The user @{} requested: '{}' with additional context: '{}'.",
-                        context.event.user.username, precanned_prompt, extra_context
-                    ));
-                } else {
-                    prompt_parts.push(format!(
-                        "The user @{} requested: '{}'.",
-                        context.event.user.username, precanned_prompt
-                    ));
-                }
-            }
+        // Use precanned prompt for all slash commands, including Help
+        let precanned_prompt = slash_command.get_precanned_prompt();
+        if let Some(extra_context) = additional_context {
+            prompt_parts.push(format!(
+                "The user @{} requested: '{}' with additional context: '{}'.",
+                context.event.user.username, precanned_prompt, extra_context
+            ));
+        } else {
+            prompt_parts.push(format!(
+                "The user @{} requested: '{}'.",
+                context.event.user.username, precanned_prompt
+            ));
+        }
+
+        // For help command, provide information about available commands
+        if matches!(slash_command, SlashCommand::Help) {
+            prompt_parts.push(format!(
+                "Available slash commands and their purposes:\n{}",
+                generate_help_message()
+            ));
         }
     } else {
         // Original behavior for non-slash commands
@@ -1129,27 +1128,26 @@ async fn build_mr_prompt_with_context(
 ) {
     // Check for slash commands
     if let Some((slash_command, additional_context)) = parse_slash_command(user_context) {
-        match slash_command {
-            SlashCommand::Help => {
-                // For help command, return the help message directly without further processing
-                prompt_parts.push(generate_help_message());
-                return;
-            }
-            _ => {
-                // Use precanned prompt for other slash commands
-                let precanned_prompt = slash_command.get_precanned_prompt();
-                if let Some(extra_context) = additional_context {
-                    prompt_parts.push(format!(
-                        "The user @{} requested: '{}' with additional context: '{}'.",
-                        context.event.user.username, precanned_prompt, extra_context
-                    ));
-                } else {
-                    prompt_parts.push(format!(
-                        "The user @{} requested: '{}'.",
-                        context.event.user.username, precanned_prompt
-                    ));
-                }
-            }
+        // Use precanned prompt for all slash commands, including Help
+        let precanned_prompt = slash_command.get_precanned_prompt();
+        if let Some(extra_context) = additional_context {
+            prompt_parts.push(format!(
+                "The user @{} requested: '{}' with additional context: '{}'.",
+                context.event.user.username, precanned_prompt, extra_context
+            ));
+        } else {
+            prompt_parts.push(format!(
+                "The user @{} requested: '{}'.",
+                context.event.user.username, precanned_prompt
+            ));
+        }
+
+        // For help command, provide information about available commands
+        if matches!(slash_command, SlashCommand::Help) {
+            prompt_parts.push(format!(
+                "Available slash commands and their purposes:\n{}",
+                generate_help_message()
+            ));
         }
     } else {
         // Original behavior for non-slash commands
