@@ -25,6 +25,74 @@ pub(crate) fn extract_context_after_mention(note: &str, bot_name: &str) -> Optio
     })
 }
 
+// Slash command definitions
+#[derive(Debug, Clone, PartialEq)]
+pub enum SlashCommand {
+    Summarize,
+    Postmortem,
+    Suggestions,
+    Help,
+}
+
+impl SlashCommand {
+    pub fn get_precanned_prompt(&self) -> &'static str {
+        match self {
+            SlashCommand::Summarize => {
+                "Summarize changes with a section for adherence to guidelines, possible changes to cpu/memory/big-O performance, strengths, areas for improvement in the changes, and a conclusion with recommendations."
+            }
+            SlashCommand::Postmortem => {
+                "Summarize in a traditional, SaaS postmortem, including a timeline and root cause analysis sections."
+            }
+            SlashCommand::Suggestions => {
+                "Describe a possible solution or implementation to resolve this issue."
+            }
+            SlashCommand::Help => {
+                "Display all available slash commands and their purposes."
+            }
+        }
+    }
+
+    fn from_str(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "summarize" => Some(SlashCommand::Summarize),
+            "postmortem" => Some(SlashCommand::Postmortem),
+            "suggestions" => Some(SlashCommand::Suggestions),
+            "help" => Some(SlashCommand::Help),
+            _ => None,
+        }
+    }
+}
+
+// Helper function to parse slash commands from user context
+pub(crate) fn parse_slash_command(context: &str) -> Option<(SlashCommand, Option<String>)> {
+    let trimmed = context.trim();
+    if !trimmed.starts_with('/') {
+        return None;
+    }
+
+    let parts: Vec<&str> = trimmed[1..].splitn(2, ' ').collect();
+    let command_name = parts[0];
+    let additional_context = parts.get(1).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+
+    SlashCommand::from_str(command_name).map(|cmd| (cmd, additional_context))
+}
+
+// Helper function to generate help message
+pub(crate) fn generate_help_message() -> String {
+    format!(
+        "Available slash commands:\n\n\
+        • `/summarize` - {}\n\
+        • `/postmortem` - {}\n\
+        • `/suggestions` - {}\n\
+        • `/help` - {}\n\n\
+        You can add additional context after any command, e.g., `/summarize please focus on security implications`",
+        SlashCommand::Summarize.get_precanned_prompt(),
+        SlashCommand::Postmortem.get_precanned_prompt(),
+        SlashCommand::Suggestions.get_precanned_prompt(),
+        SlashCommand::Help.get_precanned_prompt()
+    )
+}
+
 // Helper function to parse mention timestamp
 fn parse_mention_timestamp(timestamp_str: &str) -> Result<DateTime<Utc>> {
     match DateTime::parse_from_rfc3339(timestamp_str) {
@@ -746,10 +814,37 @@ async fn build_issue_prompt_with_context(
     user_context: &str,
     prompt_parts: &mut Vec<String>,
 ) -> Result<()> {
-    prompt_parts.push(format!(
-        "The user @{} provided the following request regarding this issue: '{}'.",
-        context.event.user.username, user_context
-    ));
+    // Check for slash commands
+    if let Some((slash_command, additional_context)) = parse_slash_command(user_context) {
+        match slash_command {
+            SlashCommand::Help => {
+                // For help command, return the help message directly without further processing
+                prompt_parts.push(generate_help_message());
+                return Ok(());
+            }
+            _ => {
+                // Use precanned prompt for other slash commands
+                let precanned_prompt = slash_command.get_precanned_prompt();
+                if let Some(extra_context) = additional_context {
+                    prompt_parts.push(format!(
+                        "The user @{} requested: '{}' with additional context: '{}'.",
+                        context.event.user.username, precanned_prompt, extra_context
+                    ));
+                } else {
+                    prompt_parts.push(format!(
+                        "The user @{} requested: '{}'.",
+                        context.event.user.username, precanned_prompt
+                    ));
+                }
+            }
+        }
+    } else {
+        // Original behavior for non-slash commands
+        prompt_parts.push(format!(
+            "The user @{} provided the following request regarding this issue: '{}'.",
+            context.event.user.username, user_context
+        ));
+    }
 
     let issue_details = context
         .gitlab_client
@@ -1029,10 +1124,37 @@ async fn build_mr_prompt_with_context(
     prompt_parts: &mut Vec<String>,
     commit_history: &mut String,
 ) {
-    prompt_parts.push(format!(
-        "The user @{} provided the following request regarding this merge request: '{}'.",
-        context.event.user.username, user_context
-    ));
+    // Check for slash commands
+    if let Some((slash_command, additional_context)) = parse_slash_command(user_context) {
+        match slash_command {
+            SlashCommand::Help => {
+                // For help command, return the help message directly without further processing
+                prompt_parts.push(generate_help_message());
+                return;
+            }
+            _ => {
+                // Use precanned prompt for other slash commands
+                let precanned_prompt = slash_command.get_precanned_prompt();
+                if let Some(extra_context) = additional_context {
+                    prompt_parts.push(format!(
+                        "The user @{} requested: '{}' with additional context: '{}'.",
+                        context.event.user.username, precanned_prompt, extra_context
+                    ));
+                } else {
+                    prompt_parts.push(format!(
+                        "The user @{} requested: '{}'.",
+                        context.event.user.username, precanned_prompt
+                    ));
+                }
+            }
+        }
+    } else {
+        // Original behavior for non-slash commands
+        prompt_parts.push(format!(
+            "The user @{} provided the following request regarding this merge request: '{}'.",
+            context.event.user.username, user_context
+        ));
+    }
 
     prompt_parts.push(format!("Title: {}", context.mr.title));
     prompt_parts.push(format!(
