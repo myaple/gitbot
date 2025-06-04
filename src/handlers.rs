@@ -788,7 +788,11 @@ async fn add_repository_context_to_prompt(
         .await
     {
         Ok(context_str) => {
-            prompt_parts.push(format!("Repository Context: {}", context_str));
+            let enhanced_context = format!(
+                "Repository Context (files are ranked by relevance based on keyword frequency - higher percentages indicate more relevant content): {}",
+                context_str
+            );
+            prompt_parts.push(enhanced_context);
         }
         Err(e) => {
             // This should now only happen in catastrophic failures
@@ -1101,7 +1105,11 @@ async fn add_mr_context_to_prompt(
         .await
     {
         Ok((context_for_llm, context_for_comment)) => {
-            prompt_parts.push(format!("Code Changes: {}", context_for_llm));
+            let enhanced_context = format!(
+                "Code Changes (files are ranked by relevance based on keyword frequency - higher percentages indicate more relevant content): {}",
+                context_for_llm
+            );
+            prompt_parts.push(enhanced_context);
             *commit_history = context_for_comment; // Update commit_history
         }
         Err(e) => {

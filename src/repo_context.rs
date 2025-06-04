@@ -20,6 +20,7 @@ pub struct GitlabFile {
     pub size: usize,
     pub content: Option<String>,
     pub encoding: Option<String>,
+    pub relevance_score: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -368,24 +369,36 @@ impl RepoContextExtractor {
                     let matches = self.extract_relevant_file_sections(&content, &keywords);
 
                     if !matches.is_empty() {
-                        let mut file_context = format!("\n--- File: {} ---\n", file.file_path);
+                        // Build the file content with line numbers and sections
+                        let mut content_with_lines = String::new();
 
                         for (i, section) in matches.iter().enumerate() {
                             if i > 0 {
-                                file_context.push_str("\n...\n\n"); // Separator between sections
+                                content_with_lines.push_str("\n...\n\n"); // Separator between sections
                             }
 
-                            file_context.push_str(&format!(
+                            content_with_lines.push_str(&format!(
                                 "Lines {}-{}:\n",
                                 section.start_line, section.end_line
                             ));
 
                             for (j, line) in section.lines.iter().enumerate() {
                                 let line_number = section.start_line + j;
-                                file_context.push_str(&format!("{:4}: {}\n", line_number, line));
+                                content_with_lines
+                                    .push_str(&format!("{:4}: {}\n", line_number, line));
                             }
                         }
-                        file_context.push('\n');
+
+                        // Use the format_weighted_file_context function
+                        let relevance_score = file.relevance_score.unwrap_or(0);
+                        let file_context = format!(
+                            "\n{}",
+                            self.format_weighted_file_context(
+                                &file.file_path,
+                                &content_with_lines,
+                                relevance_score
+                            )
+                        );
 
                         // Check if adding this file would exceed our context limit
                         if total_size + file_context.len() > self.settings.max_context_size {
@@ -693,25 +706,41 @@ impl RepoContextExtractor {
         // Sort by relevance score (highest first)
         scored_files.sort_by(|a, b| b.1.cmp(&a.1));
 
-        // Take top N most relevant files
-        let top_files: Vec<String> = scored_files
+        // Take top N most relevant files and preserve their path scores
+        let top_files: Vec<(String, usize)> = scored_files
             .into_iter()
             .take(5) // Limit to 5 most relevant files
-            .map(|(path, _)| path)
             .collect();
 
-        // Fetch content for top files
+        // Fetch content for top files and calculate combined scores
         let mut files_with_content = Vec::new();
-        for file_path in top_files {
+        for (file_path, _path_score) in top_files {
             match self
                 .gitlab_client
                 .get_file_content(project.id, &file_path)
                 .await
             {
-                Ok(file) => files_with_content.push(file),
+                Ok(mut file) => {
+                    // Calculate combined relevance score including content
+                    let combined_score = self.calculate_combined_relevance_score(
+                        &file_path,
+                        file.content.as_deref(),
+                        &keywords,
+                    );
+
+                    file.relevance_score = Some(combined_score);
+                    files_with_content.push(file);
+                }
                 Err(e) => warn!("Failed to get content for file {}: {}", file_path, e),
             }
         }
+
+        // Re-sort by combined score (highest first)
+        files_with_content.sort_by(|a, b| {
+            b.relevance_score
+                .unwrap_or(0)
+                .cmp(&a.relevance_score.unwrap_or(0))
+        });
 
         Ok(files_with_content)
     }
@@ -853,6 +882,66 @@ impl RepoContextExtractor {
         }
 
         score
+    }
+
+    /// Calculate relevance score based on content keyword frequency
+    pub(crate) fn calculate_content_relevance_score(
+        &self,
+        content: &str,
+        keywords: &[String],
+    ) -> usize {
+        if keywords.is_empty() || content.is_empty() {
+            return 0;
+        }
+
+        let content_lower = content.to_lowercase();
+        let mut total_hits = 0;
+
+        // Count occurrences of each keyword
+        for keyword in keywords {
+            let keyword_lower = keyword.to_lowercase();
+            let hits = content_lower.matches(&keyword_lower).count();
+            total_hits += hits;
+        }
+
+        total_hits
+    }
+
+    /// Calculate combined relevance score considering both path and content
+    pub(crate) fn calculate_combined_relevance_score(
+        &self,
+        file_path: &str,
+        content: Option<&str>,
+        keywords: &[String],
+    ) -> usize {
+        let path_score = self.calculate_relevance_score(file_path, keywords);
+
+        let content_score = match content {
+            Some(content_str) => self.calculate_content_relevance_score(content_str, keywords),
+            None => 0,
+        };
+
+        // Combine scores with weighting - content hits are more valuable than path matches
+        path_score + (content_score * 5)
+    }
+
+    /// Format file context with weight information for LLM
+    pub(crate) fn format_weighted_file_context(
+        &self,
+        file_path: &str,
+        content: &str,
+        weight: usize,
+    ) -> String {
+        let relevance_percentage = if weight > 0 {
+            std::cmp::min(weight * 2, 100) // Convert weight to a percentage (capped at 100%)
+        } else {
+            0
+        };
+
+        format!(
+            "--- File: {} (Relevance: {}%) ---\n{}\n",
+            file_path, relevance_percentage, content
+        )
     }
 
     /// Extract relevant sections from file content based on keyword matches
