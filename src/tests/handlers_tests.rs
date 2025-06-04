@@ -870,4 +870,350 @@ mod tests {
         assert!(help_msg.contains("/help"));
         assert!(help_msg.contains("additional context"));
     }
+
+    #[tokio::test]
+    async fn test_slash_command_integration_summarize() {
+        let mut server = mockito::Server::new_async().await;
+        let config = test_app_settings(server.url());
+        let gitlab_client = Arc::new(GitlabApiClient::new(config.clone()).unwrap());
+        let cache = MentionCache::new();
+
+        let event_time = Utc::now();
+        let event = create_test_note_event_with_id(
+            TEST_USER_USERNAME,
+            "Issue",
+            TEST_MENTION_ID,
+            Some(format!("@{} /summarize please focus on security", TEST_BOT_USERNAME)),
+            Some(event_time.to_rfc3339()),
+        );
+
+        // Mock Gitlab: get_issue_notes (for de-duplication check) - return empty
+        let _m_get_notes = server
+            .mock(
+                "GET",
+                Matcher::Regex(format!(
+                    r"/api/v4/projects/{}/issues/{}/notes\?.+",
+                    TEST_PROJECT_ID, TEST_ISSUE_IID
+                )),
+            )
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(json!([]).to_string())
+            .create_async()
+            .await;
+
+        // Mock Gitlab: get_issue
+        let mock_issue = GitlabIssue {
+            id: 1,
+            iid: TEST_ISSUE_IID,
+            project_id: TEST_PROJECT_ID,
+            title: "Test Security Issue".to_string(),
+            description: Some("Security issue description here.".to_string()),
+            state: "opened".to_string(),
+            author: GitlabUser {
+                id: TEST_GENERIC_USER_ID + 1,
+                username: "issue_author".to_string(),
+                name: "Issue Author".to_string(),
+                avatar_url: None,
+            },
+            labels: vec!["security".to_string()],
+            web_url: "url".to_string(),
+            updated_at: event_time.to_rfc3339(),
+        };
+        let _m_get_issue = server
+            .mock(
+                "GET",
+                format!(
+                    "/api/v4/projects/{}/issues/{}",
+                    TEST_PROJECT_ID, TEST_ISSUE_IID
+                )
+                .as_str(),
+            )
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(json!(mock_issue).to_string())
+            .create_async()
+            .await;
+
+        // Mock get_file_content for repo_context (CONTRIBUTING.md - will 404)
+        let _m_get_contrib_md = server
+            .mock("GET", Matcher::Regex(r".*CONTRIBUTING.md.*".to_string()))
+            .with_status(404)
+            .create_async()
+            .await;
+
+        // Mock OpenAI - verify it gets called successfully
+        let _m_openai = server
+            .mock(
+                "POST",
+                Matcher::Exact(format!("/{}", crate::openai::OPENAI_CHAT_COMPLETIONS_PATH)),
+            )
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .match_header(
+                "Authorization",
+                format!("Bearer {}", config.openai_api_key).as_str(),
+            )
+            .with_body(
+                json!({
+                    "id": "chatcmpl-slash-test",
+                    "object": "chat.completion",
+                    "created": 1677652288,
+                    "model": config.openai_model.clone(),
+                    "choices": [{
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "Security analysis summary with guidelines adherence."
+                        },
+                        "finish_reason": "stop"
+                    }],
+                    "usage": {
+                        "prompt_tokens": 10,
+                        "completion_tokens": 10,
+                        "total_tokens": 20
+                    }
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+
+        // Mock Gitlab: post_comment_to_issue
+        let _m_post_comment = server
+            .mock(
+                "POST",
+                format!(
+                    "/api/v4/projects/{}/issues/{}/notes",
+                    TEST_PROJECT_ID, TEST_ISSUE_IID
+                )
+                .as_str(),
+            )
+            .with_status(201)
+            .with_header("content-type", "application/json")
+            .with_body(json!({
+                "id": 999,
+                "note": "Posted comment",
+                "author": {
+                    "id": TEST_BOT_USER_ID,
+                    "username": config.bot_username.clone(),
+                    "name": format!("{} Bot", config.bot_username),
+                    "avatar_url": null,
+                    "state": "active",
+                    "web_url": format!("https://gitlab.example.com/{}", config.bot_username)
+                },
+                "project_id": TEST_PROJECT_ID,
+                "noteable_type": "Issue",
+                "noteable_id": event.issue.as_ref().unwrap().id,
+                "iid": event.issue.as_ref().unwrap().iid,
+                "created_at": Utc::now().to_rfc3339(),
+                "updated_at": Utc::now().to_rfc3339(),
+                "system": false,
+                "url": format!("https://gitlab.example.com/org/repo1/-/issues/{}/notes/999", event.issue.as_ref().unwrap().iid)
+            }).to_string())
+            .create_async()
+            .await;
+
+        // Other required mocks
+        let _m_get_any_file = server
+            .mock(
+                "GET",
+                Matcher::Regex(r"/api/v4/projects/.*/repository/files/.*".to_string()),
+            )
+            .with_status(404)
+            .create_async()
+            .await;
+        let _m_list_tree = server
+            .mock(
+                "GET",
+                Matcher::Regex(r"/api/v4/projects/.*/repository/tree.*".to_string()),
+            )
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(json!([]).to_string())
+            .create_async()
+            .await;
+
+        let file_index_manager = Arc::new(FileIndexManager::new(gitlab_client.clone(), 3600));
+
+        let result = process_mention(
+            event,
+            gitlab_client.clone(),
+            config.clone(),
+            &cache,
+            file_index_manager,
+        )
+        .await;
+
+        assert!(result.is_ok(), "Processing failed: {:?}", result.err());
+        assert!(cache.check(TEST_MENTION_ID).await);
+    }
+
+    #[tokio::test]
+    async fn test_slash_command_help_integration() {
+        let mut server = mockito::Server::new_async().await;
+        let config = test_app_settings(server.url());
+        let gitlab_client = Arc::new(GitlabApiClient::new(config.clone()).unwrap());
+        let cache = MentionCache::new();
+
+        let event_time = Utc::now();
+        let event = create_test_note_event_with_id(
+            TEST_USER_USERNAME,
+            "Issue",
+            TEST_MENTION_ID,
+            Some(format!("@{} /help", TEST_BOT_USERNAME)),
+            Some(event_time.to_rfc3339()),
+        );
+
+        // Mock Gitlab: get_issue_notes (for de-duplication check) - return empty
+        let _m_get_notes = server
+            .mock(
+                "GET",
+                Matcher::Regex(format!(
+                    r"/api/v4/projects/{}/issues/{}/notes\?.+",
+                    TEST_PROJECT_ID, TEST_ISSUE_IID
+                )),
+            )
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(json!([]).to_string())
+            .create_async()
+            .await;
+
+        // Mock Gitlab: get_issue - needed even for help command
+        let mock_issue = GitlabIssue {
+            id: 1,
+            iid: TEST_ISSUE_IID,
+            project_id: TEST_PROJECT_ID,
+            title: "Test Help Issue".to_string(),
+            description: Some("Issue for testing help command.".to_string()),
+            state: "opened".to_string(),
+            author: GitlabUser {
+                id: TEST_GENERIC_USER_ID + 1,
+                username: "issue_author".to_string(),
+                name: "Issue Author".to_string(),
+                avatar_url: None,
+            },
+            labels: vec![],
+            web_url: "url".to_string(),
+            updated_at: event_time.to_rfc3339(),
+        };
+        let _m_get_issue = server
+            .mock(
+                "GET",
+                format!(
+                    "/api/v4/projects/{}/issues/{}",
+                    TEST_PROJECT_ID, TEST_ISSUE_IID
+                )
+                .as_str(),
+            )
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(json!(mock_issue).to_string())
+            .create_async()
+            .await;
+
+        // Mock get_file_content for repo_context (CONTRIBUTING.md - will 404)
+        let _m_get_contrib_md = server
+            .mock("GET", Matcher::Regex(r".*CONTRIBUTING.md.*".to_string()))
+            .with_status(404)
+            .create_async()
+            .await;
+
+        // Mock OpenAI - help should go through LLM with help message content
+        let _m_openai = server
+            .mock(
+                "POST",
+                Matcher::Exact(format!("/{}", crate::openai::OPENAI_CHAT_COMPLETIONS_PATH)),
+            )
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .match_header(
+                "Authorization",
+                format!("Bearer {}", config.openai_api_key).as_str(),
+            )
+            .with_body(
+                json!({
+                    "id": "chatcmpl-help-test",
+                    "object": "chat.completion",
+                    "created": 1677652288,
+                    "model": config.openai_model.clone(),
+                    "choices": [{
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "Here are the available commands..."
+                        },
+                        "finish_reason": "stop"
+                    }],
+                    "usage": {
+                        "prompt_tokens": 10,
+                        "completion_tokens": 10,
+                        "total_tokens": 20
+                    }
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+
+        // Mock Gitlab: post_comment_to_issue
+        let _m_post_comment = server
+            .mock(
+                "POST",
+                format!(
+                    "/api/v4/projects/{}/issues/{}/notes",
+                    TEST_PROJECT_ID, TEST_ISSUE_IID
+                )
+                .as_str(),
+            )
+            .with_status(201)
+            .with_header("content-type", "application/json")
+            .with_body(json!({
+                "id": 999,
+                "note": "Posted comment",
+                "author": {
+                    "id": TEST_BOT_USER_ID,
+                    "username": config.bot_username.clone(),
+                    "name": format!("{} Bot", config.bot_username),
+                    "avatar_url": null,
+                    "state": "active",
+                    "web_url": format!("https://gitlab.example.com/{}", config.bot_username)
+                },
+                "project_id": TEST_PROJECT_ID,
+                "noteable_type": "Issue",
+                "noteable_id": event.issue.as_ref().unwrap().id,
+                "iid": event.issue.as_ref().unwrap().iid,
+                "created_at": Utc::now().to_rfc3339(),
+                "updated_at": Utc::now().to_rfc3339(),
+                "system": false,
+                "url": format!("https://gitlab.example.com/org/repo1/-/issues/{}/notes/999", event.issue.as_ref().unwrap().iid)
+            }).to_string())
+            .create_async()
+            .await;
+
+        // Other required mocks
+        let _m_get_any_file = server
+            .mock(
+                "GET",
+                Matcher::Regex(r"/api/v4/projects/.*/repository/files/.*".to_string()),
+            )
+            .with_status(404)
+            .create_async()
+            .await;
+
+        let file_index_manager = Arc::new(FileIndexManager::new(gitlab_client.clone(), 3600));
+
+        let result = process_mention(
+            event,
+            gitlab_client.clone(),
+            config.clone(),
+            &cache,
+            file_index_manager,
+        )
+        .await;
+
+        assert!(result.is_ok(), "Processing failed: {:?}", result.err());
+        assert!(cache.check(TEST_MENTION_ID).await);
+    }
 }
