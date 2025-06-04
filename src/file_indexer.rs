@@ -374,20 +374,22 @@ impl FileIndexManager {
                     } else {
                         0
                     };
-                    
+
                     // Add base score for being found by the index
                     let total_score = content_score + 10;
                     file.relevance_score = Some(total_score);
-                    
+
                     files_with_content.push(file);
-                },
+                }
                 Err(e) => warn!("Failed to get content for file {}: {}", file_path, e),
             }
         }
 
         // Sort by relevance score (highest first)
         files_with_content.sort_by(|a, b| {
-            b.relevance_score.unwrap_or(0).cmp(&a.relevance_score.unwrap_or(0))
+            b.relevance_score
+                .unwrap_or(0)
+                .cmp(&a.relevance_score.unwrap_or(0))
         });
 
         Ok(files_with_content)

@@ -1005,25 +1005,52 @@ fn decode_jwt(token: &str) -> Result<Claims> {
 
         // Test content with varying keyword densities
         let high_relevance_content = "This is about authentication and login functionality for user management. The authentication module handles user login and secure user authentication.";
-        let medium_relevance_content = "This file contains user authentication code. Login functionality is implemented here.";
+        let medium_relevance_content =
+            "This file contains user authentication code. Login functionality is implemented here.";
         let low_relevance_content = "This is a general utility file. Some user data handling.";
-        let no_relevance_content = "This file handles configuration and settings. No specific functionality mentioned.";
+        let no_relevance_content =
+            "This file handles configuration and settings. No specific functionality mentioned.";
 
-        let high_score = extractor.calculate_content_relevance_score(high_relevance_content, &keywords);
-        let medium_score = extractor.calculate_content_relevance_score(medium_relevance_content, &keywords);
-        let low_score = extractor.calculate_content_relevance_score(low_relevance_content, &keywords);
+        let high_score =
+            extractor.calculate_content_relevance_score(high_relevance_content, &keywords);
+        let medium_score =
+            extractor.calculate_content_relevance_score(medium_relevance_content, &keywords);
+        let low_score =
+            extractor.calculate_content_relevance_score(low_relevance_content, &keywords);
         let no_score = extractor.calculate_content_relevance_score(no_relevance_content, &keywords);
 
         // Verify the scores reflect keyword frequency
-        assert!(high_score > medium_score, "High relevance content should score higher than medium");
-        assert!(medium_score > low_score, "Medium relevance content should score higher than low");
-        assert!(low_score > no_score, "Low relevance content should score higher than none");
-        assert!(no_score == 0, "Content with no keywords should have zero score");
-        
+        assert!(
+            high_score > medium_score,
+            "High relevance content should score higher than medium"
+        );
+        assert!(
+            medium_score > low_score,
+            "Medium relevance content should score higher than low"
+        );
+        assert!(
+            low_score > no_score,
+            "Low relevance content should score higher than none"
+        );
+        assert!(
+            no_score == 0,
+            "Content with no keywords should have zero score"
+        );
+
         // Check specific score values make sense
-        assert!(high_score >= 6, "High relevance content should have significant score (found {})", high_score);
-        assert!(medium_score >= 3, "Medium relevance content should have moderate score");
-        assert!(low_score >= 1, "Low relevance content should have minimal score");
+        assert!(
+            high_score >= 6,
+            "High relevance content should have significant score (found {})",
+            high_score
+        );
+        assert!(
+            medium_score >= 3,
+            "Medium relevance content should have moderate score"
+        );
+        assert!(
+            low_score >= 1,
+            "Low relevance content should have minimal score"
+        );
     }
 
     #[test]
@@ -1063,16 +1090,32 @@ fn decode_jwt(token: &str) -> Result<Claims> {
         let file_path = "src/auth.rs";
         let content = "User authentication module with login functionality";
         let weight = 25; // Use a smaller weight so it doesn't get capped
-        
+
         let formatted = extractor.format_weighted_file_context(file_path, content, weight);
-        
+
         // Should include weight information
-        assert!(formatted.contains("Relevance: 50%"), "Should include relevance percentage. Got: {}", formatted);
-        assert!(formatted.contains("src/auth.rs"), "Should include file path");
-        assert!(formatted.contains("authentication"), "Should include content");
-        
+        assert!(
+            formatted.contains("Relevance: 50%"),
+            "Should include relevance percentage. Got: {}",
+            formatted
+        );
+        assert!(
+            formatted.contains("src/auth.rs"),
+            "Should include file path"
+        );
+        assert!(
+            formatted.contains("authentication"),
+            "Should include content"
+        );
+
         // Check format structure
-        assert!(formatted.starts_with("--- File:"), "Should start with file marker");
-        assert!(formatted.contains("(Relevance:"), "Should contain relevance marker");
+        assert!(
+            formatted.starts_with("--- File:"),
+            "Should start with file marker"
+        );
+        assert!(
+            formatted.contains("(Relevance:"),
+            "Should contain relevance marker"
+        );
     }
 }

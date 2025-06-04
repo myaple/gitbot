@@ -371,7 +371,7 @@ impl RepoContextExtractor {
                     if !matches.is_empty() {
                         // Build the file content with line numbers and sections
                         let mut content_with_lines = String::new();
-                        
+
                         for (i, section) in matches.iter().enumerate() {
                             if i > 0 {
                                 content_with_lines.push_str("\n...\n\n"); // Separator between sections
@@ -384,15 +384,20 @@ impl RepoContextExtractor {
 
                             for (j, line) in section.lines.iter().enumerate() {
                                 let line_number = section.start_line + j;
-                                content_with_lines.push_str(&format!("{:4}: {}\n", line_number, line));
+                                content_with_lines
+                                    .push_str(&format!("{:4}: {}\n", line_number, line));
                             }
                         }
-                        
+
                         // Use the format_weighted_file_context function
                         let relevance_score = file.relevance_score.unwrap_or(0);
                         let file_context = format!(
-                            "\n{}", 
-                            self.format_weighted_file_context(&file.file_path, &content_with_lines, relevance_score)
+                            "\n{}",
+                            self.format_weighted_file_context(
+                                &file.file_path,
+                                &content_with_lines,
+                                relevance_score
+                            )
                         );
 
                         // Check if adding this file would exceed our context limit
@@ -718,21 +723,23 @@ impl RepoContextExtractor {
                 Ok(mut file) => {
                     // Calculate combined relevance score including content
                     let combined_score = self.calculate_combined_relevance_score(
-                        &file_path, 
-                        file.content.as_deref(), 
-                        &keywords
+                        &file_path,
+                        file.content.as_deref(),
+                        &keywords,
                     );
-                    
+
                     file.relevance_score = Some(combined_score);
                     files_with_content.push(file);
-                },
+                }
                 Err(e) => warn!("Failed to get content for file {}: {}", file_path, e),
             }
         }
 
         // Re-sort by combined score (highest first)
         files_with_content.sort_by(|a, b| {
-            b.relevance_score.unwrap_or(0).cmp(&a.relevance_score.unwrap_or(0))
+            b.relevance_score
+                .unwrap_or(0)
+                .cmp(&a.relevance_score.unwrap_or(0))
         });
 
         Ok(files_with_content)
@@ -878,7 +885,11 @@ impl RepoContextExtractor {
     }
 
     /// Calculate relevance score based on content keyword frequency
-    pub(crate) fn calculate_content_relevance_score(&self, content: &str, keywords: &[String]) -> usize {
+    pub(crate) fn calculate_content_relevance_score(
+        &self,
+        content: &str,
+        keywords: &[String],
+    ) -> usize {
         if keywords.is_empty() || content.is_empty() {
             return 0;
         }
@@ -898,13 +909,13 @@ impl RepoContextExtractor {
 
     /// Calculate combined relevance score considering both path and content
     pub(crate) fn calculate_combined_relevance_score(
-        &self, 
-        file_path: &str, 
-        content: Option<&str>, 
-        keywords: &[String]
+        &self,
+        file_path: &str,
+        content: Option<&str>,
+        keywords: &[String],
     ) -> usize {
         let path_score = self.calculate_relevance_score(file_path, keywords);
-        
+
         let content_score = match content {
             Some(content_str) => self.calculate_content_relevance_score(content_str, keywords),
             None => 0,
@@ -915,7 +926,12 @@ impl RepoContextExtractor {
     }
 
     /// Format file context with weight information for LLM
-    pub(crate) fn format_weighted_file_context(&self, file_path: &str, content: &str, weight: usize) -> String {
+    pub(crate) fn format_weighted_file_context(
+        &self,
+        file_path: &str,
+        content: &str,
+        weight: usize,
+    ) -> String {
         let relevance_percentage = if weight > 0 {
             std::cmp::min(weight * 2, 100) // Convert weight to a percentage (capped at 100%)
         } else {
