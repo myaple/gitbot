@@ -1066,8 +1066,6 @@ fn decode_jwt(token: &str) -> Result<Claims> {
         
         let formatted = extractor.format_weighted_file_context(file_path, content, weight);
         
-        println!("Formatted output: '{}'", formatted);
-        
         // Should include weight information
         assert!(formatted.contains("Relevance: 50%"), "Should include relevance percentage. Got: {}", formatted);
         assert!(formatted.contains("src/auth.rs"), "Should include file path");
