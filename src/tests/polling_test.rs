@@ -25,6 +25,7 @@ async fn test_max_age_hours_calculation() {
         client_cert_path: None,
         client_key_path: None,
         client_key_password: None,
+        max_comment_length: 1000,
     };
 
     // Get current time and calculate a timestamp from 24 hours ago

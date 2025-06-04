@@ -50,6 +50,7 @@ mod tests {
             client_cert_path: None,
             client_key_path: None,
             client_key_password: None,
+            max_comment_length: 1000,
         };
 
         let settings_arc = Arc::new(settings.clone());
@@ -103,6 +104,7 @@ mod tests {
             client_cert_path: None,
             client_key_path: None,
             client_key_password: None,
+            max_comment_length: 1000,
         };
 
         let settings_arc = Arc::new(settings.clone());
@@ -170,6 +172,7 @@ mod tests {
             client_cert_path: None,
             client_key_path: None,
             client_key_password: None,
+            max_comment_length: 1000,
             stale_issue_days: 30,
             max_age_hours: 24,
             context_repo_path: context_repo,
@@ -810,6 +813,7 @@ mod tests {
             client_cert_path: None,
             client_key_path: None,
             client_key_password: None,
+            max_comment_length: 1000,
         };
 
         let settings_arc = Arc::new(settings.clone());
@@ -915,6 +919,7 @@ fn decode_jwt(token: &str) -> Result<Claims> {
             client_cert_path: None,
             client_key_path: None,
             client_key_password: None,
+            max_comment_length: 1000,
         };
 
         let settings_arc = Arc::new(settings.clone());

@@ -73,6 +73,10 @@ pub struct AppSettings {
     #[arg(long, env = "GITBOT_MAX_CONTEXT_SIZE", default_value_t = 60000)]
     pub max_context_size: usize,
 
+    /// Maximum number of characters per comment to include in context (default: 1000)
+    #[arg(long, env = "GITBOT_MAX_COMMENT_LENGTH", default_value_t = 1000)]
+    pub max_comment_length: usize,
+
     /// Default branch name to use for repository operations (default: main)
     #[arg(long, env = "GITBOT_DEFAULT_BRANCH", default_value = "main")]
     pub default_branch: String,

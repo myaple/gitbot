@@ -40,6 +40,7 @@ mod tests {
             client_cert_path: None,
             client_key_path: None,
             client_key_password: None,
+            max_comment_length: 1000,
             stale_issue_days: 30,
             max_age_hours: 24,
             context_repo_path: None,
@@ -220,6 +221,7 @@ mod tests {
             client_cert_path: None,
             client_key_path: None,
             client_key_password: None,
+            max_comment_length: 1000,
         });
 
         // Create a mock GitLab client
@@ -245,6 +247,7 @@ mod tests {
             client_cert_path: None,
             client_key_path: None,
             client_key_password: None,
+            max_comment_length: 1000,
         };
         let gitlab_client = Arc::new(GitlabApiClient::new(Arc::new(settings.clone())).unwrap());
 
@@ -289,6 +292,7 @@ mod tests {
             client_cert_path: None,
             client_key_path: None,
             client_key_password: None,
+            max_comment_length: 1000,
         });
 
         // Create a cache for the test
@@ -317,6 +321,7 @@ mod tests {
             client_cert_path: None,
             client_key_path: None,
             client_key_password: None,
+            max_comment_length: 1000,
         };
         let gitlab_client = Arc::new(GitlabApiClient::new(Arc::new(settings.clone())).unwrap());
         let file_index_manager = Arc::new(FileIndexManager::new(gitlab_client.clone(), 3600));
@@ -677,5 +682,114 @@ mod tests {
 
         assert!(result.is_err());
         assert!(!cache.check(TEST_MENTION_ID).await); // Cache should NOT contain the ID
+    }
+
+    #[test]
+    fn test_format_comments_for_context() {
+        // Create test notes
+        let notes = vec![
+            GitlabNoteAttributes {
+                id: 1,
+                note: "This is the first comment".to_string(),
+                author: GitlabUser {
+                    id: 123,
+                    username: "user1".to_string(),
+                    name: "User One".to_string(),
+                    avatar_url: None,
+                },
+                project_id: 1,
+                noteable_type: "Issue".to_string(),
+                noteable_id: Some(10),
+                iid: Some(10),
+                url: None,
+                updated_at: "2023-01-01T12:00:00Z".to_string(),
+            },
+            GitlabNoteAttributes {
+                id: 2,
+                note: "This is a very long comment that should be truncated because it exceeds the maximum comment length that we have configured for this test case and should result in a truncated version with ellipsis".to_string(),
+                author: GitlabUser {
+                    id: 456,
+                    username: "user2".to_string(),
+                    name: "User Two".to_string(),
+                    avatar_url: None,
+                },
+                project_id: 1,
+                noteable_type: "Issue".to_string(),
+                noteable_id: Some(10),
+                iid: Some(10),
+                url: None,
+                updated_at: "2023-01-02T14:30:00Z".to_string(),
+            },
+            GitlabNoteAttributes {
+                id: 3,
+                note: "This is the current comment that triggered the bot".to_string(),
+                author: GitlabUser {
+                    id: 789,
+                    username: "user3".to_string(),
+                    name: "User Three".to_string(),
+                    avatar_url: None,
+                },
+                project_id: 1,
+                noteable_type: "Issue".to_string(),
+                noteable_id: Some(10),
+                iid: Some(10),
+                url: None,
+                updated_at: "2023-01-03T09:15:00Z".to_string(),
+            },
+        ];
+
+        let max_comment_length = 50;
+        let current_note_id = 3;
+
+        let result = format_comments_for_context(&notes, max_comment_length, current_note_id);
+
+        // Should contain two comments (skipping the current one)
+        assert!(result.contains("user1"));
+        assert!(result.contains("user2"));
+        assert!(!result.contains("user3"));
+
+        // Should contain the first comment in full
+        assert!(result.contains("This is the first comment"));
+
+        // Should contain truncated version of the long comment
+        assert!(result.contains("... [truncated]"));
+
+        // Should contain formatted timestamps
+        assert!(result.contains("2023-01-01 12:00 UTC"));
+        assert!(result.contains("2023-01-02 14:30 UTC"));
+
+        // Should have proper structure
+        assert!(result.contains("--- Previous Comments ---"));
+        assert!(result.contains("--- End of Comments ---"));
+    }
+
+    #[test]
+    fn test_format_comments_for_context_empty() {
+        let notes = vec![];
+        let result = format_comments_for_context(&notes, 1000, 1);
+        assert_eq!(result, "No previous comments found.");
+    }
+
+    #[test]
+    fn test_format_comments_for_context_only_current() {
+        let notes = vec![GitlabNoteAttributes {
+            id: 5,
+            note: "This is the only comment and it's the current one".to_string(),
+            author: GitlabUser {
+                id: 123,
+                username: "user1".to_string(),
+                name: "User One".to_string(),
+                avatar_url: None,
+            },
+            project_id: 1,
+            noteable_type: "Issue".to_string(),
+            noteable_id: Some(10),
+            iid: Some(10),
+            url: None,
+            updated_at: "2023-01-01T12:00:00Z".to_string(),
+        }];
+
+        let result = format_comments_for_context(&notes, 1000, 5);
+        assert_eq!(result, "No previous comments found.");
     }
 }

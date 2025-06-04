@@ -28,6 +28,7 @@ mod tests {
             client_cert_path: None,
             client_key_path: None,
             client_key_password: None,
+            max_comment_length: 1000,
         };
 
         let settings_arc = Arc::new(settings);

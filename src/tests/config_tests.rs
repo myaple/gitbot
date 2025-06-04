@@ -33,6 +33,7 @@ fn test_create_app_settings() {
         client_cert_path: None,
         client_key_path: None,
         client_key_password: None,
+        max_comment_length: 1000,
     };
 
     assert_eq!(settings.gitlab_url, "https://gitlab.example.com");
@@ -80,6 +81,7 @@ fn test_client_certificate_config_with_env_vars() {
         client_cert_path: Some("/path/to/cert.pem".to_string()),
         client_key_path: Some("/path/to/key.pem".to_string()),
         client_key_password: Some("password123".to_string()),
+        max_comment_length: 1000,
     };
 
     assert_eq!(

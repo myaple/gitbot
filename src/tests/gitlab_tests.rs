@@ -27,6 +27,7 @@ fn create_test_settings(base_url: String) -> AppSettings {
         client_cert_path: None,
         client_key_path: None,
         client_key_password: None,
+        max_comment_length: 1000,
     }
 }
 
@@ -826,4 +827,111 @@ async fn test_get_merge_request_changes() {
     assert!(changes[0].diff.contains("Hello, World!"));
     assert_eq!(changes[1].new_path, "README.md");
     assert!(changes[1].diff.contains("A simple Rust project."));
+}
+
+#[tokio::test]
+async fn test_get_all_issue_notes() {
+    let mut server = mockito::Server::new_async().await;
+    let settings = Arc::new(create_test_settings(server.url()));
+    let client = GitlabApiClient::new(settings).unwrap();
+
+    let mock_response = json!([
+        {
+            "id": 1,
+            "body": "First comment",
+            "author": {
+                "id": 123,
+                "username": "user1",
+                "name": "User One",
+                "avatar_url": null
+            },
+            "project_id": 1,
+            "noteable_type": "Issue",
+            "noteable_id": 10,
+            "iid": 10,
+            "url": null,
+            "updated_at": "2023-01-01T12:00:00Z"
+        },
+        {
+            "id": 2,
+            "body": "Second comment",
+            "author": {
+                "id": 456,
+                "username": "user2",
+                "name": "User Two",
+                "avatar_url": null
+            },
+            "project_id": 1,
+            "noteable_type": "Issue",
+            "noteable_id": 10,
+            "iid": 10,
+            "url": null,
+            "updated_at": "2023-01-02T14:30:00Z"
+        }
+    ]);
+
+    let _m = server
+        .mock("GET", "/api/v4/projects/1/issues/10/notes")
+        .match_query(mockito::Matcher::AllOf(vec![
+            mockito::Matcher::UrlEncoded("sort".into(), "asc".into()),
+            mockito::Matcher::UrlEncoded("per_page".into(), "100".into()),
+        ]))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(mock_response.to_string())
+        .create_async()
+        .await;
+
+    let notes = client.get_all_issue_notes(1, 10).await.unwrap();
+    assert_eq!(notes.len(), 2);
+    assert_eq!(notes[0].id, 1);
+    assert_eq!(notes[0].note, "First comment");
+    assert_eq!(notes[0].author.username, "user1");
+    assert_eq!(notes[1].id, 2);
+    assert_eq!(notes[1].note, "Second comment");
+    assert_eq!(notes[1].author.username, "user2");
+}
+
+#[tokio::test]
+async fn test_get_all_merge_request_notes() {
+    let mut server = mockito::Server::new_async().await;
+    let settings = Arc::new(create_test_settings(server.url()));
+    let client = GitlabApiClient::new(settings).unwrap();
+
+    let mock_response = json!([
+        {
+            "id": 3,
+            "body": "First MR comment",
+            "author": {
+                "id": 789,
+                "username": "reviewer1",
+                "name": "Reviewer One",
+                "avatar_url": null
+            },
+            "project_id": 1,
+            "noteable_type": "MergeRequest",
+            "noteable_id": 20,
+            "iid": 20,
+            "url": null,
+            "updated_at": "2023-01-01T15:00:00Z"
+        }
+    ]);
+
+    let _m = server
+        .mock("GET", "/api/v4/projects/1/merge_requests/20/notes")
+        .match_query(mockito::Matcher::AllOf(vec![
+            mockito::Matcher::UrlEncoded("sort".into(), "asc".into()),
+            mockito::Matcher::UrlEncoded("per_page".into(), "100".into()),
+        ]))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(mock_response.to_string())
+        .create_async()
+        .await;
+
+    let notes = client.get_all_merge_request_notes(1, 20).await.unwrap();
+    assert_eq!(notes.len(), 1);
+    assert_eq!(notes[0].id, 3);
+    assert_eq!(notes[0].note, "First MR comment");
+    assert_eq!(notes[0].author.username, "reviewer1");
 }
