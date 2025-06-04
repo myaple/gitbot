@@ -369,36 +369,31 @@ impl RepoContextExtractor {
                     let matches = self.extract_relevant_file_sections(&content, &keywords);
 
                     if !matches.is_empty() {
-                        // Include relevance score in the file header
-                        let relevance_score = file.relevance_score.unwrap_or(0);
-                        let relevance_percentage = if relevance_score > 0 {
-                            std::cmp::min(relevance_score * 2, 100) // Convert to percentage (capped at 100%)
-                        } else {
-                            0
-                        };
+                        // Build the file content with line numbers and sections
+                        let mut content_with_lines = String::new();
                         
-                        let mut file_context = format!(
-                            "\n--- File: {} (Relevance: {}%) ---\n", 
-                            file.file_path, 
-                            relevance_percentage
-                        );
-
                         for (i, section) in matches.iter().enumerate() {
                             if i > 0 {
-                                file_context.push_str("\n...\n\n"); // Separator between sections
+                                content_with_lines.push_str("\n...\n\n"); // Separator between sections
                             }
 
-                            file_context.push_str(&format!(
+                            content_with_lines.push_str(&format!(
                                 "Lines {}-{}:\n",
                                 section.start_line, section.end_line
                             ));
 
                             for (j, line) in section.lines.iter().enumerate() {
                                 let line_number = section.start_line + j;
-                                file_context.push_str(&format!("{:4}: {}\n", line_number, line));
+                                content_with_lines.push_str(&format!("{:4}: {}\n", line_number, line));
                             }
                         }
-                        file_context.push('\n');
+                        
+                        // Use the format_weighted_file_context function
+                        let relevance_score = file.relevance_score.unwrap_or(0);
+                        let file_context = format!(
+                            "\n{}", 
+                            self.format_weighted_file_context(&file.file_path, &content_with_lines, relevance_score)
+                        );
 
                         // Check if adding this file would exceed our context limit
                         if total_size + file_context.len() > self.settings.max_context_size {
