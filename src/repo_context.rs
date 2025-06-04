@@ -17,7 +17,7 @@ const CONTEXT_LINES: usize = 10; // Number of lines to include before and after 
 /// Estimates the number of tokens in a text string.
 /// Uses a heuristic of approximately 4 characters per token for English text.
 /// This is a rough approximation but sufficient for context size limiting.
-fn estimate_tokens(text: &str) -> usize {
+pub(crate) fn estimate_tokens(text: &str) -> usize {
     // Simple heuristic: roughly 4 characters per token for English text
     // This accounts for spaces, punctuation, and typical word lengths
     let char_count = text.chars().count();
@@ -937,43 +937,5 @@ impl RepoContextExtractor {
         }
 
         matches
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_estimate_tokens() {
-        // Test basic token estimation
-        assert_eq!(estimate_tokens(""), 0);
-        assert_eq!(estimate_tokens("a"), 1);
-        assert_eq!(estimate_tokens("abcd"), 1); // 4 chars = 1 token
-        assert_eq!(estimate_tokens("abcde"), 2); // 5 chars = 2 tokens (rounded up)
-
-        // Test realistic text
-        let text = "This is a typical sentence with several words.";
-        let tokens = estimate_tokens(text);
-        let chars = text.chars().count();
-
-        // Should be roughly chars/4, but at least some tokens
-        assert!(tokens > 0);
-        assert!(tokens <= chars); // Should never exceed character count
-        assert!(tokens >= chars / 6); // Should be at least chars/6 (conservative)
-
-        // Test with code-like content
-        let code =
-            "pub fn estimate_tokens(text: &str) -> usize {\n    (text.chars().count() + 3) / 4\n}";
-        let code_tokens = estimate_tokens(code);
-        assert!(code_tokens > 10); // Should have a reasonable number of tokens
-
-        println!("Text: '{}' -> {} tokens ({} chars)", text, tokens, chars);
-        println!(
-            "Code: '{}' -> {} tokens ({} chars)",
-            code,
-            code_tokens,
-            code.chars().count()
-        );
     }
 }
