@@ -13,6 +13,16 @@ use crate::models::{GitlabIssue, GitlabMergeRequest, GitlabProject};
 pub(crate) const MAX_SOURCE_FILES: usize = 250; // Maximum number of source files to include in context
 pub(crate) const AGENTS_MD_FILE: &str = "AGENTS.md";
 
+/// Estimates the number of tokens in a text string.
+/// Uses a heuristic of approximately 4 characters per token for English text.
+/// This is a rough approximation but sufficient for context size limiting.
+pub(crate) fn estimate_tokens(text: &str) -> usize {
+    // Simple heuristic: roughly 4 characters per token for English text
+    // This accounts for spaces, punctuation, and typical word lengths
+    let char_count = text.chars().count();
+    char_count.div_ceil(4)
+}
+
 #[derive(Debug, Deserialize)]
 pub struct GitlabFile {
     pub file_path: String,
@@ -289,7 +299,7 @@ impl RepoContextExtractor {
 
         // Format the context
         let mut context = String::new();
-        let mut total_size = 0;
+        let mut total_tokens = 0;
         let mut has_any_content = false;
 
         // First add the list of all source files from both projects
@@ -317,7 +327,7 @@ impl RepoContextExtractor {
                 source_files.join("\n")
             );
             context.push_str(&files_list);
-            total_size += files_list.len();
+            total_tokens += estimate_tokens(&files_list);
         }
 
         // Add AGENTS.md content if available
@@ -325,9 +335,11 @@ impl RepoContextExtractor {
             Ok(Some(agents_md)) => {
                 has_any_content = true;
                 let agents_md_context = format!("\n--- {} ---\n{}\n", AGENTS_MD_FILE, agents_md);
-                if total_size + agents_md_context.len() <= self.settings.max_context_size {
+                if total_tokens + estimate_tokens(&agents_md_context)
+                    <= self.settings.max_context_size
+                {
                     context.push_str(&agents_md_context);
-                    total_size += agents_md_context.len();
+                    total_tokens += estimate_tokens(&agents_md_context);
                 } else {
                     warn!(
                         "AGENTS.md content too large to fit in context for issue #{}",
@@ -400,7 +412,9 @@ impl RepoContextExtractor {
                         );
 
                         // Check if adding this file would exceed our context limit
-                        if total_size + file_context.len() > self.settings.max_context_size {
+                        if total_tokens + estimate_tokens(&file_context)
+                            > self.settings.max_context_size
+                        {
                             // If we're about to exceed the limit, add a truncation notice
                             context.push_str(
                                 "\n[Additional files omitted due to context size limits]\n",
@@ -409,7 +423,7 @@ impl RepoContextExtractor {
                         }
 
                         context.push_str(&file_context);
-                        total_size += file_context.len();
+                        total_tokens += estimate_tokens(&file_context);
                     }
                 }
             }
@@ -442,7 +456,7 @@ impl RepoContextExtractor {
 
         let mut context_for_llm = String::new();
         let mut context_for_comment = String::new();
-        let mut total_size = 0;
+        let mut total_tokens = 0;
         let mut has_any_content = false;
 
         // First add the list of all source files
@@ -470,7 +484,7 @@ impl RepoContextExtractor {
                 source_files.join("\n")
             );
             context_for_llm.push_str(&files_list);
-            total_size += files_list.len();
+            total_tokens += estimate_tokens(&files_list);
         }
 
         // Add AGENTS.md content if available
@@ -478,9 +492,11 @@ impl RepoContextExtractor {
             Ok(Some(agents_md)) => {
                 has_any_content = true;
                 let agents_md_context = format!("\n--- {} ---\n{}\n", AGENTS_MD_FILE, agents_md);
-                if total_size + agents_md_context.len() <= self.settings.max_context_size {
+                if total_tokens + estimate_tokens(&agents_md_context)
+                    <= self.settings.max_context_size
+                {
                     context_for_llm.push_str(&agents_md_context);
-                    total_size += agents_md_context.len();
+                    total_tokens += estimate_tokens(&agents_md_context);
                 } else {
                     warn!(
                         "AGENTS.md content too large to fit in context for MR !{}",
@@ -520,16 +536,18 @@ impl RepoContextExtractor {
             "\n--- Latest Pipeline Status ---\nNo pipeline information available for this merge request.\n---".to_string()
         };
 
-        if total_size + pipeline_status_context.len() <= self.settings.max_context_size {
+        if total_tokens + estimate_tokens(&pipeline_status_context)
+            <= self.settings.max_context_size
+        {
             context_for_llm.push_str(&pipeline_status_context);
-            total_size += pipeline_status_context.len();
+            total_tokens += estimate_tokens(&pipeline_status_context);
         } else {
             warn!(
                 "Pipeline status too large to fit in context for MR !{}",
                 mr.iid
             );
             context_for_llm.push_str("\n--- Latest Pipeline Status ---\n[Pipeline status omitted due to context size limits]\n---");
-            // We don't add the size of the omission message to total_size,
+            // We don't add the tokens of the omission message to total_tokens,
             // as it's a fixed small string replacing potentially larger content.
             // Or, if precise accounting is needed:
             // total_size += "\n--- Latest Pipeline Status ---\n[Pipeline status omitted due to context size limits]\n---".len();
@@ -606,14 +624,14 @@ impl RepoContextExtractor {
             }
 
             // Check if adding this context would exceed our context limit
-            if total_size + file_context.len() > self.settings.max_context_size {
+            if total_tokens + estimate_tokens(&file_context) > self.settings.max_context_size {
                 context_for_llm
                     .push_str("\n[Additional files omitted due to context size limits]\n");
                 break;
             }
 
             context_for_llm.push_str(&file_context);
-            total_size += file_context.len();
+            total_tokens += estimate_tokens(&file_context);
         }
 
         if !has_any_content {

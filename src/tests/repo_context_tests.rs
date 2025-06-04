@@ -1085,6 +1085,30 @@ fn decode_jwt(token: &str) -> Result<Claims> {
     }
 
     #[test]
+    fn test_estimate_tokens() {
+        // Test basic token estimation
+        assert_eq!(estimate_tokens(""), 0);
+        assert_eq!(estimate_tokens("a"), 1);
+        assert_eq!(estimate_tokens("abcd"), 1); // 4 chars = 1 token
+        assert_eq!(estimate_tokens("abcde"), 2); // 5 chars = 2 tokens (rounded up)
+
+        // Test realistic text
+        let text = "This is a typical sentence with several words.";
+        let tokens = estimate_tokens(text);
+        let chars = text.chars().count();
+
+        // Should be roughly chars/4, but at least some tokens
+        assert!(tokens > 0);
+        assert!(tokens <= chars); // Should never exceed character count
+        assert!(tokens >= chars / 6); // Should be at least chars/6 (conservative)
+
+        // Test with code-like content
+        let code =
+            "pub fn estimate_tokens(text: &str) -> usize {\n    (text.chars().count() + 3) / 4\n}";
+        let code_tokens = estimate_tokens(code);
+        assert!(code_tokens > 10); // Should have a reasonable number of tokens
+    }
+
     fn test_calculate_content_relevance_score() {
         let settings = AppSettings {
             openai_model: "gpt-3.5-turbo".to_string(),
@@ -1102,11 +1126,12 @@ fn decode_jwt(token: &str) -> Result<Claims> {
             max_age_hours: 24,
             context_repo_path: None,
             max_context_size: 60000,
+            max_comment_length: 1000,
+            context_lines: 10,
             default_branch: "main".to_string(),
             client_cert_path: None,
             client_key_path: None,
             client_key_password: None,
-            max_comment_length: 1000,
         };
 
         let settings_arc = Arc::new(settings.clone());
@@ -1197,6 +1222,7 @@ fn decode_jwt(token: &str) -> Result<Claims> {
             client_key_path: None,
             client_key_password: None,
             max_comment_length: 1000,
+            context_lines: 10,
         };
 
         let settings_arc = Arc::new(settings.clone());
