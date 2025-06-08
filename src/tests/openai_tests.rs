@@ -5,6 +5,26 @@ use mockito::Matcher;
 use reqwest::StatusCode;
 use serde_json::json;
 
+fn create_test_chat_message(role: &str, content: &str) -> OpenAIChatMessage {
+    OpenAIChatMessage {
+        role: role.to_string(),
+        content: Some(content.to_string()),
+        tool_calls: None,
+        tool_call_id: None,
+    }
+}
+
+fn create_test_chat_request(content: &str) -> OpenAIChatRequest {
+    OpenAIChatRequest {
+        model: "test-model".to_string(),
+        messages: vec![create_test_chat_message("user", content)],
+        temperature: Some(0.7),
+        max_tokens: Some(50),
+        tools: None,
+        tool_choice: None,
+    }
+}
+
 fn create_test_settings(base_url: String) -> AppSettings {
     AppSettings {
         openai_custom_url: base_url,
@@ -58,15 +78,7 @@ async fn test_send_chat_completion_success() {
     let settings = create_test_settings(base_mock_url.clone());
     let client = OpenAIApiClient::new(&settings).unwrap();
 
-    let request_payload = OpenAIChatRequest {
-        model: "test-model".to_string(),
-        messages: vec![OpenAIChatMessage {
-            role: "user".to_string(),
-            content: "Hello".to_string(),
-        }],
-        temperature: Some(0.7),
-        max_tokens: Some(50),
-    };
+    let request_payload = create_test_chat_request("Hello");
 
     let mock_response_body = json!({
         "id": "chatcmpl-123",
@@ -112,7 +124,10 @@ async fn test_send_chat_completion_success() {
     );
     let response = response_result.unwrap();
     assert!(!response.choices.is_empty());
-    assert_eq!(response.choices[0].message.content, "Hi there!");
+    assert_eq!(
+        response.choices[0].message.content.as_ref().unwrap(),
+        "Hi there!"
+    );
 }
 
 #[tokio::test]
@@ -124,15 +139,7 @@ async fn test_send_chat_completion_success_with_path_no_trailing_slash() {
     let settings = create_test_settings(base_mock_url_with_path.clone());
     let client = OpenAIApiClient::new(&settings).unwrap();
 
-    let request_payload = OpenAIChatRequest {
-        model: "test-model".to_string(),
-        messages: vec![OpenAIChatMessage {
-            role: "user".to_string(),
-            content: "Hello from /v1".to_string(),
-        }],
-        temperature: Some(0.7),
-        max_tokens: Some(50),
-    };
+    let request_payload = create_test_chat_request("Hello from /v1");
 
     let mock_response_body = json!({
         "id": "chatcmpl-v1-123",
@@ -177,7 +184,10 @@ async fn test_send_chat_completion_success_with_path_no_trailing_slash() {
     );
     let response = response_result.unwrap();
     assert!(!response.choices.is_empty());
-    assert_eq!(response.choices[0].message.content, "Hi there from /v1!");
+    assert_eq!(
+        response.choices[0].message.content.as_ref().unwrap(),
+        "Hi there from /v1!"
+    );
 }
 
 #[tokio::test]
@@ -189,15 +199,7 @@ async fn test_send_chat_completion_success_with_path_with_trailing_slash() {
     let settings = create_test_settings(base_mock_url_with_path.clone());
     let client = OpenAIApiClient::new(&settings).unwrap();
 
-    let request_payload = OpenAIChatRequest {
-        model: "test-model".to_string(),
-        messages: vec![OpenAIChatMessage {
-            role: "user".to_string(),
-            content: "Hello from /v1/".to_string(),
-        }],
-        temperature: Some(0.7),
-        max_tokens: Some(50),
-    };
+    let request_payload = create_test_chat_request("Hello from /v1/");
 
     let mock_response_body = json!({
         "id": "chatcmpl-v1slash-123",
@@ -243,7 +245,10 @@ async fn test_send_chat_completion_success_with_path_with_trailing_slash() {
     );
     let response = response_result.unwrap();
     assert!(!response.choices.is_empty());
-    assert_eq!(response.choices[0].message.content, "Hi there from /v1/!");
+    assert_eq!(
+        response.choices[0].message.content.as_ref().unwrap(),
+        "Hi there from /v1/!"
+    );
 }
 
 #[tokio::test]
@@ -258,10 +263,14 @@ async fn test_send_chat_completion_api_error() {
         model: "test-model".to_string(),
         messages: vec![OpenAIChatMessage {
             role: "user".to_string(),
-            content: "Trigger error".to_string(),
+            content: Some("Trigger error".to_string()),
+            tool_calls: None,
+            tool_call_id: None,
         }],
         temperature: None,
         max_tokens: None,
+        tools: None,
+        tool_choice: None,
     };
 
     let error_body = json!({"error": {"message": "Invalid API key", "type": "auth_error"}});
@@ -303,10 +312,14 @@ async fn test_send_chat_completion_empty_choices() {
         model: "test-model-empty-choice".to_string(),
         messages: vec![OpenAIChatMessage {
             role: "user".to_string(),
-            content: "Hello".to_string(),
+            content: Some("Hello".to_string()),
+            tool_calls: None,
+            tool_call_id: None,
         }],
         temperature: Some(0.5),
         max_tokens: Some(10),
+        tools: None,
+        tool_choice: None,
     };
 
     let mock_response_body = json!({

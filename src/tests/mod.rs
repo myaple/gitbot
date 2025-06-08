@@ -23,3 +23,5 @@ pub mod polling_test;
 pub mod polling_tests;
 #[cfg(test)]
 pub mod repo_context_tests;
+#[cfg(test)]
+pub mod tool_use_tests;
