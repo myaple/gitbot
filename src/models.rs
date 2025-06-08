@@ -96,9 +96,42 @@ pub struct GitlabNoteEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct OpenAIToolCall {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub tool_type: String, // "function"
+    pub function: OpenAIFunctionCall,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct OpenAIFunctionCall {
+    pub name: String,
+    pub arguments: String, // JSON string
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct OpenAIChatMessage {
-    pub role: String, // e.g., "system", "user", "assistant"
-    pub content: String,
+    pub role: String, // e.g., "system", "user", "assistant", "tool"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<OpenAIToolCall>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>, // For tool response messages
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct OpenAITool {
+    #[serde(rename = "type")]
+    pub tool_type: String, // "function"
+    pub function: OpenAIFunction,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct OpenAIFunction {
+    pub name: String,
+    pub description: String,
+    pub parameters: serde_json::Value, // JSON schema for parameters
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -107,6 +140,10 @@ pub struct OpenAIChatRequest {
     pub messages: Vec<OpenAIChatMessage>,
     pub temperature: Option<f32>, // e.g., 0.7
     pub max_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<OpenAITool>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_choice: Option<String>, // "auto", "none", or specific function
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

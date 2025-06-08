@@ -680,13 +680,17 @@ async fn get_llm_reply(
     // Call OpenAI Client
     let messages = vec![OpenAIChatMessage {
         role: "user".to_string(),
-        content: prompt_text.to_string(), // Convert &str to String
+        content: Some(prompt_text.to_string()),
+        tool_calls: None,
+        tool_call_id: None,
     }];
     let openai_request = OpenAIChatRequest {
         model: config.openai_model.clone(),
         messages,
         temperature: Some(config.openai_temperature),
         max_tokens: Some(config.openai_max_tokens),
+        tools: None,
+        tool_choice: None,
     };
 
     let openai_response = openai_client
@@ -705,10 +709,14 @@ async fn get_llm_reply(
         .first()
         .ok_or_else(|| anyhow!("No response choices from OpenAI"))
         .and_then(|choice| {
-            if choice.message.content.is_empty() {
-                Err(anyhow!("LLM response content is empty"))
+            if let Some(content) = &choice.message.content {
+                if content.is_empty() {
+                    Err(anyhow!("LLM response content is empty"))
+                } else {
+                    Ok(content.clone())
+                }
             } else {
-                Ok(choice.message.content.clone())
+                Err(anyhow!("LLM response has no content"))
             }
         })
 }
