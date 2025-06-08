@@ -7,7 +7,10 @@ use crate::config::AppSettings;
 use crate::file_indexer::FileIndexManager;
 use crate::gitlab::{GitlabApiClient, GitlabError};
 use crate::mention_cache::MentionCache;
-use crate::models::{GitlabNoteAttributes, GitlabNoteEvent, OpenAIChatMessage, OpenAIChatRequest, OpenAITool, OpenAIFunction, OpenAIToolCall};
+use crate::models::{
+    GitlabNoteAttributes, GitlabNoteEvent, OpenAIChatMessage, OpenAIChatRequest, OpenAIFunction,
+    OpenAITool, OpenAIToolCall,
+};
 use crate::openai::OpenAIApiClient;
 use crate::repo_context::RepoContextExtractor;
 
@@ -486,7 +489,8 @@ async fn generate_and_post_reply(
         gitlab_client,
         project_id,
         file_index_manager,
-    ).await?;
+    )
+    .await?;
 
     // Format final comment
     let final_comment_body = format_final_reply_body(
@@ -579,7 +583,15 @@ pub async fn process_mention(
         is_issue,
     };
 
-    generate_and_post_reply(&event, &gitlab_client, &config, project_id, reply_context, &file_index_manager).await?;
+    generate_and_post_reply(
+        &event,
+        &gitlab_client,
+        &config,
+        project_id,
+        reply_context,
+        &file_index_manager,
+    )
+    .await?;
 
     // Add to cache after successful processing
     processed_mentions_cache.add(mention_id).await;
@@ -680,55 +692,6 @@ async fn post_reply_to_gitlab(
     Ok(())
 }
 
-async fn get_llm_reply(
-    openai_client: &OpenAIApiClient,
-    config: &Arc<AppSettings>,
-    prompt_text: &str,
-) -> Result<String> {
-    // Call OpenAI Client
-    let messages = vec![OpenAIChatMessage {
-        role: "user".to_string(),
-        content: Some(prompt_text.to_string()),
-        tool_calls: None,
-        tool_call_id: None,
-    }];
-    let openai_request = OpenAIChatRequest {
-        model: config.openai_model.clone(),
-        messages,
-        temperature: Some(config.openai_temperature),
-        max_tokens: Some(config.openai_max_tokens),
-        tools: None,
-        tool_choice: None,
-    };
-
-    let openai_response = openai_client
-        .send_chat_completion(&openai_request)
-        .await
-        .map_err(|e| {
-            error!("Failed to communicate with OpenAI: {}", e);
-            anyhow!("Failed to communicate with OpenAI: {}", e)
-        })?;
-
-    debug!("OpenAI response: {:?}", openai_response);
-
-    // Extract LLM's Reply
-    openai_response
-        .choices
-        .first()
-        .ok_or_else(|| anyhow!("No response choices from OpenAI"))
-        .and_then(|choice| {
-            if let Some(content) = &choice.message.content {
-                if content.is_empty() {
-                    Err(anyhow!("LLM response content is empty"))
-                } else {
-                    Ok(content.clone())
-                }
-            } else {
-                Err(anyhow!("LLM response has no content"))
-            }
-        })
-}
-
 // Tool function definitions for LLM tool use
 fn create_repository_tools() -> Vec<OpenAITool> {
     vec![
@@ -817,7 +780,7 @@ pub async fn execute_tool_call(
             let file_path = function_args["file_path"]
                 .as_str()
                 .ok_or_else(|| anyhow!("Missing file_path parameter"))?;
-            
+
             match gitlab_client.get_file_content(project_id, file_path).await {
                 Ok(file) => {
                     if let Some(content) = file.content {
@@ -835,10 +798,12 @@ pub async fn execute_tool_call(
                 .ok_or_else(|| anyhow!("Missing file_path parameter"))?;
             let start_line = function_args["start_line"]
                 .as_i64()
-                .ok_or_else(|| anyhow!("Missing start_line parameter"))? as usize;
+                .ok_or_else(|| anyhow!("Missing start_line parameter"))?
+                as usize;
             let end_line = function_args["end_line"]
                 .as_i64()
-                .ok_or_else(|| anyhow!("Missing end_line parameter"))? as usize;
+                .ok_or_else(|| anyhow!("Missing end_line parameter"))?
+                as usize;
 
             if start_line == 0 {
                 return Ok("Error: Line numbers must be 1-based (start from 1)".to_string());
@@ -848,9 +813,17 @@ pub async fn execute_tool_call(
                 Ok(file) => {
                     if let Some(content) = file.content {
                         let lines: Vec<&str> = content.lines().collect();
-                        if start_line > lines.len() || end_line > lines.len() || start_line > end_line {
-                            Ok(format!("Error: Invalid line range {}-{} for file {} (file has {} lines)", 
-                                start_line, end_line, file_path, lines.len()))
+                        if start_line > lines.len()
+                            || end_line > lines.len()
+                            || start_line > end_line
+                        {
+                            Ok(format!(
+                                "Error: Invalid line range {}-{} for file {} (file has {} lines)",
+                                start_line,
+                                end_line,
+                                file_path,
+                                lines.len()
+                            ))
                         } else {
                             let selected_lines = &lines[(start_line - 1)..end_line];
                             let result = selected_lines
@@ -859,7 +832,10 @@ pub async fn execute_tool_call(
                                 .map(|(i, line)| format!("{}: {}", start_line + i, line))
                                 .collect::<Vec<_>>()
                                 .join("\n");
-                            Ok(format!("Lines {}-{} of {}:\n\n{}", start_line, end_line, file_path, result))
+                            Ok(format!(
+                                "Lines {}-{} of {}:\n\n{}",
+                                start_line, end_line, file_path, result
+                            ))
                         }
                     } else {
                         Ok(format!("File {} exists but has no content", file_path))
@@ -876,15 +852,12 @@ pub async fn execute_tool_call(
                 .iter()
                 .filter_map(|v| v.as_str().map(String::from))
                 .collect();
-            
+
             if keywords.is_empty() {
                 return Ok("Error: At least one keyword is required for search".to_string());
             }
 
-            let limit = function_args["limit"]
-                .as_i64()
-                .unwrap_or(5)
-                .min(10) as usize;
+            let limit = function_args["limit"].as_i64().unwrap_or(5).min(10) as usize;
 
             match file_index_manager.search_files(project_id, &keywords).await {
                 Ok(files) => {
@@ -897,14 +870,21 @@ pub async fn execute_tool_call(
                             .map(|f| format!("- {} (size: {} bytes)", f.file_path, f.size))
                             .collect::<Vec<_>>()
                             .join("\n");
-                        Ok(format!("Found {} files matching keywords {:?}:\n\n{}", 
-                            limited_files.len(), keywords, result))
+                        Ok(format!(
+                            "Found {} files matching keywords {:?}:\n\n{}",
+                            limited_files.len(),
+                            keywords,
+                            result
+                        ))
                     }
                 }
                 Err(e) => Ok(format!("Error searching files: {}", e)),
             }
         }
-        _ => Ok(format!("Unknown tool function: {}", tool_call.function.name)),
+        _ => Ok(format!(
+            "Unknown tool function: {}",
+            tool_call.function.name
+        )),
     }
 }
 
@@ -947,9 +927,15 @@ async fn get_llm_reply_with_tools(
                 anyhow!("Failed to communicate with OpenAI: {}", e)
             })?;
 
-        debug!("OpenAI response iteration {}: {:?}", iteration + 1, openai_response);
+        debug!(
+            "OpenAI response iteration {}: {:?}",
+            iteration + 1,
+            openai_response
+        );
 
-        let choice = openai_response.choices.first()
+        let choice = openai_response
+            .choices
+            .first()
             .ok_or_else(|| anyhow!("No response choices from OpenAI"))?;
 
         // Add the assistant's response to the conversation
@@ -958,15 +944,12 @@ async fn get_llm_reply_with_tools(
         // Check if the assistant wants to call tools
         if let Some(tool_calls) = &choice.message.tool_calls {
             debug!("Assistant requested {} tool calls", tool_calls.len());
-            
+
             // Execute each tool call
             for tool_call in tool_calls {
-                let tool_result = execute_tool_call(
-                    tool_call,
-                    gitlab_client,
-                    project_id,
-                    file_index_manager,
-                ).await?;
+                let tool_result =
+                    execute_tool_call(tool_call, gitlab_client, project_id, file_index_manager)
+                        .await?;
 
                 // Add tool response to conversation
                 messages.push(OpenAIChatMessage {
@@ -990,7 +973,7 @@ async fn get_llm_reply_with_tools(
 
     // After max iterations, make one final call without tools to get the answer
     debug!("Max iterations reached, making final call without tools");
-    
+
     let final_request = OpenAIChatRequest {
         model: config.openai_model.clone(),
         messages,
@@ -1008,7 +991,9 @@ async fn get_llm_reply_with_tools(
             anyhow!("Failed to communicate with OpenAI: {}", e)
         })?;
 
-    let final_choice = final_response.choices.first()
+    let final_choice = final_response
+        .choices
+        .first()
         .ok_or_else(|| anyhow!("No response choices from OpenAI on final call"))?;
 
     if let Some(content) = &final_choice.message.content {

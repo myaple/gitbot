@@ -2,7 +2,7 @@ use crate::config::AppSettings;
 use crate::file_indexer::FileIndexManager;
 use crate::gitlab::GitlabApiClient;
 use crate::handlers::execute_tool_call;
-use crate::models::{OpenAIToolCall, OpenAIFunctionCall};
+use crate::models::{OpenAIFunctionCall, OpenAIToolCall};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -40,7 +40,7 @@ mod tests {
     async fn test_execute_get_file_content_tool() {
         let mut server = mockito::Server::new_async().await;
         let settings = create_test_settings(&server.url());
-        
+
         let mock_file_content = json!({
             "file_name": "main.rs",
             "file_path": "src/main.rs",
@@ -64,8 +64,7 @@ mod tests {
             .await;
 
         let gitlab_client = Arc::new(
-            GitlabApiClient::new(settings.clone())
-                .expect("Failed to create GitlabApiClient")
+            GitlabApiClient::new(settings.clone()).expect("Failed to create GitlabApiClient"),
         );
 
         let file_index_manager = Arc::new(FileIndexManager::new(gitlab_client.clone(), 3600));
@@ -92,7 +91,7 @@ mod tests {
     async fn test_execute_get_file_lines_tool() {
         let mut server = mockito::Server::new_async().await;
         let settings = create_test_settings(&server.url());
-        
+
         let file_content = "line 1\nline 2\nline 3\nline 4\nline 5";
         let mock_file_content = json!({
             "file_name": "test.txt",
@@ -117,8 +116,7 @@ mod tests {
             .await;
 
         let gitlab_client = Arc::new(
-            GitlabApiClient::new(settings.clone())
-                .expect("Failed to create GitlabApiClient")
+            GitlabApiClient::new(settings.clone()).expect("Failed to create GitlabApiClient"),
         );
 
         let file_index_manager = Arc::new(FileIndexManager::new(gitlab_client.clone(), 3600));
@@ -132,7 +130,8 @@ mod tests {
                     "file_path": "test.txt",
                     "start_line": 2,
                     "end_line": 4
-                }).to_string(),
+                })
+                .to_string(),
             },
         };
 
@@ -153,7 +152,7 @@ mod tests {
     async fn test_execute_get_file_lines_invalid_range() {
         let mut server = mockito::Server::new_async().await;
         let settings = create_test_settings(&server.url());
-        
+
         let file_content = "line 1\nline 2\nline 3";
         let mock_file_content = json!({
             "file_name": "test.txt",
@@ -178,8 +177,7 @@ mod tests {
             .await;
 
         let gitlab_client = Arc::new(
-            GitlabApiClient::new(settings.clone())
-                .expect("Failed to create GitlabApiClient")
+            GitlabApiClient::new(settings.clone()).expect("Failed to create GitlabApiClient"),
         );
 
         let file_index_manager = Arc::new(FileIndexManager::new(gitlab_client.clone(), 3600));
@@ -193,7 +191,8 @@ mod tests {
                     "file_path": "test.txt",
                     "start_line": 2,
                     "end_line": 10  // Invalid: beyond file length
-                }).to_string(),
+                })
+                .to_string(),
             },
         };
 
@@ -209,10 +208,8 @@ mod tests {
     #[tokio::test]
     async fn test_execute_search_repository_files_tool() {
         let settings = create_test_settings("https://gitlab.example.com/api/v4");
-        let gitlab_client = Arc::new(
-            GitlabApiClient::new(settings)
-                .expect("Failed to create GitlabApiClient")
-        );
+        let gitlab_client =
+            Arc::new(GitlabApiClient::new(settings).expect("Failed to create GitlabApiClient"));
 
         let file_index_manager = Arc::new(FileIndexManager::new(gitlab_client.clone(), 3600));
 
@@ -224,7 +221,8 @@ mod tests {
                 arguments: json!({
                     "keywords": ["main", "rust"],
                     "limit": 3
-                }).to_string(),
+                })
+                .to_string(),
             },
         };
 
@@ -240,10 +238,8 @@ mod tests {
     #[tokio::test]
     async fn test_execute_unknown_tool() {
         let settings = create_test_settings("https://gitlab.example.com/api/v4");
-        let gitlab_client = Arc::new(
-            GitlabApiClient::new(settings)
-                .expect("Failed to create GitlabApiClient")
-        );
+        let gitlab_client =
+            Arc::new(GitlabApiClient::new(settings).expect("Failed to create GitlabApiClient"));
 
         let file_index_manager = Arc::new(FileIndexManager::new(gitlab_client.clone(), 3600));
 
