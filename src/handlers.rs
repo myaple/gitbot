@@ -7,7 +7,7 @@ use crate::config::AppSettings;
 use crate::file_indexer::FileIndexManager;
 use crate::gitlab::{GitlabApiClient, GitlabError};
 use crate::mention_cache::MentionCache;
-use crate::models::{GitlabNoteAttributes, GitlabNoteEvent, OpenAIChatMessage, OpenAIChatRequest};
+use crate::models::{GitlabNoteAttributes, GitlabNoteEvent, OpenAIChatMessage, OpenAIChatRequest, OpenAITool, OpenAIFunction, OpenAIToolCall};
 use crate::openai::OpenAIApiClient;
 use crate::repo_context::RepoContextExtractor;
 
@@ -465,6 +465,7 @@ async fn generate_and_post_reply(
     config: &Arc<AppSettings>,
     project_id: i64,
     reply_context: ReplyContext<'_>,
+    file_index_manager: &Arc<FileIndexManager>,
 ) -> Result<()> {
     let final_prompt_text = format!(
         "{}\n\nContext:\n{}",
@@ -478,7 +479,14 @@ async fn generate_and_post_reply(
     let openai_client = OpenAIApiClient::new(config)
         .map_err(|e| anyhow!("Failed to create OpenAI client: {}", e))?;
 
-    let llm_reply = get_llm_reply(&openai_client, config, &final_prompt_text).await?;
+    let llm_reply = get_llm_reply_with_tools(
+        &openai_client,
+        config,
+        &final_prompt_text,
+        gitlab_client,
+        project_id,
+        file_index_manager,
+    ).await?;
 
     // Format final comment
     let final_comment_body = format_final_reply_body(
@@ -571,7 +579,7 @@ pub async fn process_mention(
         is_issue,
     };
 
-    generate_and_post_reply(&event, &gitlab_client, &config, project_id, reply_context).await?;
+    generate_and_post_reply(&event, &gitlab_client, &config, project_id, reply_context, &file_index_manager).await?;
 
     // Add to cache after successful processing
     processed_mentions_cache.add(mention_id).await;
@@ -719,6 +727,299 @@ async fn get_llm_reply(
                 Err(anyhow!("LLM response has no content"))
             }
         })
+}
+
+// Tool function definitions for LLM tool use
+fn create_repository_tools() -> Vec<OpenAITool> {
+    vec![
+        OpenAITool {
+            tool_type: "function".to_string(),
+            function: OpenAIFunction {
+                name: "get_file_content".to_string(),
+                description: "Get the full content of a specific file from the repository. Use this when you need to examine the complete implementation of a file.".to_string(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "file_path": {
+                            "type": "string",
+                            "description": "The path to the file in the repository (e.g., 'src/main.rs', 'README.md')"
+                        }
+                    },
+                    "required": ["file_path"]
+                }),
+            },
+        },
+        OpenAITool {
+            tool_type: "function".to_string(),
+            function: OpenAIFunction {
+                name: "get_file_lines".to_string(),
+                description: "Get specific line ranges from a file. Use this when you need to examine specific sections of a file rather than the entire content.".to_string(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "file_path": {
+                            "type": "string",
+                            "description": "The path to the file in the repository"
+                        },
+                        "start_line": {
+                            "type": "integer",
+                            "description": "The starting line number (1-based)"
+                        },
+                        "end_line": {
+                            "type": "integer",
+                            "description": "The ending line number (1-based, inclusive)"
+                        }
+                    },
+                    "required": ["file_path", "start_line", "end_line"]
+                }),
+            },
+        },
+        OpenAITool {
+            tool_type: "function".to_string(),
+            function: OpenAIFunction {
+                name: "search_repository_files".to_string(),
+                description: "Search for files in the repository by keywords. Use this to find relevant files when you don't know their exact paths.".to_string(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "keywords": {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            },
+                            "description": "Keywords to search for in file names and content"
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "default": 5,
+                            "description": "Maximum number of files to return (default: 5, max: 10)"
+                        }
+                    },
+                    "required": ["keywords"]
+                }),
+            },
+        },
+    ]
+}
+
+// Tool execution functions
+pub async fn execute_tool_call(
+    tool_call: &OpenAIToolCall,
+    gitlab_client: &Arc<GitlabApiClient>,
+    project_id: i64,
+    file_index_manager: &Arc<FileIndexManager>,
+) -> Result<String> {
+    let function_args: serde_json::Value = serde_json::from_str(&tool_call.function.arguments)
+        .map_err(|e| anyhow!("Failed to parse tool arguments: {}", e))?;
+
+    match tool_call.function.name.as_str() {
+        "get_file_content" => {
+            let file_path = function_args["file_path"]
+                .as_str()
+                .ok_or_else(|| anyhow!("Missing file_path parameter"))?;
+            
+            match gitlab_client.get_file_content(project_id, file_path).await {
+                Ok(file) => {
+                    if let Some(content) = file.content {
+                        Ok(format!("Content of {}:\n\n{}", file_path, content))
+                    } else {
+                        Ok(format!("File {} exists but has no content", file_path))
+                    }
+                }
+                Err(e) => Ok(format!("Error accessing file {}: {}", file_path, e)),
+            }
+        }
+        "get_file_lines" => {
+            let file_path = function_args["file_path"]
+                .as_str()
+                .ok_or_else(|| anyhow!("Missing file_path parameter"))?;
+            let start_line = function_args["start_line"]
+                .as_i64()
+                .ok_or_else(|| anyhow!("Missing start_line parameter"))? as usize;
+            let end_line = function_args["end_line"]
+                .as_i64()
+                .ok_or_else(|| anyhow!("Missing end_line parameter"))? as usize;
+
+            if start_line == 0 {
+                return Ok("Error: Line numbers must be 1-based (start from 1)".to_string());
+            }
+
+            match gitlab_client.get_file_content(project_id, file_path).await {
+                Ok(file) => {
+                    if let Some(content) = file.content {
+                        let lines: Vec<&str> = content.lines().collect();
+                        if start_line > lines.len() || end_line > lines.len() || start_line > end_line {
+                            Ok(format!("Error: Invalid line range {}-{} for file {} (file has {} lines)", 
+                                start_line, end_line, file_path, lines.len()))
+                        } else {
+                            let selected_lines = &lines[(start_line - 1)..end_line];
+                            let result = selected_lines
+                                .iter()
+                                .enumerate()
+                                .map(|(i, line)| format!("{}: {}", start_line + i, line))
+                                .collect::<Vec<_>>()
+                                .join("\n");
+                            Ok(format!("Lines {}-{} of {}:\n\n{}", start_line, end_line, file_path, result))
+                        }
+                    } else {
+                        Ok(format!("File {} exists but has no content", file_path))
+                    }
+                }
+                Err(e) => Ok(format!("Error accessing file {}: {}", file_path, e)),
+            }
+        }
+        "search_repository_files" => {
+            let keywords_array = function_args["keywords"]
+                .as_array()
+                .ok_or_else(|| anyhow!("Missing keywords parameter"))?;
+            let keywords: Vec<String> = keywords_array
+                .iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect();
+            
+            if keywords.is_empty() {
+                return Ok("Error: At least one keyword is required for search".to_string());
+            }
+
+            let limit = function_args["limit"]
+                .as_i64()
+                .unwrap_or(5)
+                .min(10) as usize;
+
+            match file_index_manager.search_files(project_id, &keywords).await {
+                Ok(files) => {
+                    if files.is_empty() {
+                        Ok(format!("No files found matching keywords: {:?}", keywords))
+                    } else {
+                        let limited_files = files.into_iter().take(limit).collect::<Vec<_>>();
+                        let result = limited_files
+                            .iter()
+                            .map(|f| format!("- {} (size: {} bytes)", f.file_path, f.size))
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        Ok(format!("Found {} files matching keywords {:?}:\n\n{}", 
+                            limited_files.len(), keywords, result))
+                    }
+                }
+                Err(e) => Ok(format!("Error searching files: {}", e)),
+            }
+        }
+        _ => Ok(format!("Unknown tool function: {}", tool_call.function.name)),
+    }
+}
+
+// New function for LLM reply with tool use capability
+async fn get_llm_reply_with_tools(
+    openai_client: &OpenAIApiClient,
+    config: &Arc<AppSettings>,
+    prompt_text: &str,
+    gitlab_client: &Arc<GitlabApiClient>,
+    project_id: i64,
+    file_index_manager: &Arc<FileIndexManager>,
+) -> Result<String> {
+    let mut messages = vec![OpenAIChatMessage {
+        role: "user".to_string(),
+        content: Some(prompt_text.to_string()),
+        tool_calls: None,
+        tool_call_id: None,
+    }];
+
+    let tools = create_repository_tools();
+    let max_iterations = 2; // As requested in the issue: 1-2 turns
+
+    for iteration in 0..max_iterations {
+        debug!("Tool use iteration {} of {}", iteration + 1, max_iterations);
+
+        let openai_request = OpenAIChatRequest {
+            model: config.openai_model.clone(),
+            messages: messages.clone(),
+            temperature: Some(config.openai_temperature),
+            max_tokens: Some(config.openai_max_tokens),
+            tools: Some(tools.clone()),
+            tool_choice: Some("auto".to_string()),
+        };
+
+        let openai_response = openai_client
+            .send_chat_completion(&openai_request)
+            .await
+            .map_err(|e| {
+                error!("Failed to communicate with OpenAI: {}", e);
+                anyhow!("Failed to communicate with OpenAI: {}", e)
+            })?;
+
+        debug!("OpenAI response iteration {}: {:?}", iteration + 1, openai_response);
+
+        let choice = openai_response.choices.first()
+            .ok_or_else(|| anyhow!("No response choices from OpenAI"))?;
+
+        // Add the assistant's response to the conversation
+        messages.push(choice.message.clone());
+
+        // Check if the assistant wants to call tools
+        if let Some(tool_calls) = &choice.message.tool_calls {
+            debug!("Assistant requested {} tool calls", tool_calls.len());
+            
+            // Execute each tool call
+            for tool_call in tool_calls {
+                let tool_result = execute_tool_call(
+                    tool_call,
+                    gitlab_client,
+                    project_id,
+                    file_index_manager,
+                ).await?;
+
+                // Add tool response to conversation
+                messages.push(OpenAIChatMessage {
+                    role: "tool".to_string(),
+                    content: Some(tool_result),
+                    tool_calls: None,
+                    tool_call_id: Some(tool_call.id.clone()),
+                });
+            }
+            // Continue to next iteration to get final response
+        } else {
+            // No tool calls, return the content
+            if let Some(content) = &choice.message.content {
+                if !content.is_empty() {
+                    return Ok(content.clone());
+                }
+            }
+            return Err(anyhow!("LLM response has no content and no tool calls"));
+        }
+    }
+
+    // After max iterations, make one final call without tools to get the answer
+    debug!("Max iterations reached, making final call without tools");
+    
+    let final_request = OpenAIChatRequest {
+        model: config.openai_model.clone(),
+        messages,
+        temperature: Some(config.openai_temperature),
+        max_tokens: Some(config.openai_max_tokens),
+        tools: None,
+        tool_choice: None,
+    };
+
+    let final_response = openai_client
+        .send_chat_completion(&final_request)
+        .await
+        .map_err(|e| {
+            error!("Failed to communicate with OpenAI on final call: {}", e);
+            anyhow!("Failed to communicate with OpenAI: {}", e)
+        })?;
+
+    let final_choice = final_response.choices.first()
+        .ok_or_else(|| anyhow!("No response choices from OpenAI on final call"))?;
+
+    if let Some(content) = &final_choice.message.content {
+        if !content.is_empty() {
+            Ok(content.clone())
+        } else {
+            Err(anyhow!("Final LLM response content is empty"))
+        }
+    } else {
+        Err(anyhow!("Final LLM response has no content"))
+    }
 }
 
 // Helper function to extract issue details and handle stale label removal
