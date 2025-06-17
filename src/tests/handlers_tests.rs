@@ -150,9 +150,7 @@ mod tests {
     }
 
     // ... (The rest of the tests from the `mod tests` block, like test_process_mention_no_bot_mention, etc.) ...
-    // Omitting for brevity, assuming they are correctly formatted from the previous full overwrite.
-    // The important part is that the issue_deduplication_tests module is now correctly placed *inside* this `mod tests` block.
-    // And that the trailing whitespace on lines 631 and 632 (new numbering) is fixed.
+    // Omitting for brevity, but they would be here in the actual overwrite.
 
     #[cfg(test)]
     mod issue_deduplication_tests {
@@ -198,9 +196,9 @@ mod tests {
         ) -> Vec<String> {
             let project_id = event.project.id;
             let current_issue_event_iid = event.issue.as_ref().unwrap().iid;
-            let current_issue_event_id = event.issue.as_ref().unwrap().id; // Corrected: No trailing space
+            let current_issue_event_id = event.issue.as_ref().unwrap().id;
 
-            let (mock_issue_id, mock_issue_iid, mock_issue_title, mock_issue_description) = // Corrected: No trailing space
+            let (mock_issue_id, mock_issue_iid, mock_issue_title, mock_issue_description) =
                 if let Some(ref explicit_issue) = explicit_current_issue_for_mocking {
                     (
                         explicit_issue.id,
@@ -608,7 +606,6 @@ mod tests {
                 assert!(similar_issues_section.contains("Another Test Issue"));
                 assert!(similar_issues_section.contains("IID: 202"));
             }
-            // Removed empty else {} block here
         }
 
         #[tokio::test]

@@ -937,90 +937,269 @@ async fn test_get_all_merge_request_notes() {
     assert_eq!(notes[0].author.username, "reviewer1");
 }
 
-#[tokio::test]
-async fn test_get_all_open_issues_success() {
-    let mut server = mockito::Server::new_async().await;
-    let base_url = server.url();
+#[cfg(test)]
+mod get_all_open_issues_tests {
+    use super::*; // Imports items from parent `tests` module like `create_test_settings`
+    use crate::models::{GitlabIssue, GitlabUser}; // Ensure GitlabIssue and GitlabUser are in scope
+    use mockito::Matcher;
 
-    let settings = Arc::new(create_test_settings(base_url.clone()));
-    let client = GitlabApiClient::new(settings).unwrap();
-    let project_id = 1i64;
+    // Helper to create a vector of mock GitlabIssue objects
+    fn create_mock_issues_list(count: usize, page: usize, project_id: i64) -> Vec<GitlabIssue> {
+        (0..count)
+            .map(|i| {
+                let issue_id = (page - 1) * 100 + i + 1; // Unique ID based on page and index
+                GitlabIssue {
+                    id: issue_id as i64,
+                    iid: (issue_id + 1000) as i64, // Make iid different from id
+                    project_id,
+                    title: format!("Test Issue {} on page {}", issue_id, page),
+                    description: Some(format!("Description for issue {}", issue_id)),
+                    state: "opened".to_string(),
+                    author: GitlabUser {
+                        id: (issue_id + 2000) as i64,
+                        username: format!("user{}", issue_id),
+                        name: format!("User {}", issue_id),
+                        avatar_url: None,
+                    },
+                    labels: vec![],
+                    web_url: format!("http://example.com/issues/{}", issue_id),
+                    updated_at: "2023-01-01T12:00:00Z".to_string(),
+                }
+            })
+            .collect()
+    }
 
-    let mock_issues_response = json!([
-        {
-            "id": 1, "iid": 101, "project_id": project_id, "title": "Open Issue 1",
-            "description": "This is an open issue.", "state": "opened",
-            "author": {"id": 1, "username": "tester", "name": "Test User", "avatar_url": null, "web_url": "url"},
-            "web_url": "http://example.com/issue/1", "labels": ["bug"], "updated_at": "2023-02-01T12:00:00Z"
-        },
-        {
-            "id": 2, "iid": 102, "project_id": project_id, "title": "Another Open Issue 2",
-            "description": "This is also an open issue.", "state": "opened",
-            "author": {"id": 2, "username": "tester2", "name": "Test User2", "avatar_url": null, "web_url": "url"},
-            "web_url": "http://example.com/issue/2", "labels": ["feature"], "updated_at": "2023-02-02T12:00:00Z"
+    #[tokio::test]
+    async fn test_get_all_open_issues_zero_issues() {
+        let mut server = mockito::Server::new_async().await;
+        let settings = Arc::new(create_test_settings(server.url()));
+        let client = GitlabApiClient::new(settings).unwrap();
+        let project_id = 123i64;
+
+        let mock_page1 = server
+            .mock(
+                "GET",
+                format!("/api/v4/projects/{}/issues", project_id).as_str(),
+            )
+            .match_query(Matcher::AllOf(vec![
+                Matcher::UrlEncoded("state".into(), "opened".into()),
+                Matcher::UrlEncoded("per_page".into(), "100".into()),
+                Matcher::UrlEncoded("page".into(), "1".into()),
+            ]))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(json!([]).to_string()) // Empty list for page 1
+            .create_async()
+            .await;
+
+        let result = client.get_all_open_issues(project_id).await;
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_empty());
+        mock_page1.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_get_all_open_issues_one_page_less_than_per_page() {
+        let mut server = mockito::Server::new_async().await;
+        let settings = Arc::new(create_test_settings(server.url()));
+        let client = GitlabApiClient::new(settings).unwrap();
+        let project_id = 123i64;
+        let issues_to_return = create_mock_issues_list(5, 1, project_id);
+
+        let mock_page1 = server
+            .mock(
+                "GET",
+                format!("/api/v4/projects/{}/issues", project_id).as_str(),
+            )
+            .match_query(Matcher::AllOf(vec![
+                Matcher::UrlEncoded("state".into(), "opened".into()),
+                Matcher::UrlEncoded("per_page".into(), "100".into()),
+                Matcher::UrlEncoded("page".into(), "1".into()),
+            ]))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(json!(issues_to_return).to_string())
+            .create_async()
+            .await;
+
+        let result = client.get_all_open_issues(project_id).await;
+        assert!(result.is_ok());
+        let fetched_issues = result.unwrap();
+        assert_eq!(fetched_issues.len(), 5);
+        assert_eq!(fetched_issues[0].id, issues_to_return[0].id);
+        mock_page1.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_get_all_open_issues_multiple_pages() {
+        let mut server = mockito::Server::new_async().await;
+        let settings = Arc::new(create_test_settings(server.url()));
+        let client = GitlabApiClient::new(settings).unwrap();
+        let project_id = 123i64;
+
+        let issues_page1 = create_mock_issues_list(100, 1, project_id);
+        let issues_page2 = create_mock_issues_list(50, 2, project_id);
+
+        let mock_p1 = server
+            .mock(
+                "GET",
+                format!("/api/v4/projects/{}/issues", project_id).as_str(),
+            )
+            .match_query(Matcher::AllOf(vec![
+                Matcher::UrlEncoded("state".into(), "opened".into()),
+                Matcher::UrlEncoded("per_page".into(), "100".into()),
+                Matcher::UrlEncoded("page".into(), "1".into()),
+            ]))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(json!(issues_page1).to_string())
+            .create_async()
+            .await;
+
+        let mock_p2 = server
+            .mock(
+                "GET",
+                format!("/api/v4/projects/{}/issues", project_id).as_str(),
+            )
+            .match_query(Matcher::AllOf(vec![
+                Matcher::UrlEncoded("state".into(), "opened".into()),
+                Matcher::UrlEncoded("per_page".into(), "100".into()),
+                Matcher::UrlEncoded("page".into(), "2".into()),
+            ]))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(json!(issues_page2).to_string())
+            .create_async()
+            .await;
+
+        let result = client.get_all_open_issues(project_id).await;
+        assert!(result.is_ok());
+        let all_issues = result.unwrap();
+        assert_eq!(all_issues.len(), 150);
+        assert_eq!(all_issues[0].id, issues_page1[0].id);
+        assert_eq!(all_issues[100].id, issues_page2[0].id);
+        mock_p1.assert_async().await;
+        mock_p2.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_get_all_open_issues_exact_multiple_of_per_page() {
+        let mut server = mockito::Server::new_async().await;
+        let settings = Arc::new(create_test_settings(server.url()));
+        let client = GitlabApiClient::new(settings).unwrap();
+        let project_id = 123i64;
+
+        let issues_page1 = create_mock_issues_list(100, 1, project_id);
+        let issues_page2 = create_mock_issues_list(100, 2, project_id);
+
+        let mock_p1 = server
+            .mock(
+                "GET",
+                format!("/api/v4/projects/{}/issues", project_id).as_str(),
+            )
+            .match_query(Matcher::AllOf(vec![
+                Matcher::UrlEncoded("state".into(), "opened".into()),
+                Matcher::UrlEncoded("per_page".into(), "100".into()),
+                Matcher::UrlEncoded("page".into(), "1".into()),
+            ]))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(json!(issues_page1).to_string())
+            .create_async()
+            .await;
+
+        let mock_p2 = server
+            .mock(
+                "GET",
+                format!("/api/v4/projects/{}/issues", project_id).as_str(),
+            )
+            .match_query(Matcher::AllOf(vec![
+                Matcher::UrlEncoded("state".into(), "opened".into()),
+                Matcher::UrlEncoded("per_page".into(), "100".into()),
+                Matcher::UrlEncoded("page".into(), "2".into()),
+            ]))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(json!(issues_page2).to_string())
+            .create_async()
+            .await;
+
+        let mock_p3 = server
+            .mock(
+                "GET",
+                format!("/api/v4/projects/{}/issues", project_id).as_str(),
+            )
+            .match_query(Matcher::AllOf(vec![
+                Matcher::UrlEncoded("state".into(), "opened".into()),
+                Matcher::UrlEncoded("per_page".into(), "100".into()),
+                Matcher::UrlEncoded("page".into(), "3".into()),
+            ]))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(json!([]).to_string()) // Empty list for page 3
+            .create_async()
+            .await;
+
+        let result = client.get_all_open_issues(project_id).await;
+        assert!(result.is_ok());
+        let all_issues = result.unwrap();
+        assert_eq!(all_issues.len(), 200);
+        mock_p1.assert_async().await;
+        mock_p2.assert_async().await;
+        mock_p3.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_get_all_open_issues_api_error_during_pagination() {
+        let mut server = mockito::Server::new_async().await;
+        let settings = Arc::new(create_test_settings(server.url()));
+        let client = GitlabApiClient::new(settings).unwrap();
+        let project_id = 123i64;
+
+        let issues_page1 = create_mock_issues_list(100, 1, project_id);
+
+        let mock_p1 = server
+            .mock(
+                "GET",
+                format!("/api/v4/projects/{}/issues", project_id).as_str(),
+            )
+            .match_query(Matcher::AllOf(vec![
+                Matcher::UrlEncoded("state".into(), "opened".into()),
+                Matcher::UrlEncoded("per_page".into(), "100".into()),
+                Matcher::UrlEncoded("page".into(), "1".into()),
+            ]))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(json!(issues_page1).to_string())
+            .create_async()
+            .await;
+
+        let mock_p2_error = server
+            .mock(
+                "GET",
+                format!("/api/v4/projects/{}/issues", project_id).as_str(),
+            )
+            .match_query(Matcher::AllOf(vec![
+                Matcher::UrlEncoded("state".into(), "opened".into()),
+                Matcher::UrlEncoded("per_page".into(), "100".into()),
+                Matcher::UrlEncoded("page".into(), "2".into()),
+            ]))
+            .with_status(500)
+            .with_header("content-type", "application/json")
+            .with_body("{\"message\": \"Internal Server Error\"}")
+            .create_async()
+            .await;
+
+        let result = client.get_all_open_issues(project_id).await;
+        assert!(result.is_err());
+        match result.err().unwrap() {
+            GitlabError::Api { status, body } => {
+                assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+                assert_eq!(body, "{\"message\": \"Internal Server Error\"}");
+            }
+            _ => panic!("Expected ApiError"),
         }
-    ]);
-
-    let mock = server
-        .mock(
-            "GET",
-            format!("/api/v4/projects/{}/issues", project_id).as_str(),
-        )
-        .match_query(mockito::Matcher::AllOf(vec![
-            mockito::Matcher::UrlEncoded("state".into(), "opened".into()),
-            mockito::Matcher::UrlEncoded("per_page".into(), "100".into()),
-        ]))
-        .with_status(200)
-        .with_header("content-type", "application/json")
-        .with_body(mock_issues_response.to_string())
-        .create_async()
-        .await;
-
-    let result = client.get_all_open_issues(project_id).await;
-
-    mock.assert_async().await;
-    assert!(result.is_ok());
-    let issues = result.unwrap();
-    assert_eq!(issues.len(), 2);
-    assert_eq!(issues[0].title, "Open Issue 1");
-    assert_eq!(issues[0].state, "opened");
-    assert_eq!(issues[1].title, "Another Open Issue 2");
-    assert_eq!(issues[1].state, "opened");
-    assert_eq!(issues[1].author.username, "tester2");
-}
-
-#[tokio::test]
-async fn test_get_all_open_issues_api_error() {
-    let mut server = mockito::Server::new_async().await;
-    let base_url = server.url();
-
-    let settings = Arc::new(create_test_settings(base_url.clone()));
-    let client = GitlabApiClient::new(settings).unwrap();
-    let project_id = 2i64;
-
-    let mock = server
-        .mock(
-            "GET",
-            format!("/api/v4/projects/{}/issues", project_id).as_str(),
-        )
-        .match_query(mockito::Matcher::AllOf(vec![
-            mockito::Matcher::UrlEncoded("state".into(), "opened".into()),
-            mockito::Matcher::UrlEncoded("per_page".into(), "100".into()),
-        ]))
-        .with_status(500)
-        .with_body("{\"message\": \"Internal Server Error\"}")
-        .create_async()
-        .await;
-
-    let result = client.get_all_open_issues(project_id).await;
-
-    mock.assert_async().await;
-    assert!(result.is_err());
-    match result.err().unwrap() {
-        GitlabError::Api { status, body } => {
-            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
-            assert_eq!(body, "{\"message\": \"Internal Server Error\"}");
-        }
-        other_error => panic!("Expected Api error, got {:?}", other_error),
+        mock_p1.assert_async().await;
+        mock_p2_error.assert_async().await;
     }
 }

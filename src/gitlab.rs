@@ -5,7 +5,7 @@ use serde::Serialize;
 use std::fmt::Debug;
 use std::sync::Arc;
 use thiserror::Error;
-use tracing::{debug, error, instrument};
+use tracing::{debug, error, info, instrument};
 use url::Url;
 use urlencoding::encode;
 
@@ -570,17 +570,6 @@ impl GitlabApiClient {
             .await
     }
 
-    #[instrument(skip(self), fields(project_id))]
-    pub async fn get_all_open_issues(
-        &self,
-        project_id: i64,
-    ) -> Result<Vec<GitlabIssue>, GitlabError> {
-        let path = format!("/api/v4/projects/{}/issues", project_id);
-        let query_params = &[("state", "opened"), ("per_page", "100")];
-        self.send_request(Method::GET, &path, Some(query_params), None::<()>)
-            .await
-    }
-
     /// Get commit history for a file
     #[instrument(skip(self), fields(project_id, file_path))]
     pub async fn get_file_commits(
@@ -596,5 +585,52 @@ impl GitlabApiClient {
 
         self.send_request(Method::GET, &path, Some(&query_params), None::<()>)
             .await
+    }
+
+    #[instrument(skip(self), fields(project_id))]
+    pub async fn get_all_open_issues(
+        &self,
+        project_id: i64,
+    ) -> Result<Vec<GitlabIssue>, GitlabError> {
+        let mut all_issues = Vec::new();
+        let mut page = 1;
+        let per_page = 100; // GitLab's max per_page is often 100
+
+        loop {
+            let path = format!("/api/v4/projects/{}/issues", project_id);
+            let page_string = page.to_string();
+            let per_page_string = per_page.to_string();
+
+            let query_params = &[
+                ("state", "opened"),
+                ("per_page", per_page_string.as_str()),
+                ("page", page_string.as_str()),
+            ];
+
+            debug!(project_id, page, per_page, "Fetching page of open issues");
+
+            let fetched_issues: Vec<GitlabIssue> = self
+                .send_request(Method::GET, &path, Some(query_params), None::<()>)
+                .await?;
+
+            let num_fetched = fetched_issues.len();
+            all_issues.extend(fetched_issues);
+
+            if num_fetched < per_page {
+                // This was the last page
+                debug!(project_id, page, num_fetched, "Fetched last page of issues");
+                break;
+            } else {
+                // More issues might be available on the next page
+                page += 1;
+                debug!(project_id, page, "Advanced to next page for issues");
+            }
+        }
+        info!(
+            project_id,
+            total_issues = all_issues.len(),
+            "Fetched all open issues"
+        );
+        Ok(all_issues)
     }
 }
