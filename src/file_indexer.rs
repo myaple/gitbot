@@ -210,6 +210,24 @@ pub struct FileIndexManager {
     refresh_interval: u64,
 }
 
+/// Calculate keyword frequency in content for relevance scoring
+fn calculate_content_keyword_frequency(content: &str, keywords: &[String]) -> usize {
+    if keywords.is_empty() || content.is_empty() {
+        return 0;
+    }
+    let content_lower = content.to_lowercase();
+    let mut total_hits = 0;
+    for keyword in keywords {
+        let keyword_lower = keyword.to_lowercase();
+        let hits = content_lower.matches(&keyword_lower).count();
+        total_hits += hits;
+    }
+    total_hits
+}
+
+// NOTE: The duplicated impl block was here. It has been removed.
+// The impl block below is the correct one, containing all methods including the new one.
+
 impl FileIndexManager {
     /// Create a new file index manager
     pub fn new(gitlab_client: Arc<GitlabApiClient>, refresh_interval: u64) -> Self {
@@ -394,23 +412,26 @@ impl FileIndexManager {
 
         Ok(files_with_content)
     }
-}
 
-/// Calculate keyword frequency in content for relevance scoring
-fn calculate_content_keyword_frequency(content: &str, keywords: &[String]) -> usize {
-    if keywords.is_empty() || content.is_empty() {
-        return 0;
+    /// Compare two texts using n-gram similarity (Jaccard Index)
+    pub fn compare_texts_by_ngram_similarity(&self, text1: &str, text2: &str) -> f64 {
+        let ngrams1 = FileContentIndex::generate_ngrams(text1);
+        let ngrams2 = FileContentIndex::generate_ngrams(text2);
+
+        if ngrams1.is_empty() && ngrams2.is_empty() {
+            return 1.0; // Both empty, consider them identical
+        }
+        if ngrams1.is_empty() || ngrams2.is_empty() {
+            return 0.0; // One empty, one not, no similarity
+        }
+
+        let intersection_size = ngrams1.intersection(&ngrams2).count();
+        let union_size = ngrams1.union(&ngrams2).count();
+
+        if union_size == 0 {
+            0.0 // Should not happen if either set is non-empty, but as a safeguard
+        } else {
+            intersection_size as f64 / union_size as f64
+        }
     }
-
-    let content_lower = content.to_lowercase();
-    let mut total_hits = 0;
-
-    // Count occurrences of each keyword
-    for keyword in keywords {
-        let keyword_lower = keyword.to_lowercase();
-        let hits = content_lower.matches(&keyword_lower).count();
-        total_hits += hits;
-    }
-
-    total_hits
 }

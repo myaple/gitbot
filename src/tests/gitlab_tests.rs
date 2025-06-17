@@ -936,3 +936,91 @@ async fn test_get_all_merge_request_notes() {
     assert_eq!(notes[0].note, "First MR comment");
     assert_eq!(notes[0].author.username, "reviewer1");
 }
+
+#[tokio::test]
+async fn test_get_all_open_issues_success() {
+    let mut server = mockito::Server::new_async().await;
+    let base_url = server.url();
+
+    let settings = Arc::new(create_test_settings(base_url.clone()));
+    let client = GitlabApiClient::new(settings).unwrap();
+    let project_id = 1i64;
+
+    let mock_issues_response = json!([
+        {
+            "id": 1, "iid": 101, "project_id": project_id, "title": "Open Issue 1",
+            "description": "This is an open issue.", "state": "opened",
+            "author": {"id": 1, "username": "tester", "name": "Test User", "avatar_url": null, "web_url": "url"},
+            "web_url": "http://example.com/issue/1", "labels": ["bug"], "updated_at": "2023-02-01T12:00:00Z"
+        },
+        {
+            "id": 2, "iid": 102, "project_id": project_id, "title": "Another Open Issue 2",
+            "description": "This is also an open issue.", "state": "opened",
+            "author": {"id": 2, "username": "tester2", "name": "Test User2", "avatar_url": null, "web_url": "url"},
+            "web_url": "http://example.com/issue/2", "labels": ["feature"], "updated_at": "2023-02-02T12:00:00Z"
+        }
+    ]);
+
+    let mock = server
+        .mock(
+            "GET",
+            format!("/api/v4/projects/{}/issues", project_id).as_str(),
+        )
+        .match_query(mockito::Matcher::AllOf(vec![
+            mockito::Matcher::UrlEncoded("state".into(), "opened".into()),
+            mockito::Matcher::UrlEncoded("per_page".into(), "100".into()),
+        ]))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(mock_issues_response.to_string())
+        .create_async()
+        .await;
+
+    let result = client.get_all_open_issues(project_id).await;
+
+    mock.assert_async().await;
+    assert!(result.is_ok());
+    let issues = result.unwrap();
+    assert_eq!(issues.len(), 2);
+    assert_eq!(issues[0].title, "Open Issue 1");
+    assert_eq!(issues[0].state, "opened");
+    assert_eq!(issues[1].title, "Another Open Issue 2");
+    assert_eq!(issues[1].state, "opened");
+    assert_eq!(issues[1].author.username, "tester2");
+}
+
+#[tokio::test]
+async fn test_get_all_open_issues_api_error() {
+    let mut server = mockito::Server::new_async().await;
+    let base_url = server.url();
+
+    let settings = Arc::new(create_test_settings(base_url.clone()));
+    let client = GitlabApiClient::new(settings).unwrap();
+    let project_id = 2i64;
+
+    let mock = server
+        .mock(
+            "GET",
+            format!("/api/v4/projects/{}/issues", project_id).as_str(),
+        )
+        .match_query(mockito::Matcher::AllOf(vec![
+            mockito::Matcher::UrlEncoded("state".into(), "opened".into()),
+            mockito::Matcher::UrlEncoded("per_page".into(), "100".into()),
+        ]))
+        .with_status(500)
+        .with_body("{\"message\": \"Internal Server Error\"}")
+        .create_async()
+        .await;
+
+    let result = client.get_all_open_issues(project_id).await;
+
+    mock.assert_async().await;
+    assert!(result.is_err());
+    match result.err().unwrap() {
+        GitlabError::Api { status, body } => {
+            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+            assert_eq!(body, "{\"message\": \"Internal Server Error\"}");
+        }
+        other_error => panic!("Expected Api error, got {:?}", other_error),
+    }
+}

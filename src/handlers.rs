@@ -968,7 +968,7 @@ async fn build_issue_prompt_without_context(
     );
 }
 
-async fn handle_issue_mention(
+pub(crate) async fn handle_issue_mention(
     event: &GitlabNoteEvent,
     gitlab_client: &Arc<GitlabApiClient>,
     config: &Arc<AppSettings>,
@@ -979,6 +979,69 @@ async fn handle_issue_mention(
 ) -> Result<()> {
     let (issue_iid, issue) =
         extract_issue_details_and_handle_stale(event, gitlab_client, config, project_id).await?;
+
+    // --- BEGIN N-gram Issue Deduplication ---
+    const SIMILARITY_THRESHOLD: f64 = 0.2; // Example threshold, might need tuning
+    const MAX_SIMILAR_ISSUES_TO_SHOW: usize = 5;
+
+    match gitlab_client.get_all_open_issues(project_id).await {
+        Ok(open_issues) => {
+            let current_issue_id = issue.id;
+            let current_issue_text = format!(
+                "{} {}",
+                issue.title,
+                issue.description.as_deref().unwrap_or("")
+            );
+
+            let mut potential_duplicates = Vec::new();
+
+            for other_issue in open_issues {
+                if other_issue.id == current_issue_id {
+                    continue;
+                }
+
+                let other_issue_text = format!(
+                    "{} {}",
+                    other_issue.title,
+                    other_issue.description.as_deref().unwrap_or("")
+                );
+
+                // Use the new n-gram similarity function from FileIndexManager
+                let score = file_index_manager
+                    .compare_texts_by_ngram_similarity(&current_issue_text, &other_issue_text);
+
+                if score >= SIMILARITY_THRESHOLD {
+                    potential_duplicates.push((other_issue, score));
+                }
+            }
+
+            // Sort by score in descending order
+            potential_duplicates
+                .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+            if !potential_duplicates.is_empty() {
+                let mut duplicates_section =
+                    String::from("--- Potentially Similar Issues (N-gram based) ---\n");
+                for (dup_issue, score) in
+                    potential_duplicates.iter().take(MAX_SIMILAR_ISSUES_TO_SHOW)
+                {
+                    duplicates_section.push_str(&format!(
+                        "  - Title: {}\n    IID: {}\n    Similarity Score: {:.2}\n    Description Snippet: {:.100}...\n\n",
+                        dup_issue.title,
+                        dup_issue.iid,
+                        score,
+                        dup_issue.description.as_deref().unwrap_or("").chars().take(100).collect::<String>()
+                    ));
+                }
+                duplicates_section.push_str("Please review the following issues. If any of them appear to be duplicates of the current issue, please indicate this in your response and explain why.");
+                prompt_parts.push(duplicates_section);
+            }
+        }
+        Err(e) => {
+            warn!("Failed to fetch open issues for n-gram deduplication: {}. Proceeding without deduplication info.", e);
+        }
+    }
+    // --- END N-gram Issue Deduplication ---
 
     let context = IssuePromptContext {
         event,

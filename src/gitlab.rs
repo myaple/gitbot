@@ -570,6 +570,17 @@ impl GitlabApiClient {
             .await
     }
 
+    #[instrument(skip(self), fields(project_id))]
+    pub async fn get_all_open_issues(
+        &self,
+        project_id: i64,
+    ) -> Result<Vec<GitlabIssue>, GitlabError> {
+        let path = format!("/api/v4/projects/{}/issues", project_id);
+        let query_params = &[("state", "opened"), ("per_page", "100")];
+        self.send_request(Method::GET, &path, Some(query_params), None::<()>)
+            .await
+    }
+
     /// Get commit history for a file
     #[instrument(skip(self), fields(project_id, file_path))]
     pub async fn get_file_commits(
