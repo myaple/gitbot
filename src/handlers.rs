@@ -805,18 +805,18 @@ async fn add_repository_context_to_prompt(
 }
 
 // Helper struct for issue prompt building context
-struct IssuePromptContext<'a> {
-    event: &'a GitlabNoteEvent,
-    gitlab_client: &'a Arc<GitlabApiClient>,
-    config: &'a Arc<AppSettings>,
-    project_id: i64,
-    issue_iid: i64,
-    issue: &'a crate::models::GitlabIssue,
-    file_index_manager: &'a Arc<FileIndexManager>,
+pub(crate) struct IssuePromptContext<'a> {
+    pub(crate) event: &'a GitlabNoteEvent,
+    pub(crate) gitlab_client: &'a Arc<GitlabApiClient>,
+    pub(crate) config: &'a Arc<AppSettings>,
+    pub(crate) project_id: i64,
+    pub(crate) issue_iid: i64,
+    pub(crate) issue: &'a crate::models::GitlabIssue,
+    pub(crate) file_index_manager: &'a Arc<FileIndexManager>,
 }
 
 // Helper function to build issue prompt with user-provided context
-async fn build_issue_prompt_with_context(
+pub(crate) async fn build_issue_prompt_with_context(
     context: IssuePromptContext<'_>,
     user_context: &str,
     prompt_parts: &mut Vec<String>,
@@ -844,8 +844,16 @@ async fn build_issue_prompt_with_context(
                 generate_help_message()
             ));
         }
+    } else if user_context.starts_with('/') {
+        // Unknown slash command
+        prompt_parts.push(SlashCommand::Help.get_precanned_prompt().to_string());
+        prompt_parts.push(generate_help_message());
+        warn!(
+            "User @{} used an unknown slash command: {}",
+            context.event.user.username, user_context
+        );
     } else {
-        // Original behavior for non-slash commands
+        // Original behavior for non-slash commands (plain text, not starting with /)
         prompt_parts.push(format!(
             "The user @{} provided the following request regarding this issue: '{}'.",
             context.event.user.username, user_context
@@ -1119,16 +1127,16 @@ async fn add_mr_context_to_prompt(
 }
 
 // Helper struct for MR prompt building context
-struct MrPromptContext<'a> {
-    event: &'a GitlabNoteEvent,
-    gitlab_client: &'a Arc<GitlabApiClient>,
-    config: &'a Arc<AppSettings>,
-    mr: &'a crate::models::GitlabMergeRequest,
-    file_index_manager: &'a Arc<FileIndexManager>,
+pub(crate) struct MrPromptContext<'a> {
+    pub(crate) event: &'a GitlabNoteEvent,
+    pub(crate) gitlab_client: &'a Arc<GitlabApiClient>,
+    pub(crate) config: &'a Arc<AppSettings>,
+    pub(crate) mr: &'a crate::models::GitlabMergeRequest,
+    pub(crate) file_index_manager: &'a Arc<FileIndexManager>,
 }
 
 // Helper function to build MR prompt with user-provided context
-async fn build_mr_prompt_with_context(
+pub(crate) async fn build_mr_prompt_with_context(
     context: MrPromptContext<'_>,
     user_context: &str,
     prompt_parts: &mut Vec<String>,
@@ -1157,8 +1165,16 @@ async fn build_mr_prompt_with_context(
                 generate_help_message()
             ));
         }
+    } else if user_context.starts_with('/') {
+        // Unknown slash command
+        prompt_parts.push(SlashCommand::Help.get_precanned_prompt().to_string());
+        prompt_parts.push(generate_help_message());
+        warn!(
+            "User @{} used an unknown slash command in MR context: {}",
+            context.event.user.username, user_context
+        );
     } else {
-        // Original behavior for non-slash commands
+        // Original behavior for non-slash commands (plain text, not starting with /)
         prompt_parts.push(format!(
             "The user @{} provided the following request regarding this merge request: '{}'.",
             context.event.user.username, user_context
