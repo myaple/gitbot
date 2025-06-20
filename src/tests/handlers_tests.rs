@@ -1238,4 +1238,271 @@ mod tests {
         assert!(result.is_ok(), "Processing failed: {:?}", result.err());
         assert!(cache.check(TEST_MENTION_ID).await);
     }
+
+    #[tokio::test]
+    async fn test_unknown_slash_command_invokes_help_issue() {
+        let mut server = mockito::Server::new_async().await;
+        let config = test_app_settings(server.url());
+        let gitlab_client = Arc::new(GitlabApiClient::new(config.clone()).unwrap());
+        let file_index_manager = Arc::new(FileIndexManager::new(gitlab_client.clone(), 3600));
+
+        let event_time = Utc::now();
+        let event = create_test_note_event_with_id(
+            TEST_USER_USERNAME,
+            "Issue",
+            TEST_MENTION_ID,
+            Some(format!("@{} /unknowncommand", TEST_BOT_USERNAME)),
+            Some(event_time.to_rfc3339()),
+        );
+
+        let mock_issue_details = GitlabIssue {
+            id: 1,
+            iid: TEST_ISSUE_IID,
+            project_id: TEST_PROJECT_ID,
+            title: "Test Issue for Unknown Command".to_string(),
+            description: Some("Description".to_string()),
+            state: "opened".to_string(),
+            author: GitlabUser {
+                id: TEST_GENERIC_USER_ID,
+                username: "issue_creator".to_string(),
+                name: "Issue Creator".to_string(),
+                avatar_url: None,
+            },
+            labels: vec![],
+            web_url: "url".to_string(),
+            updated_at: event_time.to_rfc3339(),
+        };
+
+        // Mock get_issue
+        let _m_get_issue = server
+            .mock(
+                "GET",
+                format!(
+                    "/api/v4/projects/{}/issues/{}",
+                    TEST_PROJECT_ID, TEST_ISSUE_IID
+                )
+                .as_str(),
+            )
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(json!(mock_issue_details).to_string())
+            .create_async()
+            .await;
+
+        // Mock get_all_issue_notes (for comment context) - return empty
+        let _m_get_all_notes = server
+            .mock(
+                "GET",
+                Matcher::Regex(format!(
+                    r"/api/v4/projects/{}/issues/{}/notes", // No query params for "all notes"
+                    TEST_PROJECT_ID, TEST_ISSUE_IID
+                )),
+            )
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(json!([]).to_string())
+            .create_async()
+            .await;
+
+        // Mock for RepoContextExtractor (list_repository_tree, get_file_content)
+        // These might be called by add_repository_context_to_prompt
+        let _m_list_tree = server
+            .mock(
+                "GET",
+                Matcher::Regex(r"/api/v4/projects/.*/repository/tree.*".to_string()),
+            )
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(json!([]).to_string()) // Empty tree
+            .create_async()
+            .await;
+
+        let _m_get_any_file_repo_context = server
+            .mock(
+                "GET",
+                Matcher::Regex(r"/api/v4/projects/.*/repository/files/.*".to_string()),
+            )
+            .with_status(404) // Assume no files found for simplicity
+            .create_async()
+            .await;
+
+        let issue_prompt_context = IssuePromptContext {
+            event: &event,
+            gitlab_client: &gitlab_client,
+            config: &config,
+            project_id: TEST_PROJECT_ID,
+            issue_iid: TEST_ISSUE_IID,
+            issue: &mock_issue_details,
+            file_index_manager: &file_index_manager,
+        };
+
+        let mut prompt_parts = Vec::new();
+        let user_context = "/unknowncommand"; // The unknown command itself
+
+        build_issue_prompt_with_context(issue_prompt_context, user_context, &mut prompt_parts)
+            .await
+            .unwrap();
+
+        assert!(
+            prompt_parts.contains(&SlashCommand::Help.get_precanned_prompt().to_string()),
+            "Prompt parts should contain the help precanned prompt for an unknown issue command."
+        );
+        assert!(
+            prompt_parts.contains(&generate_help_message()),
+            "Prompt parts should contain the full help message for an unknown issue command."
+        );
+    }
+
+    #[tokio::test]
+    async fn test_unknown_slash_command_invokes_help_mr() {
+        let mut server = mockito::Server::new_async().await;
+        let config = test_app_settings(server.url());
+        let gitlab_client = Arc::new(GitlabApiClient::new(config.clone()).unwrap());
+        let file_index_manager = Arc::new(FileIndexManager::new(gitlab_client.clone(), 3600));
+
+        let event_time = Utc::now();
+        let test_mr_iid = 303;
+        // Create a new event specifically for MR
+        let mut event = create_test_note_event_with_id(
+            TEST_USER_USERNAME,
+            "MergeRequest", // Important: Set to MergeRequest
+            TEST_MENTION_ID,
+            Some(format!("@{} /anotherunknown", TEST_BOT_USERNAME)),
+            Some(event_time.to_rfc3339()),
+        );
+        // Ensure merge_request field is populated correctly for MR
+        event.merge_request = Some(GitlabNoteObject {
+            id: 2, // Different from issue's noteable_id if necessary
+            iid: test_mr_iid,
+            title: "Test MR for Unknown Command".to_string(),
+            description: Some("Description for MR".to_string()),
+        });
+        event.object_attributes.iid = Some(test_mr_iid);
+
+        let mock_mr_details = crate::models::GitlabMergeRequest {
+            id: 2,
+            iid: test_mr_iid,
+            project_id: TEST_PROJECT_ID,
+            title: "Test MR for Unknown Command".to_string(),
+            description: Some("Description for MR".to_string()),
+            state: "opened".to_string(),
+            author: GitlabUser {
+                id: TEST_GENERIC_USER_ID,
+                username: "mr_creator".to_string(),
+                name: "MR Creator".to_string(),
+                avatar_url: None,
+            },
+            labels: vec![],
+            source_branch: "feature-branch".to_string(),
+            target_branch: "main".to_string(),
+            web_url: "url_mr".to_string(),
+            updated_at: event_time.to_rfc3339(),
+            // DiffRefs, commits_count, and changes_count removed as they are not in the current GitlabMergeRequest model
+            detailed_merge_status: Some("mergeable".to_string()), // Added an example of a current field
+            head_pipeline: None, // Added an example of a current field
+        };
+
+        // Mock get_merge_request
+        let _m_get_mr = server
+            .mock(
+                "GET",
+                format!(
+                    "/api/v4/projects/{}/merge_requests/{}",
+                    TEST_PROJECT_ID, test_mr_iid
+                )
+                .as_str(),
+            )
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(json!(mock_mr_details).to_string())
+            .create_async()
+            .await;
+
+        // Mock get_all_merge_request_notes (for comment context) - return empty
+        let _m_get_all_mr_notes = server
+            .mock(
+                "GET",
+                Matcher::Regex(format!(
+                    r"/api/v4/projects/{}/merge_requests/{}/notes", // No query params
+                    TEST_PROJECT_ID, test_mr_iid
+                )),
+            )
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(json!([]).to_string())
+            .create_async()
+            .await;
+
+        // Mock for RepoContextExtractor (list_repository_tree, get_file_content for diffs)
+        let _m_list_tree_mr = server
+            .mock(
+                "GET",
+                Matcher::Regex(r"/api/v4/projects/.*/repository/tree.*".to_string()),
+            )
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(json!([]).to_string()) // Empty tree
+            .create_async()
+            .await;
+
+        // This mock is for files within extract_context_for_mr, e.g., diff files.
+        // It's distinct from CONTRIBUTING.md.
+        let _m_get_any_file_mr_context = server
+            .mock(
+                "GET",
+                Matcher::Regex(r"/api/v4/projects/.*/repository/files/.*".to_string()),
+            )
+            .with_status(404) // Assume no specific files found for simplicity
+            .create_async()
+            .await;
+
+        // Mock get_merge_request_changes (called by extract_context_for_mr)
+        let _m_get_mr_changes = server
+            .mock(
+                "GET",
+                Matcher::Regex(format!(
+                    "/api/v4/projects/{}/merge_requests/{}/changes",
+                    TEST_PROJECT_ID, test_mr_iid
+                )),
+            )
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                json!({
+                    "changes": [] // No changes for simplicity
+                })
+                .to_string(),
+            ) // Added .to_string() to satisfy AsRef<[u8]>
+            .create_async()
+            .await;
+
+        let mr_prompt_context = MrPromptContext {
+            event: &event,
+            gitlab_client: &gitlab_client,
+            config: &config,
+            mr: &mock_mr_details,
+            file_index_manager: &file_index_manager,
+        };
+
+        let mut prompt_parts = Vec::new();
+        let mut commit_history = String::new(); // Required for build_mr_prompt_with_context
+        let user_context = "/anotherunknown"; // The unknown command
+
+        build_mr_prompt_with_context(
+            mr_prompt_context,
+            user_context,
+            &mut prompt_parts,
+            &mut commit_history,
+        )
+        .await; // This function doesn't return a Result in the current code
+
+        assert!(
+            prompt_parts.contains(&SlashCommand::Help.get_precanned_prompt().to_string()),
+            "Prompt parts should contain the help precanned prompt for an unknown MR command."
+        );
+        assert!(
+            prompt_parts.contains(&generate_help_message()),
+            "Prompt parts should contain the full help message for an unknown MR command."
+        );
+    }
 }
