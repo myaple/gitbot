@@ -8,9 +8,17 @@ use crate::file_indexer::FileIndexManager;
 use crate::gitlab::{GitlabApiClient, GitlabError};
 use crate::mention_cache::MentionCache;
 use crate::models::{
-    CommandDescription, GitlabNoteAttributes, GitlabNoteEvent, HelpOutput, LLMResponse, // Added LLMResponse
-    OpenAIChatMessage, OpenAIChatRequest, PostmortemOutput, SuggestionsOutput, SummarizeOutput,
+    CommandDescription,
+    GitlabNoteAttributes,
+    GitlabNoteEvent,
+    HelpOutput,
+    LLMResponse, // Added LLMResponse
+    OpenAIChatMessage,
+    OpenAIChatRequest,
+    PostmortemOutput,
     StructuredLlMResponse,
+    SuggestionsOutput,
+    SummarizeOutput,
 };
 use crate::openai::OpenAIApiClient;
 use crate::repo_context::RepoContextExtractor;
@@ -53,23 +61,29 @@ Conclude with overall recommendations.
 Respond with a JSON object with the following fields: \"adherence_to_guidelines\", \"performance_impact\", \"strengths\", \"areas_for_improvement\", \"conclusion_and_recommendations\".", json_instruction = json_instruction)
             }
             SlashCommand::Postmortem => {
-                format!("Generate a traditional SaaS postmortem.
+                format!(
+                    "Generate a traditional SaaS postmortem.
 Include a detailed timeline of events.
 Provide a thorough root cause analysis.
 {json_instruction}
-Respond with a JSON object with the following fields: \"timeline\", \"root_cause_analysis\".", json_instruction = json_instruction)
+Respond with a JSON object with the following fields: \"timeline\", \"root_cause_analysis\".",
+                    json_instruction = json_instruction
+                )
             }
             SlashCommand::Suggestions => {
-                format!("Describe a possible solution or implementation to resolve this issue.
+                format!(
+                    "Describe a possible solution or implementation to resolve this issue.
 {json_instruction}
-Respond with a JSON object with a single field: \"suggested_solution\".", json_instruction = json_instruction)
+Respond with a JSON object with a single field: \"suggested_solution\".",
+                    json_instruction = json_instruction
+                )
             }
             SlashCommand::Help => {
-                format!("List all available slash commands for GitBot and explain their purposes.
+                format!(r#"List all available slash commands for GitBot and explain their purposes.
 Offer to help the user understand what GitBot can do. Be helpful and welcoming.
 {json_instruction}
-Respond with a JSON object with fields: \"available_commands\" (an array of objects, each with \"name\" and \"description\" fields) and \"usage_instructions\" (a general guide on how to use the bot and its commands).
-Example for 'available_commands': [{\"name\": \"/summarize\", \"description\": \"Generates a summary...\"}, ...]", json_instruction = json_instruction)
+Respond with a JSON object with fields: "available_commands" (an array of objects, each with "name" and "description" fields) and "usage_instructions" (a general guide on how to use the bot and its commands).
+Example for 'available_commands': [{{"name": "/summarize", "description": "Generates a summary..."}}, ...]"#, json_instruction = json_instruction)
             }
         }
     }
@@ -523,7 +537,8 @@ async fn generate_and_post_reply(
 
     // Format final comment using the LLMResponse enum
     // Ensure format_final_reply_body_from_structured is renamed or adapted to take LLMResponse
-    let final_comment_body = format_llm_response( // Renamed function
+    let final_comment_body = format_llm_response(
+        // Renamed function
         &event.user.username,
         llm_response, // Pass the LLMResponse enum instance
         reply_context.is_issue,
@@ -844,14 +859,17 @@ async fn get_llm_structured_reply(
     })?;
 
     // Optional: Further validation based on expected_command_type if #[serde(untagged)] isn't specific enough
-    if let Some(command_type) = expected_command_type {
-        match (&parsed_response, command_type) {
+    if let Some(command_type_val) = expected_command_type { // Renamed to avoid conflict
+        match (&parsed_response, &command_type_val) { // Use reference for command_type_val
             (StructuredLlMResponse::Summary(_), SlashCommand::Summarize) => Ok(parsed_response),
             (StructuredLlMResponse::Postmortem(_), SlashCommand::Postmortem) => Ok(parsed_response),
-            (StructuredLlMResponse::Suggestions(_), SlashCommand::Suggestions) => Ok(parsed_response),
+            (StructuredLlMResponse::Suggestions(_), SlashCommand::Suggestions) => {
+                Ok(parsed_response)
+            }
             (StructuredLlMResponse::Help(_), SlashCommand::Help) => Ok(parsed_response),
             _ => {
-                warn!("LLM response structure did not match expected command type. Command: {:?}, Response: {:?}", command_type, parsed_response);
+                // Log the command_type_val that was expected
+                warn!("LLM response structure did not match expected command type. Expected: {:?}, Got: {:?}", command_type_val, parsed_response);
                 // Depending on strictness, could return an error here.
                 // For now, accept if it parsed into *any* valid structured response.
                 Ok(parsed_response)
@@ -1211,8 +1229,14 @@ async fn get_llm_plain_text_reply(
         .send_chat_completion(&openai_request)
         .await
         .map_err(|e| {
-            error!("Failed to communicate with OpenAI for plain text reply: {}", e);
-            anyhow!("Failed to communicate with OpenAI for plain text reply: {}", e)
+            error!(
+                "Failed to communicate with OpenAI for plain text reply: {}",
+                e
+            );
+            anyhow!(
+                "Failed to communicate with OpenAI for plain text reply: {}",
+                e
+            )
         })?;
 
     debug!("Raw OpenAI response for plain text: {:?}", openai_response);

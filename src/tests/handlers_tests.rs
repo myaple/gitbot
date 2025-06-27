@@ -986,7 +986,7 @@ mod tests {
                         "index": 0,
                         "message": {
                             "role": "assistant",
-                            "content": "Security analysis summary with guidelines adherence."
+                            "content": "{\n  \"adherence_to_guidelines\": \"The MR largely adheres to the contribution guidelines.\",\n  \"performance_impact\": \"No significant performance impact is expected.\",\n  \"strengths\": \"The code is well-structured and includes good test coverage.\",\n  \"areas_for_improvement\": \"Consider adding more detailed comments in complex sections.\",\n  \"conclusion_and_recommendations\": \"Overall, this is a good MR. Recommend merging after addressing minor comments.\"\n}"
                         },
                         "finish_reason": "stop"
                     }],
@@ -1164,7 +1164,7 @@ mod tests {
                         "index": 0,
                         "message": {
                             "role": "assistant",
-                            "content": "Here are the available commands..."
+                            "content": "{\n  \"available_commands\": [\n    {\n      \"name\": \"/summarize\",\n      \"description\": \"Generates a summary of the changes in an MR or the content of an issue.\"\n    },\n    {\n      \"name\": \"/help\",\n      \"description\": \"Displays this help message with available commands.\"\n    }\n  ],\n  \"usage_instructions\": \"Mention @test_bot with a command. For example: @test_bot /summarize\"\n}"
                         },
                         "finish_reason": "stop"
                     }],
