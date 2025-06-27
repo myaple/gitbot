@@ -146,3 +146,60 @@ pub struct GitlabCommit {
     pub committed_date: String,
     pub message: String,
 }
+
+// Structured output for /summarize command
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SummarizeOutput {
+    pub adherence_to_guidelines: String,
+    pub performance_impact: String,
+    pub strengths: String,
+    pub areas_for_improvement: String,
+    pub conclusion_and_recommendations: String,
+}
+
+// Structured output for /postmortem command
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct PostmortemOutput {
+    pub timeline: String,
+    pub root_cause_analysis: String,
+}
+
+// Structured output for /suggestions command
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SuggestionsOutput {
+    pub suggested_solution: String,
+}
+
+// Description of a single command for /help
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CommandDescription {
+    pub name: String,
+    pub description: String,
+}
+
+// Structured output for /help command
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct HelpOutput {
+    pub available_commands: Vec<CommandDescription>,
+    pub usage_instructions: String,
+}
+
+// Enum to wrap all possible structured output types
+// This will be useful for the return type of functions that parse the LLM response.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(untagged)] // Allows deserializing into the first matching variant
+pub enum StructuredLlMResponse {
+    Summary(SummarizeOutput),
+    Postmortem(PostmortemOutput),
+    Suggestions(SuggestionsOutput),
+    Help(HelpOutput),
+    // Potentially add a variant for plain text fallback if needed
+    // PlainText(String),
+}
+
+// Enum to represent either a structured response or a plain text string from the LLM
+#[derive(Debug, Clone)]
+pub enum LLMResponse {
+    Structured(StructuredLlMResponse),
+    Plain(String),
+}
