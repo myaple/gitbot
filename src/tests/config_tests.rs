@@ -14,6 +14,7 @@ use crate::config::AppSettings;
 fn test_create_app_settings() {
     // Create AppSettings directly for testing
     let settings = AppSettings {
+        prompt_prefix: None,
         gitlab_url: "https://gitlab.example.com".to_string(),
         gitlab_token: "test_gitlab_token".to_string(),
         openai_api_key: "test_openai_key".to_string(),
@@ -63,6 +64,7 @@ fn test_create_app_settings() {
 fn test_client_certificate_config_with_env_vars() {
     // Test with client certificate configuration
     let settings = AppSettings {
+        prompt_prefix: None,
         gitlab_url: "https://gitlab.example.com".to_string(),
         gitlab_token: "test_gitlab_token".to_string(),
         openai_api_key: "test_openai_key".to_string(),

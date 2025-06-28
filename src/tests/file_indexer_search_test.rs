@@ -9,6 +9,7 @@ mod tests {
     fn create_gitlab_client() -> Arc<GitlabApiClient> {
         // Create test settings
         let settings = crate::config::AppSettings {
+            prompt_prefix: None,
             gitlab_url: "https://gitlab.com".to_string(),
             gitlab_token: "test_token".to_string(),
             openai_api_key: "key".to_string(),

@@ -677,11 +677,19 @@ async fn get_llm_reply(
     config: &Arc<AppSettings>,
     prompt_text: &str,
 ) -> Result<String> {
+    // Prepend prompt prefix if configured
+    let final_prompt = if let Some(prefix) = &config.prompt_prefix {
+        format!("{}\n\n{}", prefix, prompt_text)
+    } else {
+        prompt_text.to_string()
+    };
+
     // Call OpenAI Client
     let messages = vec![OpenAIChatMessage {
         role: "user".to_string(),
-        content: prompt_text.to_string(), // Convert &str to String
+        content: final_prompt,
     }];
+
     let openai_request = OpenAIChatRequest {
         model: config.openai_model.clone(),
         messages,

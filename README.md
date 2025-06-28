@@ -108,6 +108,7 @@ GitBot supports extensive configuration through command line arguments or enviro
 | `GITBOT_CONTEXT_REPO_PATH` | `--context-repo-path` | - | Additional repository for context |
 | `GITBOT_MAX_CONTEXT_SIZE` | `--max-context-size` | `60000` | Maximum context characters |
 | `GITBOT_DEFAULT_BRANCH` | `--default-branch` | `main` | Default branch name |
+| `GITBOT_PROMPT_PREFIX` | `--prompt-prefix` | - | Optional prefix to prepend to every prompt sent to the LLM |
 | `GITBOT_CLIENT_CERT_PATH` | `--client-cert-path` | - | Path to client certificate file for OpenAI API |
 | `GITBOT_CLIENT_KEY_PATH` | `--client-key-path` | - | Path to client private key file for OpenAI API |
 | `GITBOT_CLIENT_KEY_PASSWORD` | *env only* | - | Password for client private key (environment variable only) |
@@ -145,7 +146,46 @@ export GITBOT_CLIENT_KEY_PASSWORD=your_key_password  # Optional, for encrypted k
 
 **Note:** The `GITBOT_CLIENT_KEY_PASSWORD` environment variable is only available as an environment variable for security reasons (no CLI argument).
 
-## 🛠️ Development
+## 🔍 Prompt Prefix Customization
+
+GitBot allows you to add a consistent prefix to every prompt sent to the LLM. This is useful for:
+- Setting a specific persona or role for the bot
+- Adding formatting requirements
+- Including security guidelines
+- Specifying response length preferences
+
+### Usage
+
+Set the prefix using either environment variable or command-line argument:
+
+```bash
+# Environment variable
+GITBOT_PROMPT_PREFIX="You are an expert software developer. Always provide detailed explanations." ./gitbot
+
+# Command-line argument
+./gitbot --prompt-prefix "You are an expert software developer. Always provide detailed explanations."
+```
+
+### Example
+
+With this configuration:
+```bash
+GITBOT_PROMPT_PREFIX="You are a senior Python developer. Always include code examples in your responses."
+```
+
+When a user asks:
+```
+@gitbot How can I optimize this function?
+```
+
+The actual prompt sent to the LLM will be:
+```
+You are a senior Python developer. Always include code examples in your responses.
+
+How can I optimize this function?
+```
+
+This ensures consistent behavior across all interactions.
 
 ### Building from Source
 
