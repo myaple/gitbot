@@ -13,7 +13,7 @@ use crate::repo_context::RepoContextExtractor;
 
 // Helper function to extract context after bot mention
 pub(crate) fn extract_context_after_mention(note: &str, bot_name: &str) -> Option<String> {
-    let mention = format!("@{}", bot_name);
+    let mention = format!("@{bot_name}");
     note.find(&mention).and_then(|start_index| {
         let after_mention = &note[start_index + mention.len()..];
         let trimmed_context = after_mention.trim();
@@ -589,20 +589,17 @@ fn format_final_reply_body(
 ) -> String {
     if is_issue {
         format!(
-            "Hey @{}, here's the information you requested:\n\n---\n\n{}",
-            event_user_username, llm_reply
+            "Hey @{event_user_username}, here's the information you requested:\n\n---\n\n{llm_reply}"
         )
     } else {
         // For merge requests, include commit history only if no user context was provided
         if user_provided_context.is_none() {
             format!(
-                "Hey @{}, here's the information you requested:\n\n---\n\n{}\n\n<details><summary>Additional Commit History</summary>\n\n{}</details>",
-                event_user_username, llm_reply, commit_history
+                "Hey @{event_user_username}, here's the information you requested:\n\n---\n\n{llm_reply}\n\n<details><summary>Additional Commit History</summary>\n\n{commit_history}</details>"
             )
         } else {
             format!(
-                "Hey @{}, here's the information you requested:\n\n---\n\n{}",
-                event_user_username, llm_reply
+                "Hey @{event_user_username}, here's the information you requested:\n\n---\n\n{llm_reply}"
             )
         }
     }
@@ -679,7 +676,7 @@ async fn get_llm_reply(
 ) -> Result<String> {
     // Prepend prompt prefix if configured
     let final_prompt = if let Some(prefix) = &config.prompt_prefix {
-        format!("{}\n\n{}", prefix, prompt_text)
+        format!("{prefix}\n\n{prompt_text}")
     } else {
         prompt_text.to_string()
     };
@@ -797,8 +794,7 @@ async fn add_repository_context_to_prompt(
     {
         Ok(context_str) => {
             let enhanced_context = format!(
-                "Repository Context (files are ranked by relevance based on keyword frequency - higher percentages indicate more relevant content): {}",
-                context_str
+                "Repository Context (files are ranked by relevance based on keyword frequency - higher percentages indicate more relevant content): {context_str}"
             );
             prompt_parts.push(enhanced_context);
         }
@@ -917,7 +913,7 @@ pub(crate) async fn build_issue_prompt_with_context(
         }
     }
 
-    prompt_parts.push(format!("User's specific request: {}", user_context));
+    prompt_parts.push(format!("User's specific request: {user_context}"));
 
     Ok(())
 }
@@ -1122,8 +1118,7 @@ async fn add_mr_context_to_prompt(
     {
         Ok((context_for_llm, context_for_comment)) => {
             let enhanced_context = format!(
-                "Code Changes (files are ranked by relevance based on keyword frequency - higher percentages indicate more relevant content): {}",
-                context_for_llm
+                "Code Changes (files are ranked by relevance based on keyword frequency - higher percentages indicate more relevant content): {context_for_llm}"
             );
             prompt_parts.push(enhanced_context);
             *commit_history = context_for_comment; // Update commit_history
@@ -1235,7 +1230,7 @@ pub(crate) async fn build_mr_prompt_with_context(
         }
     }
 
-    prompt_parts.push(format!("User's specific request: {}", user_context));
+    prompt_parts.push(format!("User's specific request: {user_context}"));
 }
 
 // Helper function to build MR prompt without user context (default review)
@@ -1304,8 +1299,7 @@ async fn build_mr_prompt_without_context(
     // Add instructions for review
     if let Some(contributing_content) = &contributing_md_content {
         prompt_parts.push(format!(
-            "The following are the guidelines from CONTRIBUTING.md:\n{}\n\nPlease review how well this MR adheres to these guidelines.",
-            contributing_content
+            "The following are the guidelines from CONTRIBUTING.md:\n{contributing_content}\n\nPlease review how well this MR adheres to these guidelines."
         ));
         prompt_parts.push(
             "Provide specific examples of good adherence and areas for improvement. \

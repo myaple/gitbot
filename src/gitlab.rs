@@ -106,7 +106,7 @@ impl GitlabApiClient {
         project_id: i64,
         issue_iid: i64,
     ) -> Result<GitlabIssue, GitlabError> {
-        let path = format!("/api/v4/projects/{}/issues/{}", project_id, issue_iid);
+        let path = format!("/api/v4/projects/{project_id}/issues/{issue_iid}");
         self.send_request(Method::GET, &path, None, None::<()>)
             .await
     }
@@ -117,7 +117,7 @@ impl GitlabApiClient {
         project_id: i64,
         mr_iid: i64,
     ) -> Result<GitlabMergeRequest, GitlabError> {
-        let path = format!("/api/v4/projects/{}/merge_requests/{}", project_id, mr_iid);
+        let path = format!("/api/v4/projects/{project_id}/merge_requests/{mr_iid}");
         self.send_request(Method::GET, &path, None, None::<()>)
             .await
     }
@@ -129,7 +129,7 @@ impl GitlabApiClient {
         issue_iid: i64,
         comment_body: &str,
     ) -> Result<GitlabNoteAttributes, GitlabError> {
-        let path = format!("/api/v4/projects/{}/issues/{}/notes", project_id, issue_iid);
+        let path = format!("/api/v4/projects/{project_id}/issues/{issue_iid}/notes");
         let body = serde_json::json!({"body": comment_body});
         self.send_request(Method::POST, &path, None, Some(body))
             .await
@@ -142,10 +142,7 @@ impl GitlabApiClient {
         mr_iid: i64,
         comment_body: &str,
     ) -> Result<GitlabNoteAttributes, GitlabError> {
-        let path = format!(
-            "/api/v4/projects/{}/merge_requests/{}/notes",
-            project_id, mr_iid
-        );
+        let path = format!("/api/v4/projects/{project_id}/merge_requests/{mr_iid}/notes");
         let body = serde_json::json!({"body": comment_body});
         self.send_request(Method::POST, &path, None, Some(body))
             .await
@@ -154,7 +151,7 @@ impl GitlabApiClient {
     #[instrument(skip(self), fields(repo_path))]
     pub async fn get_project_by_path(&self, repo_path: &str) -> Result<GitlabProject, GitlabError> {
         let encoded_path = urlencoding::encode(repo_path);
-        let path = format!("/api/v4/projects/{}", encoded_path);
+        let path = format!("/api/v4/projects/{encoded_path}");
         self.send_request(Method::GET, &path, None, None::<()>)
             .await
     }
@@ -165,7 +162,7 @@ impl GitlabApiClient {
         project_id: i64,
         since_timestamp: u64,
     ) -> Result<Vec<GitlabIssue>, GitlabError> {
-        let path = format!("/api/v4/projects/{}/issues", project_id);
+        let path = format!("/api/v4/projects/{project_id}/issues");
         let dt = DateTime::from_timestamp(since_timestamp as i64, 0).unwrap_or_else(|| {
             Utc.timestamp_opt(0, 0)
                 .single()
@@ -193,7 +190,7 @@ impl GitlabApiClient {
         project_id: i64,
         since_timestamp: u64,
     ) -> Result<Vec<GitlabMergeRequest>, GitlabError> {
-        let path = format!("/api/v4/projects/{}/merge_requests", project_id);
+        let path = format!("/api/v4/projects/{project_id}/merge_requests");
         let dt = DateTime::from_timestamp(since_timestamp as i64, 0).unwrap_or_else(|| {
             Utc.timestamp_opt(0, 0)
                 .single()
@@ -234,7 +231,7 @@ impl GitlabApiClient {
         issue_iid: i64,
         since_timestamp: Option<u64>,
     ) -> Result<Vec<GitlabNoteAttributes>, GitlabError> {
-        let path = format!("/api/v4/projects/{}/issues/{}/notes", project_id, issue_iid);
+        let path = format!("/api/v4/projects/{project_id}/issues/{issue_iid}/notes");
 
         let mut query_params_values =
             vec![("sort", "asc".to_string()), ("per_page", "100".to_string())];
@@ -276,10 +273,7 @@ impl GitlabApiClient {
         mr_iid: i64,
         since_timestamp: Option<u64>,
     ) -> Result<Vec<GitlabNoteAttributes>, GitlabError> {
-        let path = format!(
-            "/api/v4/projects/{}/merge_requests/{}/notes",
-            project_id, mr_iid
-        );
+        let path = format!("/api/v4/projects/{project_id}/merge_requests/{mr_iid}/notes");
 
         let mut query_params_values =
             vec![("sort", "asc".to_string()), ("per_page", "100".to_string())];
@@ -328,7 +322,7 @@ impl GitlabApiClient {
     /// Get the repository file tree with pagination
     #[instrument(skip(self), fields(project_id))]
     pub async fn get_repository_tree(&self, project_id: i64) -> Result<Vec<String>, GitlabError> {
-        let path = format!("/api/v4/projects/{}/repository/tree", project_id);
+        let path = format!("/api/v4/projects/{project_id}/repository/tree");
         let per_page = 100;
 
         let mut all_items = Vec::new();
@@ -462,7 +456,7 @@ impl GitlabApiClient {
         project_id: i64,
         query: &str,
     ) -> Result<Vec<String>, GitlabError> {
-        let path = format!("/api/v4/projects/{}/search", project_id);
+        let path = format!("/api/v4/projects/{project_id}/search");
         let query_params = &[
             ("scope", "blobs"),
             ("search", query),
@@ -489,7 +483,7 @@ impl GitlabApiClient {
         project_id: i64,
         query: &str,
     ) -> Result<Vec<String>, GitlabError> {
-        let path = format!("/api/v4/projects/{}/search", project_id);
+        let path = format!("/api/v4/projects/{project_id}/search");
         let query_params = &[
             ("scope", "blobs"),
             ("search", query),
@@ -516,10 +510,8 @@ impl GitlabApiClient {
         project_id: i64,
         merge_request_iid: i64,
     ) -> Result<Vec<GitlabDiff>, GitlabError> {
-        let path = format!(
-            "/api/v4/projects/{}/merge_requests/{}/changes",
-            project_id, merge_request_iid
-        );
+        let path =
+            format!("/api/v4/projects/{project_id}/merge_requests/{merge_request_iid}/changes");
 
         let response: serde_json::Value = self
             .send_request(Method::GET, &path, None, None::<()>)
@@ -551,7 +543,7 @@ impl GitlabApiClient {
         issue_iid: i64,
         label_name: &str,
     ) -> Result<GitlabIssue, GitlabError> {
-        let path = format!("/api/v4/projects/{}/issues/{}", project_id, issue_iid);
+        let path = format!("/api/v4/projects/{project_id}/issues/{issue_iid}");
         let body = serde_json::json!({ "add_labels": label_name });
         self.send_request(Method::PUT, &path, None, Some(body))
             .await
@@ -564,7 +556,7 @@ impl GitlabApiClient {
         issue_iid: i64,
         label_name: &str,
     ) -> Result<GitlabIssue, GitlabError> {
-        let path = format!("/api/v4/projects/{}/issues/{}", project_id, issue_iid);
+        let path = format!("/api/v4/projects/{project_id}/issues/{issue_iid}");
         let body = serde_json::json!({ "remove_labels": label_name });
         self.send_request(Method::PUT, &path, None, Some(body))
             .await
@@ -578,7 +570,7 @@ impl GitlabApiClient {
         file_path: &str,
         limit: Option<usize>,
     ) -> Result<Vec<GitlabCommit>, GitlabError> {
-        let path = format!("/api/v4/projects/{}/repository/commits", project_id);
+        let path = format!("/api/v4/projects/{project_id}/repository/commits");
 
         let per_page = limit.unwrap_or(5).to_string();
         let query_params = vec![("path", file_path), ("per_page", &per_page)];
