@@ -8,6 +8,7 @@ use std::sync::Arc;
 // Helper to create AppSettings for tests
 fn create_test_settings(base_url: String) -> AppSettings {
     AppSettings {
+        prompt_prefix: None,
         gitlab_url: base_url,
         gitlab_token: "test_token".to_string(),
         openai_api_key: "key".to_string(),

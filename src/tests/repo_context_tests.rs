@@ -31,6 +31,7 @@ mod tests {
         };
 
         let settings = AppSettings {
+            prompt_prefix: None,
             gitlab_url: "https://gitlab.com".to_string(),
             gitlab_token: "test_token".to_string(),
             openai_api_key: "key".to_string(),
@@ -86,6 +87,7 @@ mod tests {
     #[test]
     fn test_calculate_relevance_score() {
         let settings = AppSettings {
+            prompt_prefix: None,
             openai_model: "gpt-3.5-turbo".to_string(),
             openai_temperature: 0.7,
             openai_max_tokens: 1024,
@@ -159,6 +161,7 @@ mod tests {
     // Helper to create AppSettings for tests
     fn test_settings(gitlab_url: String, context_repo: Option<String>) -> Arc<AppSettings> {
         Arc::new(AppSettings {
+            prompt_prefix: None,
             gitlab_url: gitlab_url.clone(),
             gitlab_token: "test_token".to_string(),
             openai_api_key: "test_openai_key".to_string(),
@@ -797,6 +800,7 @@ mod tests {
     #[test]
     fn test_extract_relevant_file_sections() {
         let settings = AppSettings {
+            prompt_prefix: None,
             openai_model: "gpt-3.5-turbo".to_string(),
             openai_temperature: 0.7,
             openai_max_tokens: 1024,
@@ -904,6 +908,7 @@ fn decode_jwt(token: &str) -> Result<Claims> {
     fn test_configurable_context_lines() {
         // Test that different context_lines settings produce different amounts of context
         let settings_3_lines = AppSettings {
+            prompt_prefix: None,
             openai_model: "gpt-3.5-turbo".to_string(),
             openai_temperature: 0.7,
             openai_max_tokens: 1024,
@@ -928,6 +933,7 @@ fn decode_jwt(token: &str) -> Result<Claims> {
         };
 
         let settings_8_lines = AppSettings {
+            prompt_prefix: None,
             openai_model: "gpt-3.5-turbo".to_string(),
             openai_temperature: 0.7,
             openai_max_tokens: 1024,
@@ -1020,6 +1026,7 @@ fn decode_jwt(token: &str) -> Result<Claims> {
     fn test_token_usage_reduction() {
         // This test demonstrates the token usage reduction
         let settings = AppSettings {
+            prompt_prefix: None,
             openai_model: "gpt-3.5-turbo".to_string(),
             openai_temperature: 0.7,
             openai_max_tokens: 1024,
@@ -1112,6 +1119,7 @@ fn decode_jwt(token: &str) -> Result<Claims> {
     #[test]
     fn test_calculate_content_relevance_score() {
         let settings = AppSettings {
+            prompt_prefix: None,
             openai_model: "gpt-3.5-turbo".to_string(),
             openai_temperature: 0.7,
             openai_max_tokens: 1024,
@@ -1203,6 +1211,7 @@ fn decode_jwt(token: &str) -> Result<Claims> {
     #[test]
     fn test_weighted_file_context_formatting() {
         let settings = AppSettings {
+            prompt_prefix: None,
             openai_model: "gpt-3.5-turbo".to_string(),
             openai_temperature: 0.7,
             openai_max_tokens: 1024,

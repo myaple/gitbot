@@ -25,6 +25,7 @@ mod tests {
     // Helper to create a basic AppSettings for tests
     fn test_app_settings(base_url: String) -> Arc<AppSettings> {
         Arc::new(AppSettings {
+            prompt_prefix: None,
             gitlab_url: base_url.clone(), // Cloning base_url if used for both
             gitlab_token: "test_token".to_string(),
             openai_api_key: "test_openai_key".to_string(),
@@ -203,6 +204,7 @@ mod tests {
 
         // Create test config
         let config = Arc::new(AppSettings {
+            prompt_prefix: None,
             gitlab_url: "https://gitlab.example.com".to_string(),
             gitlab_token: "test_token".to_string(),
             openai_api_key: "test_key".to_string(),
@@ -230,6 +232,7 @@ mod tests {
         let server = mockito::Server::new_async().await;
         let base_url = server.url();
         let settings = AppSettings {
+            prompt_prefix: None,
             gitlab_url: base_url,
             gitlab_token: "test_token".to_string(),
             openai_api_key: "test_key".to_string(),
@@ -276,6 +279,7 @@ mod tests {
 
         // Create test config
         let config = Arc::new(AppSettings {
+            prompt_prefix: None,
             gitlab_url: "https://gitlab.example.com".to_string(),
             gitlab_token: "test_token".to_string(),
             openai_api_key: "test_key".to_string(),
@@ -306,6 +310,7 @@ mod tests {
         let server = mockito::Server::new_async().await;
         let base_url = server.url();
         let settings = AppSettings {
+            prompt_prefix: None,
             gitlab_url: base_url,
             gitlab_token: "test_token".to_string(),
             openai_api_key: "test_key".to_string(),

@@ -115,7 +115,7 @@ impl OpenAIApiClient {
             let body = response
                 .text()
                 .await
-                .unwrap_or_else(|e| format!("Failed to read error body: {}", e));
+                .unwrap_or_else(|e| format!("Failed to read error body: {e}"));
             error!("OpenAI API Error: {} - {}", status, body);
             return Err(OpenAIClient::Api { status, body });
         }

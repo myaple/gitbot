@@ -276,9 +276,9 @@ impl FileIndexManager {
                                     return Ok(file_path);
                                 }
                             }
-                            Err(format!("File too large or no content: {}", file_path))
+                            Err(format!("File too large or no content: {file_path}"))
                         }
-                        Err(e) => Err(format!("Failed to get content: {}", e)),
+                        Err(e) => Err(format!("Failed to get content: {e}")),
                     }
                 }
             })

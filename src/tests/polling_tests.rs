@@ -17,6 +17,7 @@ mod tests {
 
     fn test_config(stale_days: u64, bot_username: &str, base_url: String) -> Arc<AppSettings> {
         Arc::new(AppSettings {
+            prompt_prefix: None,
             gitlab_url: base_url,
             gitlab_token: "test_token".to_string(),
             openai_api_key: "key".to_string(),
@@ -646,6 +647,7 @@ mod tests {
 
         // Create settings with max_age_hours = 12
         let settings = AppSettings {
+            prompt_prefix: None,
             gitlab_url: base_url.clone(),
             gitlab_token: "test_token".to_string(),
             openai_api_key: "test_key".to_string(),

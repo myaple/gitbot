@@ -7,6 +7,7 @@ use serde_json::json;
 
 fn create_test_settings(base_url: String) -> AppSettings {
     AppSettings {
+        prompt_prefix: None,
         openai_custom_url: base_url,
         openai_api_key: "test_api_key".to_string(),
         openai_model: "gpt-3.5-turbo".to_string(),
@@ -362,6 +363,7 @@ async fn test_new_openai_api_client_with_client_cert_config() {
     // Test that client can be created when client certificate paths are provided
     // but files don't exist (should not fail creation, only when making actual requests)
     let settings = AppSettings {
+        prompt_prefix: None,
         openai_custom_url: "https://api.openai.com/v1".to_string(),
         openai_api_key: "test_api_key".to_string(),
         openai_model: "gpt-3.5-turbo".to_string(),
@@ -405,6 +407,7 @@ async fn test_new_openai_api_client_with_client_cert_config() {
 async fn test_new_openai_api_client_without_client_cert() {
     // Test that client creation works without client certificates
     let settings = AppSettings {
+        prompt_prefix: None,
         openai_custom_url: "https://api.openai.com/v1".to_string(),
         openai_api_key: "test_api_key".to_string(),
         openai_model: "gpt-3.5-turbo".to_string(),

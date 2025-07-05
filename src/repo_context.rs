@@ -334,7 +334,7 @@ impl RepoContextExtractor {
         match self.get_agents_md_content(project, context_repo_path).await {
             Ok(Some(agents_md)) => {
                 has_any_content = true;
-                let agents_md_context = format!("\n--- {} ---\n{}\n", AGENTS_MD_FILE, agents_md);
+                let agents_md_context = format!("\n--- {AGENTS_MD_FILE} ---\n{agents_md}\n");
                 if total_tokens + estimate_tokens(&agents_md_context)
                     <= self.settings.max_context_size
                 {
@@ -346,8 +346,7 @@ impl RepoContextExtractor {
                         issue.iid
                     );
                     context.push_str(&format!(
-                        "\n--- {} ---\n[Content omitted due to context size limits]\n",
-                        AGENTS_MD_FILE
+                        "\n--- {AGENTS_MD_FILE} ---\n[Content omitted due to context size limits]\n"
                     ));
                 }
             }
@@ -395,8 +394,7 @@ impl RepoContextExtractor {
 
                             for (j, line) in section.lines.iter().enumerate() {
                                 let line_number = section.start_line + j;
-                                content_with_lines
-                                    .push_str(&format!("{:4}: {}\n", line_number, line));
+                                content_with_lines.push_str(&format!("{line_number:4}: {line}\n"));
                             }
                         }
 
@@ -491,7 +489,7 @@ impl RepoContextExtractor {
         match self.get_agents_md_content(project, context_repo_path).await {
             Ok(Some(agents_md)) => {
                 has_any_content = true;
-                let agents_md_context = format!("\n--- {} ---\n{}\n", AGENTS_MD_FILE, agents_md);
+                let agents_md_context = format!("\n--- {AGENTS_MD_FILE} ---\n{agents_md}\n");
                 if total_tokens + estimate_tokens(&agents_md_context)
                     <= self.settings.max_context_size
                 {
@@ -503,8 +501,7 @@ impl RepoContextExtractor {
                         mr.iid
                     );
                     context_for_llm.push_str(&format!(
-                        "\n--- {} ---\n[Content omitted due to context size limits]\n",
-                        AGENTS_MD_FILE
+                        "\n--- {AGENTS_MD_FILE} ---\n[Content omitted due to context size limits]\n"
                     ));
                 }
             }
@@ -955,10 +952,7 @@ impl RepoContextExtractor {
             0
         };
 
-        format!(
-            "--- File: {} (Relevance: {}%) ---\n{}\n",
-            file_path, relevance_percentage, content
-        )
+        format!("--- File: {file_path} (Relevance: {relevance_percentage}%) ---\n{content}\n")
     }
 
     /// Extract relevant sections from file content based on keyword matches

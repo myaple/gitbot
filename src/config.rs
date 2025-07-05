@@ -13,6 +13,10 @@ pub struct AppSettings {
     #[arg(long, env = "GITBOT_GITLAB_URL", default_value = "https://gitlab.com")]
     pub gitlab_url: String,
 
+    /// Optional prefix to prepend to every prompt sent to the LLM
+    #[arg(long, env = "GITBOT_PROMPT_PREFIX")]
+    pub prompt_prefix: Option<String>,
+
     /// GitLab API token
     #[arg(long, env = "GITBOT_GITLAB_TOKEN")]
     pub gitlab_token: String,
