@@ -7,9 +7,12 @@ use crate::config::AppSettings;
 use crate::file_indexer::FileIndexManager;
 use crate::gitlab::{GitlabApiClient, GitlabError};
 use crate::mention_cache::MentionCache;
-use crate::models::{GitlabNoteAttributes, GitlabNoteEvent, OpenAIChatMessage, OpenAIChatRequest};
+use crate::models::{
+    GitlabNoteAttributes, GitlabNoteEvent, OpenAIChatMessage, OpenAIChatRequest, Tool, ToolChoice,
+};
 use crate::openai::OpenAIApiClient;
 use crate::repo_context::RepoContextExtractor;
+use crate::tools::{create_basic_tool_registry, ToolCallContext};
 
 // Helper function to extract context after bot mention
 pub(crate) fn extract_context_after_mention(note: &str, bot_name: &str) -> Option<String> {
@@ -23,6 +26,38 @@ pub(crate) fn extract_context_after_mention(note: &str, bot_name: &str) -> Optio
             Some(trimmed_context.to_string())
         }
     })
+}
+
+// Helper function to create OpenAI request with appropriate token parameter
+fn create_openai_request(
+    model: &str,
+    token_mode: &str,
+    max_tokens: u32,
+    temperature: f32,
+    messages: Vec<OpenAIChatMessage>,
+    tools: Option<Vec<Tool>>,
+    tool_choice: Option<ToolChoice>,
+) -> OpenAIChatRequest {
+    match token_mode {
+        "max_completion_tokens" => OpenAIChatRequest {
+            model: model.to_string(),
+            messages,
+            temperature: Some(temperature),
+            max_tokens: None,
+            max_completion_tokens: Some(max_tokens),
+            tools,
+            tool_choice,
+        },
+        _ => OpenAIChatRequest {
+            model: model.to_string(),
+            messages,
+            temperature: Some(temperature),
+            max_tokens: Some(max_tokens),
+            max_completion_tokens: None,
+            tools,
+            tool_choice,
+        },
+    }
 }
 
 // Slash command definitions
@@ -465,6 +500,7 @@ async fn generate_and_post_reply(
     config: &Arc<AppSettings>,
     project_id: i64,
     reply_context: ReplyContext<'_>,
+    tool_context: Option<&mut ToolCallContext>,
 ) -> Result<()> {
     let final_prompt_text = format!(
         "{}\n\nContext:\n{}",
@@ -478,7 +514,12 @@ async fn generate_and_post_reply(
     let openai_client = OpenAIApiClient::new(config)
         .map_err(|e| anyhow!("Failed to create OpenAI client: {}", e))?;
 
-    let llm_reply = get_llm_reply(&openai_client, config, &final_prompt_text).await?;
+    // Use tool-enabled version if tool context is provided
+    let llm_reply = if let Some(tool_ctx) = tool_context {
+        get_llm_reply_with_tools(&openai_client, config, &final_prompt_text, tool_ctx).await
+    } else {
+        get_llm_reply(&openai_client, config, &final_prompt_text).await
+    }?;
 
     // Format final comment
     let final_comment_body = format_final_reply_body(
@@ -571,7 +612,19 @@ pub async fn process_mention(
         is_issue,
     };
 
-    generate_and_post_reply(&event, &gitlab_client, &config, project_id, reply_context).await?;
+    // Create tool context with GitLab tools
+    let tool_registry = create_basic_tool_registry(gitlab_client.clone(), config.clone());
+    let mut tool_context = ToolCallContext::new(config.max_tool_calls, tool_registry);
+
+    generate_and_post_reply(
+        &event,
+        &gitlab_client,
+        &config,
+        project_id,
+        reply_context,
+        Some(&mut tool_context),
+    )
+    .await?;
 
     // Add to cache after successful processing
     processed_mentions_cache.add(mention_id).await;
@@ -685,14 +738,19 @@ async fn get_llm_reply(
     let messages = vec![OpenAIChatMessage {
         role: "user".to_string(),
         content: final_prompt,
+        tool_calls: None,
+        tool_call_id: None,
     }];
 
-    let openai_request = OpenAIChatRequest {
-        model: config.openai_model.clone(),
+    let openai_request = create_openai_request(
+        &config.openai_model,
+        &config.openai_token_mode,
+        config.openai_max_tokens,
+        config.openai_temperature,
         messages,
-        temperature: Some(config.openai_temperature),
-        max_tokens: Some(config.openai_max_tokens),
-    };
+        None,
+        None,
+    );
 
     let openai_response = openai_client
         .send_chat_completion(&openai_request)
@@ -711,11 +769,289 @@ async fn get_llm_reply(
         .ok_or_else(|| anyhow!("No response choices from OpenAI"))
         .and_then(|choice| {
             if choice.message.content.is_empty() {
-                Err(anyhow!("LLM response content is empty"))
+                // Check if it was truncated due to length
+                let finish_reason = choice.finish_reason.as_deref().unwrap_or("unknown");
+                let usage_info = if let Some(usage) = &openai_response.usage {
+                    format!(
+                        " (used {}/{} tokens: {} prompt + {} completion)",
+                        usage.total_tokens,
+                        config.openai_max_tokens,
+                        usage.prompt_tokens,
+                        usage.completion_tokens.unwrap_or(0)
+                    )
+                } else {
+                    String::new()
+                };
+
+                match finish_reason {
+                    "length" => Err(anyhow!(
+                        "LLM response was truncated due to token limit. \
+                         Consider increasing --openai-max-tokens (currently {}) \
+                         or reducing context size{}",
+                        config.openai_max_tokens,
+                        usage_info
+                    )),
+                    _ => Err(anyhow!(
+                        "LLM response content is empty (finish_reason: {}){}",
+                        finish_reason,
+                        usage_info
+                    )),
+                }
             } else {
                 Ok(choice.message.content.clone())
             }
         })
+}
+
+/// Enhanced version of get_llm_reply that supports tool calling
+async fn get_llm_reply_with_tools(
+    openai_client: &OpenAIApiClient,
+    config: &Arc<AppSettings>,
+    prompt_text: &str,
+    tool_context: &mut ToolCallContext,
+) -> Result<String> {
+    use crate::models::ToolChoice;
+
+    // Create system message with project ID and branch context
+    let system_message = format!(
+        "You are GitBot, a helpful assistant for GitLab repositories. When using tools to search or access files, \
+        pay close attention to project IDs and branches:\n\
+        - Use the main project ID for files and issues/MRs in the main repository\n\
+        - If a context repository is configured, use its project ID for files from that repository\n\
+        - For merge requests, use the source branch unless specifically asked for the target branch\n\
+        - For issues, use the default branch provided in the context\n\
+        - Use the get_project_by_path tool to resolve project paths to project IDs if needed\n\
+        - The search_code tool defaults to the repository's default branch if no branch is specified\n\
+        - The prompt will provide specific project ID and branch information for each context\n\
+        - You **DO NOT** have the ability to modify any code directly - provide suggestions to the user as an adviser only\n\
+        - IMPORTANT: You can make a maximum of {} tool calls per message. Plan your tool usage efficiently.",
+        tool_context.max_tool_calls()
+    );
+
+    // Prepend prompt prefix if configured
+    let user_prompt = if let Some(prefix) = &config.prompt_prefix {
+        format!("{prefix}\n\n{prompt_text}")
+    } else {
+        prompt_text.to_string()
+    };
+
+    // Create initial messages with system message first
+    let mut messages = vec![
+        OpenAIChatMessage {
+            role: "system".to_string(),
+            content: system_message,
+            tool_calls: None,
+            tool_call_id: None,
+        },
+        OpenAIChatMessage {
+            role: "user".to_string(),
+            content: user_prompt,
+            tool_calls: None,
+            tool_call_id: None,
+        },
+    ];
+
+    // Get tool specifications for the request
+    let tool_specs = tool_context.get_tool_specs();
+    let has_tools = !tool_specs.is_empty();
+
+    // Create the initial OpenAI request with tools
+    let mut openai_request = create_openai_request(
+        &config.openai_model,
+        &config.openai_token_mode,
+        config.openai_max_tokens,
+        config.openai_temperature,
+        messages.clone(),
+        if has_tools { Some(tool_specs) } else { None },
+        if has_tools {
+            Some(ToolChoice::Auto)
+        } else {
+            None
+        },
+    );
+
+    // Multi-turn conversation loop with safety checks
+    // Use max_tool_calls as base for conversation turns (with reasonable upper limit)
+    let max_turns = std::cmp::min(tool_context.max_tool_calls() * 10, 25); // Prevent infinite loops
+    let mut current_turn = 0;
+    let max_tool_calls_per_turn = std::cmp::min(tool_context.max_tool_calls(), 10); // Prevent too many tools in one turn
+
+    loop {
+        info!("Entering tool call loop");
+
+        current_turn += 1;
+        if current_turn > max_turns {
+            error!("Maximum conversation turns reached: {}", max_turns);
+            return Err(anyhow!(
+                "I've reached the maximum number of conversation turns ({}). Please try a simpler request.",
+                max_turns
+            ));
+        }
+
+        // Send request to OpenAI
+        let openai_response = openai_client
+            .send_chat_completion(&openai_request)
+            .await
+            .map_err(|e| {
+                error!("Failed to communicate with OpenAI: {}", e);
+                anyhow!("Failed to communicate with OpenAI: {}", e)
+            })?;
+
+        debug!("OpenAI response: {:?}", openai_response);
+
+        // Get the first choice
+        let choice = openai_response
+            .choices
+            .first()
+            .ok_or_else(|| anyhow!("No response choices from OpenAI"))?;
+
+        // Check if the LLM wants to call tools
+        if let Some(tool_calls) = &choice.message.tool_calls {
+            if !tool_calls.is_empty() {
+                info!("LLM requested {} tool calls", tool_calls.len());
+
+                // Execute each tool call with safety checks
+                let tool_calls_to_execute = if tool_calls.len() > max_tool_calls_per_turn as usize {
+                    warn!(
+                        "Too many tool calls in one turn: {}, limiting to {}",
+                        tool_calls.len(),
+                        max_tool_calls_per_turn
+                    );
+                    &tool_calls[..max_tool_calls_per_turn as usize]
+                } else {
+                    tool_calls
+                };
+
+                let mut reached_limit = false;
+                for tool_call in tool_calls_to_execute {
+                    if !tool_context.can_make_tool_call() {
+                        warn!(
+                            "Maximum tool calls reached: {}",
+                            tool_context.max_tool_calls()
+                        );
+
+                        // Add a system message asking LLM to finalize with available information
+                        messages.push(OpenAIChatMessage {
+                            role: "system".to_string(),
+                            content: format!(
+                                "You have reached the maximum tool call limit ({} calls). Please provide your best final answer based on the information you've gathered so far. Do not make additional tool calls.",
+                                tool_context.max_tool_calls()
+                            ),
+                            tool_calls: None,
+                            tool_call_id: None,
+                        });
+
+                        reached_limit = true;
+                        break; // Exit the tool call execution loop
+                    }
+
+                    // Safety check: validate tool call arguments length
+                    if tool_call.function.arguments.len() > 1000 {
+                        error!(
+                            "Tool call arguments too large: {} bytes",
+                            tool_call.function.arguments.len()
+                        );
+                        return Err(anyhow!(
+                            "The requested operation is too complex. Please try something simpler."
+                        ));
+                    }
+
+                    // Execute the tool with timeout protection
+                    let tool_response = match tool_context.execute_tool_call(tool_call) {
+                        Ok(response) => response,
+                        Err(e) => {
+                            error!("Tool execution failed: {}", e);
+                            return Err(anyhow!(
+                                "I encountered an error while processing your request: {}. Please try again.",
+                                e
+                            ));
+                        }
+                    };
+
+                    // Add tool response to messages
+                    messages.push(OpenAIChatMessage {
+                        role: "assistant".to_string(),
+                        content: String::new(), // Empty content for tool calls
+                        tool_calls: Some(vec![crate::models::ToolCall {
+                            id: tool_call.id.clone(),
+                            r#type: "function".to_string(),
+                            function: crate::models::FunctionCall {
+                                name: tool_call.function.name.clone(),
+                                arguments: tool_call.function.arguments.clone(),
+                            },
+                        }]),
+                        tool_call_id: None,
+                    });
+
+                    // Add tool response message
+                    messages.push(OpenAIChatMessage {
+                        role: "tool".to_string(),
+                        content: tool_response.content,
+                        tool_calls: None,
+                        tool_call_id: Some(tool_call.id.clone()),
+                    });
+                }
+
+                // If we limited tool calls, add a message to inform the user
+                if tool_calls.len() > max_tool_calls_per_turn as usize {
+                    let skipped_count = tool_calls.len() - max_tool_calls_per_turn as usize;
+                    messages.push(OpenAIChatMessage {
+                        role: "assistant".to_string(),
+                        content: format!(
+                            "Note: I limited myself to {} tool calls to avoid overwhelming the system. {} additional operations were skipped. Please ask for the remaining operations separately if you still need them.",
+                            max_tool_calls_per_turn, skipped_count
+                        ),
+                        tool_calls: None,
+                        tool_call_id: None,
+                    });
+                }
+
+                // Update the request with the new messages
+                openai_request.messages = messages.clone();
+
+                // If we reached the limit, log it for debugging
+                if reached_limit {
+                    info!("Tool limit reached, requesting final answer from LLM");
+                }
+
+                continue; // Continue the loop to get final answer
+            }
+        }
+
+        // If we get here, the LLM provided a final answer
+        if choice.message.content.is_empty() {
+            // Check if it was truncated due to length
+            let finish_reason = choice.finish_reason.as_deref().unwrap_or("unknown");
+            let usage_info = if let Some(usage) = &openai_response.usage {
+                format!(
+                    " (used {}/{} tokens: {} prompt + {} completion)",
+                    usage.total_tokens,
+                    config.openai_max_tokens,
+                    usage.prompt_tokens,
+                    usage.completion_tokens.unwrap_or(0)
+                )
+            } else {
+                String::new()
+            };
+
+            return match finish_reason {
+                "length" => Err(anyhow!(
+                    "LLM response was truncated due to token limit. \
+                     Consider increasing --openai-max-tokens (currently {}) \
+                     or reducing context size{}",
+                    config.openai_max_tokens,
+                    usage_info
+                )),
+                _ => Err(anyhow!(
+                    "LLM response content is empty (finish_reason: {}){}",
+                    finish_reason,
+                    usage_info
+                )),
+            };
+        }
+
+        return Ok(choice.message.content.clone());
+    }
 }
 
 // Helper function to extract issue details and handle stale label removal
@@ -782,6 +1118,15 @@ async fn add_repository_context_to_prompt(
     project: &crate::models::GitlabProject,
     prompt_parts: &mut Vec<String>,
 ) {
+    // Add project ID and branch context for the LLM
+    prompt_parts.push(format!(
+        "Project Information:\n- Main Project ID: {} ({}) - This is where the issue/mr is located\n- Context Repository: {:?} - Additional context files come from here\n- Default Branch: {} (used for issue-related operations)",
+        project.id,
+        project.path_with_namespace,
+        config.context_repo_path.as_deref().unwrap_or("None configured"),
+        config.default_branch
+    ));
+
     let repo_context_extractor = RepoContextExtractor::new_with_file_indexer(
         gitlab_client.clone(),
         config.clone(),
@@ -794,7 +1139,8 @@ async fn add_repository_context_to_prompt(
     {
         Ok(context_str) => {
             let enhanced_context = format!(
-                "Repository Context (files are ranked by relevance based on keyword frequency - higher percentages indicate more relevant content): {context_str}"
+                "Repository Context (files are ranked by relevance based on keyword frequency - higher percentages indicate more relevant content):\n{context_str}\n\nNOTE: When using tools to search or access files, use project_id {} for files from the main project and the appropriate context repository project ID for files from the context repository. For code searches in issues, use the default branch '{}' unless otherwise specified.",
+                project.id, config.default_branch
             );
             prompt_parts.push(enhanced_context);
         }
@@ -1106,6 +1452,16 @@ async fn add_mr_context_to_prompt(
     prompt_parts: &mut Vec<String>,
     commit_history: &mut String,
 ) {
+    // Add project ID and branch context for the LLM
+    prompt_parts.push(format!(
+        "Project Information:\n- Main Project ID: {} ({}) - This is where the issue/mr is located\n- Context Repository: {:?} - Additional context files come from here\n- Merge Request Branch: {} (source branch)\n- Target Branch: {} (base branch for the merge request)",
+        project.id,
+        project.path_with_namespace,
+        config.context_repo_path.as_deref().unwrap_or("None configured"),
+        mr.source_branch,
+        mr.target_branch
+    ));
+
     let repo_context_extractor = RepoContextExtractor::new_with_file_indexer(
         gitlab_client.clone(),
         config.clone(),
@@ -1118,7 +1474,8 @@ async fn add_mr_context_to_prompt(
     {
         Ok((context_for_llm, context_for_comment)) => {
             let enhanced_context = format!(
-                "Code Changes (files are ranked by relevance based on keyword frequency - higher percentages indicate more relevant content): {context_for_llm}"
+                "Code Changes (files are ranked by relevance based on keyword frequency - higher percentages indicate more relevant content):\n{context_for_llm}\n\nNOTE: When using tools to search or access files, use project_id {} for files from the main project and the appropriate context repository project ID for files from the context repository. For merge requests, use branch '{}' (source branch) unless you specifically need to search the target branch '{}'.",
+                project.id, mr.source_branch, mr.target_branch
             );
             prompt_parts.push(enhanced_context);
             *commit_history = context_for_comment; // Update commit_history
