@@ -45,6 +45,10 @@ pub struct AppSettings {
     #[arg(long, env = "GITBOT_OPENAI_MAX_TOKENS", default_value_t = 1024)]
     pub openai_max_tokens: u32,
 
+    /// Token parameter mode for OpenAI API: "max_tokens" (legacy) or "max_completion_tokens" (new)
+    #[arg(long, env = "GITBOT_OPENAI_TOKEN_MODE", default_value = "max_tokens", value_parser = validate_token_mode)]
+    pub openai_token_mode: String,
+
     /// Comma-separated list of repositories to poll (format: group/project)
     #[arg(long, env = "GITBOT_REPOS_TO_POLL", value_delimiter = ',')]
     pub repos_to_poll: Vec<String>,
@@ -89,6 +93,10 @@ pub struct AppSettings {
     #[arg(long, env = "GITBOT_DEFAULT_BRANCH", default_value = "main")]
     pub default_branch: String,
 
+    /// Maximum number of tool calls allowed per bot invocation (default: 3, max: 10)
+    #[arg(long, env = "GITBOT_MAX_TOOL_CALLS", default_value_t = 3)]
+    pub max_tool_calls: u32,
+
     /// Path to client certificate file for OpenAI API authentication
     #[arg(long, env = "GITBOT_CLIENT_CERT_PATH")]
     pub client_cert_path: Option<String>,
@@ -110,6 +118,35 @@ pub struct AppSettings {
 // .collect())
 // }
 
+/// Validate that openai_token_mode is a valid option
+fn validate_token_mode(value: &str) -> Result<String, String> {
+    match value {
+        "max_tokens" | "max_completion_tokens" => Ok(value.to_string()),
+        _ => Err(format!(
+            "openai_token_mode must be either 'max_tokens' or 'max_completion_tokens', got '{}'",
+            value
+        )),
+    }
+}
+
+/// Validate that max_tool_calls is within reasonable bounds
+fn validate_max_tool_calls(value: u32) -> Result<u32, String> {
+    const MIN_TOOL_CALLS: u32 = 1;
+    const MAX_TOOL_CALLS: u32 = 10;
+
+    if value < MIN_TOOL_CALLS {
+        Err(format!(
+            "max_tool_calls must be at least {MIN_TOOL_CALLS}, got {value}"
+        ))
+    } else if value > MAX_TOOL_CALLS {
+        Err(format!(
+            "max_tool_calls must be at most {MAX_TOOL_CALLS}, got {value}"
+        ))
+    } else {
+        Ok(value)
+    }
+}
+
 pub fn load_config() -> anyhow::Result<AppSettings> {
     // Parse command line arguments and environment variables
     let mut app_settings = AppSettings::parse();
@@ -117,5 +154,65 @@ pub fn load_config() -> anyhow::Result<AppSettings> {
     // Load client key password from environment variable only (no CLI argument for security)
     app_settings.client_key_password = env::var("GITBOT_CLIENT_KEY_PASSWORD").ok();
 
+    // Validate token_mode for environment variables (CLI args are already validated by clap)
+    if let Ok(token_mode) = env::var("GITBOT_OPENAI_TOKEN_MODE") {
+        app_settings.openai_token_mode =
+            validate_token_mode(&token_mode).map_err(|e| anyhow::anyhow!(e))?;
+    }
+
+    // Validate max_tool_calls
+    app_settings.max_tool_calls =
+        validate_max_tool_calls(app_settings.max_tool_calls).map_err(|e| anyhow::anyhow!(e))?;
+
     Ok(app_settings)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_token_mode_valid_values() {
+        // Test valid values
+        assert_eq!(
+            validate_token_mode("max_tokens"),
+            Ok("max_tokens".to_string())
+        );
+        assert_eq!(
+            validate_token_mode("max_completion_tokens"),
+            Ok("max_completion_tokens".to_string())
+        );
+    }
+
+    #[test]
+    fn test_validate_token_mode_invalid_values() {
+        // Test invalid values
+        assert!(validate_token_mode("invalid").is_err());
+        let err = validate_token_mode("invalid").unwrap_err();
+        assert!(err.contains("must be either 'max_tokens' or 'max_completion_tokens'"));
+
+        assert!(validate_token_mode("max_completion_token").is_err());
+        assert!(validate_token_mode("MAX_TOKENS").is_err());
+    }
+
+    #[test]
+    fn test_validate_max_tool_calls_valid_values() {
+        // Test valid values within range
+        assert_eq!(validate_max_tool_calls(1), Ok(1));
+        assert_eq!(validate_max_tool_calls(5), Ok(5));
+        assert_eq!(validate_max_tool_calls(10), Ok(10));
+    }
+
+    #[test]
+    fn test_validate_max_tool_calls_invalid_values() {
+        // Test values below minimum
+        assert!(validate_max_tool_calls(0).is_err());
+        let err = validate_max_tool_calls(0).unwrap_err();
+        assert!(err.contains("must be at least 1"));
+
+        // Test values above maximum
+        assert!(validate_max_tool_calls(11).is_err());
+        let err = validate_max_tool_calls(11).unwrap_err();
+        assert!(err.contains("must be at most 10"));
+    }
 }

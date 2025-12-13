@@ -97,8 +97,58 @@ pub struct GitlabNoteEvent {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct OpenAIChatMessage {
-    pub role: String, // e.g., "system", "user", "assistant"
+    pub role: String, // e.g., "system", "user", "assistant", "tool"
+    #[serde(default, deserialize_with = "deserialize_null_string")]
     pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ToolCall>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>, // Required for tool response messages
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ToolCall {
+    #[serde(default, deserialize_with = "deserialize_null_string")]
+    pub id: String,
+    #[serde(default, deserialize_with = "deserialize_null_string")]
+    pub r#type: String, // "function"
+    pub function: FunctionCall,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct FunctionCall {
+    #[serde(default, deserialize_with = "deserialize_null_string")]
+    pub name: String,
+    #[serde(default, deserialize_with = "deserialize_null_string")]
+    pub arguments: String,
+}
+
+// Custom deserializer to handle null values for string fields
+fn deserialize_null_string<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+
+    // This will handle both null and string values
+    Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
+}
+
+// Custom deserializer to handle null values for optional string fields
+fn deserialize_null_optional_string<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+
+    // This will handle both null and string values
+    Ok(Option::<String>::deserialize(deserializer)?.and_then(|s| {
+        if s.is_empty() {
+            None
+        } else {
+            Some(s)
+        }
+    }))
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -106,13 +156,50 @@ pub struct OpenAIChatRequest {
     pub model: String, // e.g., "gpt-3.5-turbo"
     pub messages: Vec<OpenAIChatMessage>,
     pub temperature: Option<f32>, // e.g., 0.7
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_completion_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<Tool>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_choice: Option<ToolChoice>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Tool {
+    pub r#type: String, // "function"
+    pub function: FunctionSpec,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct FunctionSpec {
+    pub name: String,
+    pub description: Option<String>,
+    pub parameters: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum ToolChoice {
+    Auto,
+    None,
+    Specific {
+        r#type: String,
+        function: FunctionChoice,
+    },
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct FunctionChoice {
+    pub name: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct OpenAIChatChoice {
     pub index: u32,
     pub message: OpenAIChatMessage,
+    #[serde(default, deserialize_with = "deserialize_null_optional_string")]
     pub finish_reason: Option<String>,
 }
 
@@ -145,4 +232,17 @@ pub struct GitlabCommit {
     pub committer_email: String,
     pub committed_date: String,
     pub message: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct GitlabSearchResult {
+    pub basename: String,
+    pub data: String,
+    pub filename: String,
+    pub id: Option<String>, // Can be null in some responses
+    pub path: String,
+    pub project_id: i64,
+    #[serde(rename = "ref")]
+    pub ref_field: String, // Renamed from "ref" to avoid Rust keyword conflict
+    pub startline: Option<i64>,
 }

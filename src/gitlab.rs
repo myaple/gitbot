@@ -5,13 +5,14 @@ use serde::Serialize;
 use std::fmt::Debug;
 use std::sync::Arc;
 use thiserror::Error;
-use tracing::{debug, error, instrument};
+use tracing::{debug, error, instrument, warn};
 use url::Url;
 use urlencoding::encode;
 
 use crate::config::AppSettings;
 use crate::models::{
     GitlabCommit, GitlabIssue, GitlabMergeRequest, GitlabNoteAttributes, GitlabProject,
+    GitlabSearchResult,
 };
 use crate::repo_context::{GitlabDiff, GitlabFile};
 
@@ -38,7 +39,39 @@ pub struct GitlabApiClient {
 impl GitlabApiClient {
     pub fn new(settings: Arc<AppSettings>) -> Result<Self, GitlabError> {
         let gitlab_url = Url::parse(&settings.gitlab_url)?;
-        let client = Client::new();
+
+        // Configure client with proper settings for GitLab.com
+        let client_builder = Client::builder()
+            .timeout(std::time::Duration::from_secs(60)) // 60 second timeout for requests
+            .connect_timeout(std::time::Duration::from_secs(10)) // 10 second connection timeout
+            .user_agent("gitbot/0.1.0") // Set proper User-Agent
+            .redirect(reqwest::redirect::Policy::limited(10)); // Allow redirects
+
+        // Try to configure advanced settings, but don't fail if they're not supported
+        let client = match client_builder
+            .pool_max_idle_per_host(0) // Disable connection pooling to avoid issues
+            .pool_idle_timeout(std::time::Duration::from_secs(30))
+            .http2_keep_alive_interval(None) // Disable HTTP2 keep-alive
+            .http2_keep_alive_timeout(std::time::Duration::from_secs(30))
+            .tcp_keepalive(std::time::Duration::from_secs(60))
+            .build()
+        {
+            Ok(client) => {
+                debug!("HTTP client configured with advanced settings");
+                client
+            }
+            Err(e) => {
+                warn!("Failed to configure HTTP client with advanced settings ({}), trying basic configuration", e);
+                Client::builder()
+                    .timeout(std::time::Duration::from_secs(60))
+                    .connect_timeout(std::time::Duration::from_secs(10))
+                    .user_agent("gitbot/0.1.0")
+                    .redirect(reqwest::redirect::Policy::limited(10))
+                    .build()
+                    .map_err(GitlabError::Request)?
+            }
+        };
+
         Ok(Self {
             client,
             gitlab_url,
@@ -61,13 +94,14 @@ impl GitlabApiClient {
         }
 
         debug!("Sending request to URL: {}", url);
+        debug!("Request method: {:?}", method);
         if let Some(b) = &body {
             debug!("Request body: {:?}", b);
         }
 
         let mut request_builder = self
             .client
-            .request(method, url)
+            .request(method.clone(), url.clone())
             .header("PRIVATE-TOKEN", &self.private_token);
 
         if body.is_some() {
@@ -78,7 +112,28 @@ impl GitlabApiClient {
             request_builder = request_builder.json(&b);
         }
 
-        let response = request_builder.send().await.map_err(GitlabError::Request)?;
+        debug!("Executing {} request to {}", method, url);
+        let start_time = std::time::Instant::now();
+
+        let response = request_builder.send().await.map_err(|e| {
+            let elapsed = start_time.elapsed();
+            error!(
+                "Request failed after {}ms for {} {}: {}",
+                elapsed.as_millis(),
+                method,
+                url,
+                e
+            );
+            GitlabError::Request(e)
+        })?;
+
+        let elapsed = start_time.elapsed();
+        debug!(
+            "Request completed in {}ms for {} {}",
+            elapsed.as_millis(),
+            method,
+            url
+        );
 
         let status = response.status();
         if !status.is_success() {
@@ -576,6 +631,21 @@ impl GitlabApiClient {
         let query_params = vec![("path", file_path), ("per_page", &per_page)];
 
         self.send_request(Method::GET, &path, Some(&query_params), None::<()>)
+            .await
+    }
+
+    /// Search for code in a GitLab repository
+    #[instrument(skip(self), fields(project_id, search_query, branch))]
+    pub async fn search_code(
+        &self,
+        project_id: i64,
+        search_query: &str,
+        branch: &str,
+    ) -> Result<Vec<GitlabSearchResult>, GitlabError> {
+        let encoded_query = urlencoding::encode(search_query);
+        let encoded_branch = urlencoding::encode(branch);
+        let path = format!("/api/v4/projects/{project_id}/search?scope=blobs&search={encoded_query}&ref={encoded_branch}");
+        self.send_request(Method::GET, &path, None, None::<()>)
             .await
     }
 }

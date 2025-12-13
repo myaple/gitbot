@@ -18,6 +18,7 @@ mod models;
 mod openai;
 mod polling;
 mod repo_context;
+mod tools;
 
 #[cfg(test)]
 mod tests;

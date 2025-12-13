@@ -13,6 +13,7 @@ fn create_test_settings(base_url: String) -> AppSettings {
         openai_model: "gpt-3.5-turbo".to_string(),
         openai_temperature: 0.7,
         openai_max_tokens: 1024,
+        openai_token_mode: "max_tokens".to_string(),
         gitlab_url: "https://gitlab.example.com".to_string(),
         gitlab_token: "gitlab_token".to_string(),
         repos_to_poll: vec!["org/repo1".to_string()],
@@ -24,6 +25,7 @@ fn create_test_settings(base_url: String) -> AppSettings {
         context_repo_path: None,
         max_context_size: 60000,
         default_branch: "main".to_string(),
+        max_tool_calls: 3,
         client_cert_path: None,
         client_key_path: None,
         client_key_password: None,
@@ -60,13 +62,18 @@ async fn test_send_chat_completion_success() {
     let client = OpenAIApiClient::new(&settings).unwrap();
 
     let request_payload = OpenAIChatRequest {
+        tools: None,
+        tool_choice: None,
         model: "test-model".to_string(),
         messages: vec![OpenAIChatMessage {
+            tool_calls: None,
             role: "user".to_string(),
             content: "Hello".to_string(),
+            tool_call_id: None,
         }],
         temperature: Some(0.7),
         max_tokens: Some(50),
+        max_completion_tokens: None,
     };
 
     let mock_response_body = json!({
@@ -126,13 +133,18 @@ async fn test_send_chat_completion_success_with_path_no_trailing_slash() {
     let client = OpenAIApiClient::new(&settings).unwrap();
 
     let request_payload = OpenAIChatRequest {
+        tools: None,
+        tool_choice: None,
         model: "test-model".to_string(),
         messages: vec![OpenAIChatMessage {
+            tool_calls: None,
             role: "user".to_string(),
             content: "Hello from /v1".to_string(),
+            tool_call_id: None,
         }],
         temperature: Some(0.7),
         max_tokens: Some(50),
+        max_completion_tokens: None,
     };
 
     let mock_response_body = json!({
@@ -191,13 +203,18 @@ async fn test_send_chat_completion_success_with_path_with_trailing_slash() {
     let client = OpenAIApiClient::new(&settings).unwrap();
 
     let request_payload = OpenAIChatRequest {
+        tools: None,
+        tool_choice: None,
         model: "test-model".to_string(),
         messages: vec![OpenAIChatMessage {
+            tool_calls: None,
             role: "user".to_string(),
             content: "Hello from /v1/".to_string(),
+            tool_call_id: None,
         }],
         temperature: Some(0.7),
         max_tokens: Some(50),
+        max_completion_tokens: None,
     };
 
     let mock_response_body = json!({
@@ -256,13 +273,18 @@ async fn test_send_chat_completion_api_error() {
     let client = OpenAIApiClient::new(&settings).unwrap();
 
     let request_payload = OpenAIChatRequest {
+        tools: None,
+        tool_choice: None,
         model: "test-model".to_string(),
         messages: vec![OpenAIChatMessage {
+            tool_calls: None,
             role: "user".to_string(),
             content: "Trigger error".to_string(),
+            tool_call_id: None,
         }],
         temperature: None,
         max_tokens: None,
+        max_completion_tokens: None,
     };
 
     let error_body = json!({"error": {"message": "Invalid API key", "type": "auth_error"}});
@@ -301,13 +323,18 @@ async fn test_send_chat_completion_empty_choices() {
     let client = OpenAIApiClient::new(&settings).unwrap();
 
     let request_payload = OpenAIChatRequest {
+        tools: None,
+        tool_choice: None,
         model: "test-model-empty-choice".to_string(),
         messages: vec![OpenAIChatMessage {
+            tool_calls: None,
             role: "user".to_string(),
             content: "Hello".to_string(),
+            tool_call_id: None,
         }],
         temperature: Some(0.5),
         max_tokens: Some(10),
+        max_completion_tokens: None,
     };
 
     let mock_response_body = json!({
@@ -369,6 +396,7 @@ async fn test_new_openai_api_client_with_client_cert_config() {
         openai_model: "gpt-3.5-turbo".to_string(),
         openai_temperature: 0.7,
         openai_max_tokens: 1024,
+        openai_token_mode: "max_tokens".to_string(),
         gitlab_url: "https://gitlab.example.com".to_string(),
         gitlab_token: "gitlab_token".to_string(),
         repos_to_poll: vec!["org/repo1".to_string()],
@@ -382,6 +410,7 @@ async fn test_new_openai_api_client_with_client_cert_config() {
         max_comment_length: 1000,
         context_lines: 10,
         default_branch: "main".to_string(),
+        max_tool_calls: 3,
         client_cert_path: Some("/nonexistent/cert.pem".to_string()),
         client_key_path: Some("/nonexistent/key.pem".to_string()),
         client_key_password: Some("test_password".to_string()),
@@ -413,6 +442,7 @@ async fn test_new_openai_api_client_without_client_cert() {
         openai_model: "gpt-3.5-turbo".to_string(),
         openai_temperature: 0.7,
         openai_max_tokens: 1024,
+        openai_token_mode: "max_tokens".to_string(),
         gitlab_url: "https://gitlab.example.com".to_string(),
         gitlab_token: "gitlab_token".to_string(),
         repos_to_poll: vec!["org/repo1".to_string()],
@@ -426,6 +456,7 @@ async fn test_new_openai_api_client_without_client_cert() {
         max_comment_length: 1000,
         context_lines: 10,
         default_branch: "main".to_string(),
+        max_tool_calls: 3,
         client_cert_path: None,
         client_key_path: None,
         client_key_password: None,
