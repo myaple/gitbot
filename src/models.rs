@@ -246,3 +246,13 @@ pub struct GitlabSearchResult {
     pub ref_field: String, // Renamed from "ref" to avoid Rust keyword conflict
     pub startline: Option<i64>,
 }
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct GitlabBranch {
+    pub name: String,
+    pub merged: bool,
+    pub protected: bool,
+    pub default: bool,
+    pub can_push: bool,
+    pub web_url: String,
+}

@@ -622,6 +622,104 @@ impl ToolTrait for GetProjectByPathTool {
     }
 }
 
+/// Tool for listing branches in a GitLab project
+pub struct ListBranchesTool {
+    gitlab_client: Arc<GitlabApiClient>,
+}
+
+#[async_trait]
+impl ToolTrait for ListBranchesTool {
+    fn name(&self) -> &str {
+        "list_branches"
+    }
+
+    fn description(&self) -> &str {
+        "List all branches in a GitLab project. Returns branch names and metadata like default branch, merged status, and protection status."
+    }
+
+    fn parameters(&self) -> Option<Value> {
+        Some(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "project_path": {
+                    "type": "string",
+                    "description": "The project path (e.g., 'group/project-name' or just 'project-name')"
+                }
+            },
+            "required": ["project_path"]
+        }))
+    }
+
+    async fn execute(&self, arguments: &str) -> Result<String> {
+        // Safety check: validate arguments are not empty
+        if arguments.is_empty() {
+            return Err(anyhow!("Tool requires arguments"));
+        }
+
+        let params: serde_json::Value = serde_json::from_str(arguments)
+            .map_err(|e| anyhow!("Failed to parse arguments: {}", e))?;
+
+        // Validate required parameters exist
+        let project_path = params
+            .get("project_path")
+            .ok_or_else(|| anyhow!("Missing required parameter: project_path"))?;
+
+        // Validate parameter types
+        let project_path = project_path
+            .as_str()
+            .ok_or_else(|| anyhow!("project_path must be a string"))?;
+
+        if project_path.is_empty() {
+            return Err(anyhow!("project_path cannot be empty"));
+        }
+
+        // First get the project to resolve the path to an ID
+        debug!("Fetching project details for path: '{}'", project_path);
+        let project = match self.gitlab_client.get_project_by_path(project_path).await {
+            Ok(project) => {
+                debug!(
+                    "Successfully fetched project '{}' (ID: {})",
+                    project_path, project.id
+                );
+                project
+            }
+            Err(e) => {
+                error!("Failed to fetch project '{}': {}", project_path, e);
+                return Err(anyhow!("GitLab API error: {}", e));
+            }
+        };
+
+        // Now get the branches for the project
+        debug!(
+            "Fetching branches for project '{}' (ID: {})",
+            project_path, project.id
+        );
+        match self.gitlab_client.get_branches(project.id).await {
+            Ok(branches) => {
+                debug!(
+                    "Successfully fetched {} branches for project '{}'",
+                    branches.len(),
+                    project_path
+                );
+                match serde_json::to_string(&branches) {
+                    Ok(json) => Ok(json),
+                    Err(e) => {
+                        error!("Failed to serialize branches to JSON: {}", e);
+                        Err(anyhow!("Failed to format branches: {}", e))
+                    }
+                }
+            }
+            Err(e) => {
+                error!(
+                    "Failed to fetch branches for project '{}': {}",
+                    project_path, e
+                );
+                Err(anyhow!("GitLab API error: {}", e))
+            }
+        }
+    }
+}
+
 /// Create a basic tool registry with GitLab tools
 pub fn create_basic_tool_registry(
     gitlab_client: Arc<GitlabApiClient>,
@@ -639,7 +737,10 @@ pub fn create_basic_tool_registry(
         gitlab_client: gitlab_client.clone(),
         config,
     }));
-    registry.register_tool(Arc::new(GetProjectByPathTool { gitlab_client }));
+    registry.register_tool(Arc::new(GetProjectByPathTool {
+        gitlab_client: gitlab_client.clone(),
+    }));
+    registry.register_tool(Arc::new(ListBranchesTool { gitlab_client }));
 
     registry
 }

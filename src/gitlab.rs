@@ -11,8 +11,8 @@ use urlencoding::encode;
 
 use crate::config::AppSettings;
 use crate::models::{
-    GitlabCommit, GitlabIssue, GitlabMergeRequest, GitlabNoteAttributes, GitlabProject,
-    GitlabSearchResult,
+    GitlabBranch, GitlabCommit, GitlabIssue, GitlabMergeRequest, GitlabNoteAttributes,
+    GitlabProject, GitlabSearchResult,
 };
 use crate::repo_context::{GitlabDiff, GitlabFile};
 
@@ -645,6 +645,14 @@ impl GitlabApiClient {
         let encoded_query = urlencoding::encode(search_query);
         let encoded_branch = urlencoding::encode(branch);
         let path = format!("/api/v4/projects/{project_id}/search?scope=blobs&search={encoded_query}&ref={encoded_branch}");
+        self.send_request(Method::GET, &path, None, None::<()>)
+            .await
+    }
+
+    /// List all branches in a GitLab project
+    #[instrument(skip(self), fields(project_id))]
+    pub async fn get_branches(&self, project_id: i64) -> Result<Vec<GitlabBranch>, GitlabError> {
+        let path = format!("/api/v4/projects/{project_id}/repository/branches");
         self.send_request(Method::GET, &path, None, None::<()>)
             .await
     }

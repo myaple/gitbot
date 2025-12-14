@@ -939,3 +939,69 @@ async fn test_get_all_merge_request_notes() {
     assert_eq!(notes[0].note, "First MR comment");
     assert_eq!(notes[0].author.username, "reviewer1");
 }
+
+#[tokio::test]
+async fn test_get_branches() {
+    let mut server = mockito::Server::new_async().await;
+    let settings = Arc::new(create_test_settings(server.url()));
+    let client = GitlabApiClient::new(settings).unwrap();
+
+    let mock_response = json!([
+        {
+            "name": "main",
+            "merged": false,
+            "protected": true,
+            "default": true,
+            "can_push": false,
+            "web_url": "https://gitlab.example.com/group/project/-/tree/main"
+        },
+        {
+            "name": "feature/new-feature",
+            "merged": false,
+            "protected": false,
+            "default": false,
+            "can_push": true,
+            "web_url": "https://gitlab.example.com/group/project/-/tree/feature/new-feature"
+        },
+        {
+            "name": "develop",
+            "merged": false,
+            "protected": false,
+            "default": false,
+            "can_push": true,
+            "web_url": "https://gitlab.example.com/group/project/-/tree/develop"
+        }
+    ]);
+
+    let _m = server
+        .mock("GET", "/api/v4/projects/1/repository/branches")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(mock_response.to_string())
+        .create_async()
+        .await;
+
+    let branches = client.get_branches(1).await.unwrap();
+    assert_eq!(branches.len(), 3);
+
+    // Check main branch (default branch)
+    let main_branch = &branches[0];
+    assert_eq!(main_branch.name, "main");
+    assert_eq!(main_branch.default, true);
+    assert_eq!(main_branch.protected, true);
+    assert_eq!(main_branch.can_push, false);
+
+    // Check feature branch
+    let feature_branch = &branches[1];
+    assert_eq!(feature_branch.name, "feature/new-feature");
+    assert_eq!(feature_branch.default, false);
+    assert_eq!(feature_branch.protected, false);
+    assert_eq!(feature_branch.can_push, true);
+
+    // Check develop branch
+    let develop_branch = &branches[2];
+    assert_eq!(develop_branch.name, "develop");
+    assert_eq!(develop_branch.default, false);
+    assert_eq!(develop_branch.protected, false);
+    assert_eq!(develop_branch.can_push, true);
+}
