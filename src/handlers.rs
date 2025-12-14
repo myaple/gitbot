@@ -810,8 +810,6 @@ async fn get_llm_reply_with_tools(
     prompt_text: &str,
     tool_context: &mut ToolCallContext,
 ) -> Result<String> {
-    use crate::models::ToolChoice;
-
     // Create system message with project ID and branch context
     let system_message = format!(
         "You are GitBot, a helpful assistant for GitLab repositories. When using tools to search or access files, \
@@ -923,73 +921,139 @@ async fn get_llm_reply_with_tools(
                 };
 
                 let mut reached_limit = false;
-                for tool_call in tool_calls_to_execute {
-                    if !tool_context.can_make_tool_call() {
-                        warn!(
-                            "Maximum tool calls reached: {}",
-                            tool_context.max_tool_calls()
-                        );
 
-                        // Add a system message asking LLM to finalize with available information
-                        messages.push(OpenAIChatMessage {
-                            role: "system".to_string(),
-                            content: format!(
-                                "You have reached the maximum tool call limit ({} calls). Please provide your best final answer based on the information you've gathered so far. Do not make additional tool calls.",
-                                tool_context.max_tool_calls()
-                            ),
-                            tool_calls: None,
-                            tool_call_id: None,
-                        });
+                // Check if we have enough capacity for all tool calls
+                let available_calls = tool_context.remaining_tool_calls();
+                let requested_calls = tool_calls_to_execute.len() as u32;
 
-                        reached_limit = true;
-                        break; // Exit the tool call execution loop
-                    }
+                // Check if we've reached the limit before limiting the tool calls
+                if requested_calls > available_calls {
+                    // We've reached the limit
+                    reached_limit = true;
+                    warn!(
+                        "Maximum tool calls reached: {} ({} requested, {} available)",
+                        tool_context.max_tool_calls(),
+                        requested_calls,
+                        available_calls
+                    );
 
-                    // Safety check: validate tool call arguments length
-                    if tool_call.function.arguments.len() > 1000 {
-                        error!(
-                            "Tool call arguments too large: {} bytes",
-                            tool_call.function.arguments.len()
-                        );
-                        return Err(anyhow!(
-                            "The requested operation is too complex. Please try something simpler."
-                        ));
-                    }
-
-                    // Execute the tool with timeout protection
-                    let tool_response = match tool_context.execute_tool_call(tool_call) {
-                        Ok(response) => response,
-                        Err(e) => {
-                            error!("Tool execution failed: {}", e);
-                            return Err(anyhow!(
-                                "I encountered an error while processing your request: {}. Please try again.",
-                                e
-                            ));
-                        }
-                    };
-
-                    // Add tool response to messages
+                    // Add a system message asking LLM to finalize with available information
                     messages.push(OpenAIChatMessage {
-                        role: "assistant".to_string(),
-                        content: String::new(), // Empty content for tool calls
-                        tool_calls: Some(vec![crate::models::ToolCall {
-                            id: tool_call.id.clone(),
-                            r#type: "function".to_string(),
-                            function: crate::models::FunctionCall {
-                                name: tool_call.function.name.clone(),
-                                arguments: tool_call.function.arguments.clone(),
-                            },
-                        }]),
+                        role: "system".to_string(),
+                        content: format!(
+                            "You have reached the maximum tool call limit ({} calls). Please provide your best final answer based on the information you've gathered so far. Do not make additional tool calls.",
+                            tool_context.max_tool_calls()
+                        ),
+                        tool_calls: None,
                         tool_call_id: None,
                     });
+                }
 
-                    // Add tool response message
-                    messages.push(OpenAIChatMessage {
-                        role: "tool".to_string(),
-                        content: tool_response.content,
-                        tool_calls: None,
-                        tool_call_id: Some(tool_call.id.clone()),
-                    });
+                // Now limit the tool calls if we don't have enough capacity
+                let tool_calls_to_execute = if requested_calls > available_calls {
+                    warn!(
+                        "Not enough tool call capacity available ({} requested, {} available). Limiting to {} calls.",
+                        requested_calls,
+                        available_calls,
+                        available_calls
+                    );
+                    &tool_calls_to_execute[..available_calls as usize]
+                } else {
+                    tool_calls_to_execute
+                };
+
+                if !reached_limit {
+                    // Safety check: validate tool call arguments length
+                    for tool_call in tool_calls_to_execute {
+                        if tool_call.function.arguments.len() > 1000 {
+                            error!(
+                                "Tool call arguments too large: {} bytes",
+                                tool_call.function.arguments.len()
+                            );
+                            return Err(anyhow!(
+                                "The requested operation is too complex. Please try something simpler."
+                            ));
+                        }
+                    }
+
+                    // Execute tool calls in parallel using the context
+                    info!(
+                        "Executing {} tool calls in parallel",
+                        tool_calls_to_execute.len()
+                    );
+                    let tool_results = tool_context
+                        .execute_tool_calls_parallel(
+                            &tool_calls_to_execute.iter().collect::<Vec<_>>(),
+                        )
+                        .await;
+
+                    // Process results and update tool call counter
+                    let mut successful_calls = 0;
+                    for (tool_call, result) in tool_results {
+                        match result {
+                            Ok(tool_response) => {
+                                successful_calls += 1;
+
+                                // Add tool call message
+                                messages.push(OpenAIChatMessage {
+                                    role: "assistant".to_string(),
+                                    content: String::new(), // Empty content for tool calls
+                                    tool_calls: Some(vec![crate::models::ToolCall {
+                                        id: tool_call.id.clone(),
+                                        r#type: "function".to_string(),
+                                        function: crate::models::FunctionCall {
+                                            name: tool_call.function.name.clone(),
+                                            arguments: tool_call.function.arguments.clone(),
+                                        },
+                                    }]),
+                                    tool_call_id: None,
+                                });
+
+                                // Add tool response message
+                                messages.push(OpenAIChatMessage {
+                                    role: "tool".to_string(),
+                                    content: tool_response.content,
+                                    tool_calls: None,
+                                    tool_call_id: Some(tool_call.id.clone()),
+                                });
+                            }
+                            Err(e) => {
+                                error!(
+                                    "Tool execution failed for {}: {}",
+                                    tool_call.function.name, e
+                                );
+                                // Add error message as tool response
+                                messages.push(OpenAIChatMessage {
+                                    role: "assistant".to_string(),
+                                    content: String::new(),
+                                    tool_calls: Some(vec![crate::models::ToolCall {
+                                        id: tool_call.id.clone(),
+                                        r#type: "function".to_string(),
+                                        function: crate::models::FunctionCall {
+                                            name: tool_call.function.name.clone(),
+                                            arguments: tool_call.function.arguments.clone(),
+                                        },
+                                    }]),
+                                    tool_call_id: None,
+                                });
+
+                                messages.push(OpenAIChatMessage {
+                                    role: "tool".to_string(),
+                                    content: format!("Error: {}", e),
+                                    tool_calls: None,
+                                    tool_call_id: Some(tool_call.id.clone()),
+                                });
+                            }
+                        }
+                    }
+
+                    // Note: tool call counter is now updated automatically in execute_tool_calls_parallel
+
+                    info!(
+                        "Successfully executed {} out of {} tool calls in parallel",
+                        successful_calls,
+                        tool_calls_to_execute.len()
+                    );
                 }
 
                 // If we limited tool calls, add a message to inform the user

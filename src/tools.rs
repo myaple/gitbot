@@ -1,5 +1,8 @@
 use anyhow::{anyhow, Result};
+use async_trait::async_trait;
+use futures::future;
 use serde_json::Value;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
@@ -8,6 +11,7 @@ use crate::gitlab::GitlabApiClient;
 use crate::models::{FunctionSpec, Tool, ToolCall};
 
 /// Tool trait that defines the interface for all tools
+#[async_trait]
 pub trait ToolTrait: Send + Sync {
     /// Get the name of the tool
     fn name(&self) -> &str;
@@ -19,7 +23,7 @@ pub trait ToolTrait: Send + Sync {
     fn parameters(&self) -> Option<Value>;
 
     /// Execute the tool with the given arguments
-    fn execute(&self, arguments: &str) -> Result<String>;
+    async fn execute(&self, arguments: &str) -> Result<String>;
 
     /// Get the function specification for OpenAI API
     fn get_function_spec(&self) -> FunctionSpec {
@@ -67,7 +71,7 @@ impl ToolRegistry {
     }
 
     /// Execute a tool call with safety checks
-    pub fn execute_tool_call(&self, tool_call: &ToolCall) -> Result<ToolCallResponse> {
+    pub async fn execute_tool_call(&self, tool_call: &ToolCall) -> Result<ToolCallResponse> {
         // Validate tool call ID format
         if tool_call.id.is_empty() || tool_call.id.len() > 100 {
             return Err(anyhow!("Invalid tool call ID format"));
@@ -91,10 +95,13 @@ impl ToolRegistry {
         debug!("Tool arguments: {}", tool_call.function.arguments);
 
         // Execute tool with error handling
-        let result = tool.execute(&tool_call.function.arguments).map_err(|e| {
-            error!("Tool {} execution failed: {}", tool.name(), e);
-            anyhow!("Tool execution failed: {}", e)
-        })?;
+        let result = tool
+            .execute(&tool_call.function.arguments)
+            .await
+            .map_err(|e| {
+                error!("Tool {} execution failed: {}", tool.name(), e);
+                anyhow!("Tool execution failed: {}", e)
+            })?;
 
         // Validate result size and truncate if necessary
         if result.len() > 5000 {
@@ -141,18 +148,7 @@ impl ToolCallContext {
         }
     }
 
-    /// Check if more tool calls are allowed
-    pub fn can_make_tool_call(&self) -> bool {
-        self.tool_calls_made < self.max_tool_calls
-    }
-
-    /// Increment the tool call counter
-    pub fn increment_tool_calls(&mut self) {
-        self.tool_calls_made += 1;
-    }
-
     /// Get the remaining tool calls allowed
-    #[allow(dead_code)]
     pub fn remaining_tool_calls(&self) -> u32 {
         self.max_tool_calls.saturating_sub(self.tool_calls_made)
     }
@@ -162,24 +158,71 @@ impl ToolCallContext {
         self.max_tool_calls
     }
 
-    /// Execute a tool call and track it
-    pub fn execute_tool_call(&mut self, tool_call: &ToolCall) -> Result<ToolCallResponse> {
-        if !self.can_make_tool_call() {
-            return Err(anyhow!(
-                "Maximum tool calls reached: {}",
-                self.max_tool_calls
-            ));
-        }
-
-        let response = self.registry.execute_tool_call(tool_call)?;
-        self.increment_tool_calls();
-
-        Ok(response)
-    }
-
     /// Get all tool specifications for OpenAI API
     pub fn get_tool_specs(&self) -> Vec<Tool> {
         self.registry.get_tool_specs()
+    }
+
+    /// Execute multiple tool calls in parallel
+    pub async fn execute_tool_calls_parallel(
+        &mut self,
+        tool_calls: &[&crate::models::ToolCall],
+    ) -> Vec<(crate::models::ToolCall, Result<ToolCallResponse>)> {
+        // Check if we have enough capacity for all tool calls
+        if self.tool_calls_made + tool_calls.len() as u32 > self.max_tool_calls {
+            return tool_calls
+                .iter()
+                .map(|tool_call| {
+                    let tool_call = (*tool_call).clone();
+                    let error = Err(anyhow!(
+                        "Maximum tool calls reached: {} (trying to make {} more calls)",
+                        self.max_tool_calls,
+                        tool_calls.len()
+                    ));
+                    (tool_call, error)
+                })
+                .collect();
+        }
+
+        // Use atomic counter to track tool calls safely across parallel tasks
+        let calls_made = Arc::new(AtomicU32::new(self.tool_calls_made));
+        let max_calls = self.max_tool_calls;
+        let registry = self.registry.clone();
+
+        let tool_futures: Vec<_> = tool_calls
+            .iter()
+            .map(|tool_call| {
+                let tool_call = (*tool_call).clone();
+                let registry = registry.clone();
+                let calls_made = calls_made.clone();
+                async move {
+                    // Check if we can still make a tool call
+                    if calls_made.load(Ordering::Relaxed) >= max_calls {
+                        return (
+                            tool_call,
+                            Err(anyhow!("Maximum tool calls reached: {}", max_calls)),
+                        );
+                    }
+
+                    // Execute the tool call
+                    let result = registry.execute_tool_call(&tool_call).await;
+
+                    // Increment counter if successful
+                    if result.is_ok() {
+                        calls_made.fetch_add(1, Ordering::Relaxed);
+                    }
+
+                    (tool_call, result)
+                }
+            })
+            .collect();
+
+        let results = future::join_all(tool_futures).await;
+
+        // Update the tool calls made counter
+        self.tool_calls_made = calls_made.load(Ordering::Relaxed);
+
+        results
     }
 }
 
@@ -188,6 +231,7 @@ pub struct GetIssueDetailsTool {
     gitlab_client: Arc<GitlabApiClient>,
 }
 
+#[async_trait]
 impl ToolTrait for GetIssueDetailsTool {
     fn name(&self) -> &str {
         "get_issue_details"
@@ -214,7 +258,7 @@ impl ToolTrait for GetIssueDetailsTool {
         }))
     }
 
-    fn execute(&self, arguments: &str) -> Result<String> {
+    async fn execute(&self, arguments: &str) -> Result<String> {
         // Safety check: validate arguments are not empty
         if arguments.is_empty() {
             return Err(anyhow!("Tool requires arguments"));
@@ -247,16 +291,13 @@ impl ToolTrait for GetIssueDetailsTool {
             return Err(anyhow!("issue_iid must be positive"));
         }
 
-        // Make real GitLab API call using blocking execution
+        // Make real GitLab API call using proper async
         debug!(
             "Fetching issue details for project_id: {}, issue_iid: {}",
             project_id, issue_iid
         );
 
-        let issue = match tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current()
-                .block_on(self.gitlab_client.get_issue(project_id, issue_iid))
-        }) {
+        let issue = match self.gitlab_client.get_issue(project_id, issue_iid).await {
             Ok(issue) => {
                 debug!(
                     "Successfully fetched issue #{} from project {}",
@@ -288,6 +329,7 @@ pub struct GetMergeRequestDetailsTool {
     gitlab_client: Arc<GitlabApiClient>,
 }
 
+#[async_trait]
 impl ToolTrait for GetMergeRequestDetailsTool {
     fn name(&self) -> &str {
         "get_merge_request_details"
@@ -314,7 +356,7 @@ impl ToolTrait for GetMergeRequestDetailsTool {
         }))
     }
 
-    fn execute(&self, arguments: &str) -> Result<String> {
+    async fn execute(&self, arguments: &str) -> Result<String> {
         // Safety check: validate arguments are not empty
         if arguments.is_empty() {
             return Err(anyhow!("Tool requires arguments"));
@@ -347,16 +389,17 @@ impl ToolTrait for GetMergeRequestDetailsTool {
             return Err(anyhow!("mr_iid must be positive"));
         }
 
-        // Make real GitLab API call using blocking execution
+        // Make real GitLab API call using proper async
         debug!(
             "Fetching merge request details for project_id: {}, mr_iid: {}",
             project_id, mr_iid
         );
 
-        let mr = match tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current()
-                .block_on(self.gitlab_client.get_merge_request(project_id, mr_iid))
-        }) {
+        let mr = match self
+            .gitlab_client
+            .get_merge_request(project_id, mr_iid)
+            .await
+        {
             Ok(mr) => {
                 debug!(
                     "Successfully fetched merge request !{} from project {}",
@@ -389,6 +432,7 @@ pub struct SearchCodeTool {
     config: Arc<AppSettings>,
 }
 
+#[async_trait]
 impl ToolTrait for SearchCodeTool {
     fn name(&self) -> &str {
         "search_code"
@@ -419,7 +463,7 @@ impl ToolTrait for SearchCodeTool {
         }))
     }
 
-    fn execute(&self, arguments: &str) -> Result<String> {
+    async fn execute(&self, arguments: &str) -> Result<String> {
         // Safety check: validate arguments are not empty
         if arguments.is_empty() {
             return Err(anyhow!("Tool requires arguments"));
@@ -455,16 +499,17 @@ impl ToolTrait for SearchCodeTool {
             return Err(anyhow!("project_id must be positive"));
         }
 
-        // Make real GitLab API call using blocking execution
+        // Make real GitLab API call using proper async
         debug!(
             "Making search call to project_id: {}, branch: '{}', query: '{}'",
             project_id, branch, query
         );
 
-        let search_results = match tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current()
-                .block_on(self.gitlab_client.search_code(project_id, query, branch))
-        }) {
+        let search_results = match self
+            .gitlab_client
+            .search_code(project_id, query, branch)
+            .await
+        {
             Ok(results) => {
                 debug!(
                     "Search completed successfully, found {} results",
@@ -504,6 +549,7 @@ pub struct GetProjectByPathTool {
     gitlab_client: Arc<GitlabApiClient>,
 }
 
+#[async_trait]
 impl ToolTrait for GetProjectByPathTool {
     fn name(&self) -> &str {
         "get_project_by_path"
@@ -526,7 +572,7 @@ impl ToolTrait for GetProjectByPathTool {
         }))
     }
 
-    fn execute(&self, arguments: &str) -> Result<String> {
+    async fn execute(&self, arguments: &str) -> Result<String> {
         // Safety check: validate arguments are not empty
         if arguments.is_empty() {
             return Err(anyhow!("Tool requires arguments"));
@@ -549,13 +595,10 @@ impl ToolTrait for GetProjectByPathTool {
             return Err(anyhow!("project_path cannot be empty"));
         }
 
-        // Make real GitLab API call using blocking execution
+        // Make real GitLab API call using proper async
         debug!("Fetching project details for path: '{}'", project_path);
 
-        let project = match tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current()
-                .block_on(self.gitlab_client.get_project_by_path(project_path))
-        }) {
+        let project = match self.gitlab_client.get_project_by_path(project_path).await {
             Ok(project) => {
                 debug!(
                     "Successfully fetched project '{}' (ID: {})",
@@ -625,16 +668,20 @@ mod tests {
         let registry = ToolRegistry::new();
         let mut context = ToolCallContext::new(2, registry);
 
-        assert!(context.can_make_tool_call());
-        context.increment_tool_calls();
-        assert!(context.can_make_tool_call());
-        context.increment_tool_calls();
-        assert!(!context.can_make_tool_call());
+        // Initially should have 2 remaining calls
+        assert_eq!(context.remaining_tool_calls(), 2);
+        assert_eq!(context.max_tool_calls(), 2);
+
+        // After manually setting the counter to test the logic
+        context.tool_calls_made = 1;
+        assert_eq!(context.remaining_tool_calls(), 1);
+
+        context.tool_calls_made = 2;
         assert_eq!(context.remaining_tool_calls(), 0);
     }
 
-    #[test]
-    fn test_tool_registry_safety_checks() {
+    #[tokio::test]
+    async fn test_tool_registry_safety_checks() {
         let registry = ToolRegistry::new();
 
         // Test invalid tool call ID
@@ -647,7 +694,7 @@ mod tests {
             },
         };
 
-        let result = registry.execute_tool_call(&invalid_tool_call);
+        let result = registry.execute_tool_call(&invalid_tool_call).await;
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
@@ -664,7 +711,7 @@ mod tests {
             },
         };
 
-        let result = registry.execute_tool_call(&valid_tool_call);
+        let result = registry.execute_tool_call(&valid_tool_call).await;
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
@@ -702,8 +749,8 @@ mod tests {
         assert!(zero_value <= 0);
     }
 
-    #[test]
-    fn test_tool_call_context_max_tool_calls() {
+    #[tokio::test]
+    async fn test_tool_call_context_max_tool_calls() {
         let registry = ToolRegistry::new();
         let mut context = ToolCallContext::new(1, registry);
 
@@ -717,13 +764,14 @@ mod tests {
             },
         };
 
-        // First call should fail because tool doesn't exist
-        let result = context.execute_tool_call(&tool_call);
-        assert!(result.is_err());
+        // Test with parallel execution - should fail because tool doesn't exist
+        let results = context.execute_tool_calls_parallel(&[&tool_call]).await;
+        assert_eq!(results.len(), 1);
+        assert!(results[0].1.is_err());
 
         // The tool call counter should not be incremented on failure
         // This is the correct behavior - we only count successful tool executions
         assert_eq!(context.remaining_tool_calls(), 1);
-        assert!(context.can_make_tool_call());
+        assert_eq!(context.tool_calls_made, 0);
     }
 }
