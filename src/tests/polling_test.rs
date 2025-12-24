@@ -6,6 +6,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 async fn test_max_age_hours_calculation() {
     // Create settings with max_age_hours = 12
     let settings = AppSettings {
+        auto_triage_enabled: true,
+        triage_lookback_hours: 24,
+        label_learning_samples: 3,
         prompt_prefix: None,
         gitlab_url: "https://gitlab.example.com".to_string(),
         gitlab_token: "test_token".to_string(),

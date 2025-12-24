@@ -11,7 +11,7 @@ use urlencoding::encode;
 
 use crate::config::AppSettings;
 use crate::models::{
-    GitlabBranch, GitlabCommit, GitlabIssue, GitlabMergeRequest, GitlabNoteAttributes,
+    GitlabBranch, GitlabCommit, GitlabIssue, GitlabLabel, GitlabMergeRequest, GitlabNoteAttributes,
     GitlabProject, GitlabSearchResult,
 };
 use crate::repo_context::{GitlabDiff, GitlabFile};
@@ -654,6 +654,65 @@ impl GitlabApiClient {
     pub async fn get_branches(&self, project_id: i64) -> Result<Vec<GitlabBranch>, GitlabError> {
         let path = format!("/api/v4/projects/{project_id}/repository/branches");
         self.send_request(Method::GET, &path, None, None::<()>)
+            .await
+    }
+
+    /// Get all labels for a project
+    #[instrument(skip(self), fields(project_id))]
+    pub async fn get_labels(&self, project_id: i64) -> Result<Vec<GitlabLabel>, GitlabError> {
+        let path = format!("/api/v4/projects/{project_id}/labels");
+        let query_params = &[("per_page", "100")];
+        self.send_request(Method::GET, &path, Some(query_params), None::<()>)
+            .await
+    }
+
+    /// Search for issues with a specific label
+    #[instrument(skip(self), fields(project_id, label))]
+    pub async fn get_issues_with_label(
+        &self,
+        project_id: i64,
+        label: &str,
+        limit: usize,
+    ) -> Result<Vec<GitlabIssue>, GitlabError> {
+        let path = format!("/api/v4/projects/{project_id}/issues");
+        let query_params = &[
+            ("labels", label),
+            ("state", "opened"),
+            ("per_page", &limit.to_string()),
+            ("order_by", "created_at"),
+            ("sort", "desc"),
+        ];
+        self.send_request(Method::GET, &path, Some(query_params), None::<()>)
+            .await
+    }
+
+    /// Set multiple labels on an issue (replaces all existing labels)
+    #[instrument(skip(self), fields(project_id, issue_iid))]
+    pub async fn set_issue_labels(
+        &self,
+        project_id: i64,
+        issue_iid: i64,
+        labels: &[&str],
+    ) -> Result<GitlabIssue, GitlabError> {
+        let path = format!("/api/v4/projects/{project_id}/issues/{issue_iid}");
+        let labels_str = labels.join(",");
+        let body = serde_json::json!({ "labels": labels_str });
+        self.send_request(Method::PUT, &path, None, Some(body))
+            .await
+    }
+
+    /// Add multiple labels to an issue (preserves existing labels)
+    #[instrument(skip(self), fields(project_id, issue_iid))]
+    pub async fn add_issue_labels(
+        &self,
+        project_id: i64,
+        issue_iid: i64,
+        labels: &[&str],
+    ) -> Result<GitlabIssue, GitlabError> {
+        let path = format!("/api/v4/projects/{project_id}/issues/{issue_iid}");
+        let labels_str = labels.join(",");
+        let body = serde_json::json!({ "add_labels": labels_str });
+        self.send_request(Method::PUT, &path, None, Some(body))
             .await
     }
 }

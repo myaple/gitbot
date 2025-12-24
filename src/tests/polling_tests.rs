@@ -17,6 +17,9 @@ mod tests {
 
     fn test_config(stale_days: u64, bot_username: &str, base_url: String) -> Arc<AppSettings> {
         Arc::new(AppSettings {
+            auto_triage_enabled: true,
+            triage_lookback_hours: 24,
+            label_learning_samples: 3,
             prompt_prefix: None,
             gitlab_url: base_url,
             gitlab_token: "test_token".to_string(),
@@ -65,6 +68,7 @@ mod tests {
             },
             web_url: format!("http://example.com/issues/{}", iid),
             labels,
+            created_at: "2024-01-01T00:00:00Z".to_string(),
             updated_at: updated_at_str.to_string(),
         }
     }
@@ -630,7 +634,8 @@ mod tests {
         let gitlab_client = Arc::new(GitlabApiClient::new(settings_obj.clone()).unwrap());
         let file_index_manager = Arc::new(FileIndexManager::new(gitlab_client.clone(), 3600));
 
-        let polling_service = PollingService::new(gitlab_client, settings_obj, file_index_manager);
+        let polling_service =
+            PollingService::new(gitlab_client, settings_obj, file_index_manager, None);
 
         let last_checked = *polling_service.last_checked.lock().await;
         let now = SystemTime::now()
@@ -649,6 +654,9 @@ mod tests {
 
         // Create settings with max_age_hours = 12
         let settings = AppSettings {
+            auto_triage_enabled: true,
+            triage_lookback_hours: 24,
+            label_learning_samples: 3,
             prompt_prefix: None,
             gitlab_url: base_url.clone(),
             gitlab_token: "test_token".to_string(),

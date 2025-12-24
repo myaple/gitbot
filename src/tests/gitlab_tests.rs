@@ -32,6 +32,9 @@ fn create_test_settings(base_url: String) -> AppSettings {
         client_cert_path: None,
         client_key_path: None,
         client_key_password: None,
+        auto_triage_enabled: true,
+        triage_lookback_hours: 24,
+        label_learning_samples: 3,
     }
 }
 
@@ -266,13 +269,13 @@ async fn test_get_issues() {
             "id": 1, "iid": 101, "project_id": 1, "title": "Test Issue 1",
             "description": "A test issue 1", "state": "opened",
             "author": {"id": 1, "username": "tester", "name": "Test User", "avatar_url": null, "web_url": "url"},
-            "web_url": "http://example.com/issue/1", "labels": [], "updated_at": "2023-01-02T12:00:00Z"
+            "web_url": "http://example.com/issue/1", "labels": [], "created_at": "2023-01-01T12:00:00Z", "updated_at": "2023-01-02T12:00:00Z"
         },
         {
             "id": 2, "iid": 102, "project_id": 1, "title": "Test Issue 2",
             "description": "A test issue 2", "state": "opened",
             "author": {"id": 1, "username": "tester", "name": "Test User", "avatar_url": null, "web_url": "url"},
-            "web_url": "http://example.com/issue/2", "labels": [], "updated_at": "2023-01-02T13:00:00Z"
+            "web_url": "http://example.com/issue/2", "labels": [], "created_at": "2023-01-01T13:00:00Z", "updated_at": "2023-01-02T13:00:00Z"
         }
     ]);
 
@@ -476,6 +479,7 @@ async fn test_add_issue_label_success() {
         "description": "A test issue", "state": "opened",
         "author": {"id": 1, "username": "tester", "name": "Test User", "avatar_url": null, "web_url": "url"},
         "web_url": "http://example.com/issue/1", "labels": [],
+        "created_at": "2023-01-01T12:00:00Z",
         "updated_at": "2023-01-02T12:00:00Z"
     });
 
@@ -484,6 +488,7 @@ async fn test_add_issue_label_success() {
         "description": "A test issue", "state": "opened",
         "author": {"id": 1, "username": "tester", "name": "Test User", "avatar_url": null, "web_url": "url"},
         "web_url": "http://example.com/issue/1", "labels": [label_to_add],
+        "created_at": "2023-01-01T12:00:00Z",
         "updated_at": "2023-01-02T12:05:00Z" // Assume updated_at changes
     });
 
@@ -520,6 +525,7 @@ async fn test_remove_issue_label_success() {
         "description": "A test issue", "state": "opened",
         "author": {"id": 1, "username": "tester", "name": "Test User", "avatar_url": null, "web_url": "url"},
         "web_url": "http://example.com/issue/1", "labels": [label_to_remove, "critical"],
+        "created_at": "2023-01-01T13:00:00Z",
         "updated_at": "2023-01-02T13:00:00Z"
     });
 
@@ -528,6 +534,7 @@ async fn test_remove_issue_label_success() {
         "description": "A test issue", "state": "opened",
         "author": {"id": 1, "username": "tester", "name": "Test User", "avatar_url": null, "web_url": "url"},
         "web_url": "http://example.com/issue/1", "labels": ["critical"], // "bug" label removed
+        "created_at": "2023-01-01T13:00:00Z",
         "updated_at": "2023-01-02T13:05:00Z" // Assume updated_at changes
     });
 
