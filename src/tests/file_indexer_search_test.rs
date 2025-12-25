@@ -9,6 +9,9 @@ mod tests {
     fn create_gitlab_client() -> Arc<GitlabApiClient> {
         // Create test settings
         let settings = crate::config::AppSettings {
+            auto_triage_enabled: true,
+            triage_lookback_hours: 24,
+            label_learning_samples: 3,
             prompt_prefix: None,
             gitlab_url: "https://gitlab.com".to_string(),
             gitlab_token: "test_token".to_string(),

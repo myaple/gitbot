@@ -25,6 +25,9 @@ mod tests {
     // Helper to create a basic AppSettings for tests
     fn test_app_settings(base_url: String) -> Arc<AppSettings> {
         Arc::new(AppSettings {
+            auto_triage_enabled: true,
+            triage_lookback_hours: 24,
+            label_learning_samples: 3,
             prompt_prefix: None,
             gitlab_url: base_url.clone(), // Cloning base_url if used for both
             gitlab_token: "test_token".to_string(),
@@ -206,6 +209,9 @@ mod tests {
 
         // Create test config
         let config = Arc::new(AppSettings {
+            auto_triage_enabled: true,
+            triage_lookback_hours: 24,
+            label_learning_samples: 3,
             prompt_prefix: None,
             gitlab_url: "https://gitlab.example.com".to_string(),
             gitlab_token: "test_token".to_string(),
@@ -236,6 +242,9 @@ mod tests {
         let server = mockito::Server::new_async().await;
         let base_url = server.url();
         let settings = AppSettings {
+            auto_triage_enabled: true,
+            triage_lookback_hours: 24,
+            label_learning_samples: 3,
             prompt_prefix: None,
             gitlab_url: base_url,
             gitlab_token: "test_token".to_string(),
@@ -285,6 +294,9 @@ mod tests {
 
         // Create test config
         let config = Arc::new(AppSettings {
+            auto_triage_enabled: true,
+            triage_lookback_hours: 24,
+            label_learning_samples: 3,
             prompt_prefix: None,
             gitlab_url: "https://gitlab.example.com".to_string(),
             gitlab_token: "test_token".to_string(),
@@ -318,6 +330,9 @@ mod tests {
         let server = mockito::Server::new_async().await;
         let base_url = server.url();
         let settings = AppSettings {
+            auto_triage_enabled: true,
+            triage_lookback_hours: 24,
+            label_learning_samples: 3,
             prompt_prefix: None,
             gitlab_url: base_url,
             gitlab_token: "test_token".to_string(),
@@ -403,6 +418,7 @@ mod tests {
             },
             labels: vec![],
             web_url: "url".to_string(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
             updated_at: event_time.to_rfc3339(),
         };
         let _m_get_issue = server
@@ -955,6 +971,7 @@ mod tests {
             },
             labels: vec!["security".to_string()],
             web_url: "url".to_string(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
             updated_at: event_time.to_rfc3339(),
         };
         let _m_get_issue = server
@@ -1133,6 +1150,7 @@ mod tests {
             },
             labels: vec![],
             web_url: "url".to_string(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
             updated_at: event_time.to_rfc3339(),
         };
         let _m_get_issue = server
@@ -1285,6 +1303,7 @@ mod tests {
             },
             labels: vec![],
             web_url: "url".to_string(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
             updated_at: event_time.to_rfc3339(),
         };
 

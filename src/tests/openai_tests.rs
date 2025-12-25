@@ -31,6 +31,9 @@ fn create_test_settings(base_url: String) -> AppSettings {
         client_key_password: None,
         max_comment_length: 1000,
         context_lines: 10,
+        auto_triage_enabled: true,
+        triage_lookback_hours: 24,
+        label_learning_samples: 3,
     }
 }
 
@@ -390,6 +393,9 @@ async fn test_new_openai_api_client_with_client_cert_config() {
     // Test that client can be created when client certificate paths are provided
     // but files don't exist (should not fail creation, only when making actual requests)
     let settings = AppSettings {
+        auto_triage_enabled: true,
+        triage_lookback_hours: 24,
+        label_learning_samples: 3,
         prompt_prefix: None,
         openai_custom_url: "https://api.openai.com/v1".to_string(),
         openai_api_key: "test_api_key".to_string(),
@@ -436,6 +442,9 @@ async fn test_new_openai_api_client_with_client_cert_config() {
 async fn test_new_openai_api_client_without_client_cert() {
     // Test that client creation works without client certificates
     let settings = AppSettings {
+        auto_triage_enabled: true,
+        triage_lookback_hours: 24,
+        label_learning_samples: 3,
         prompt_prefix: None,
         openai_custom_url: "https://api.openai.com/v1".to_string(),
         openai_api_key: "test_api_key".to_string(),

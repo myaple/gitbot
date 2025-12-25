@@ -26,11 +26,15 @@ mod tests {
             state: "opened".to_string(),
             author: user,
             web_url: "https://gitlab.com/test/project/issues/1".to_string(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
             labels: vec![],
             updated_at: "2023-01-01T00:00:00Z".to_string(), // Added default for tests
         };
 
         let settings = AppSettings {
+            auto_triage_enabled: true,
+            triage_lookback_hours: 24,
+            label_learning_samples: 3,
             prompt_prefix: None,
             gitlab_url: "https://gitlab.com".to_string(),
             gitlab_token: "test_token".to_string(),
@@ -89,6 +93,9 @@ mod tests {
     #[test]
     fn test_calculate_relevance_score() {
         let settings = AppSettings {
+            auto_triage_enabled: true,
+            triage_lookback_hours: 24,
+            label_learning_samples: 3,
             prompt_prefix: None,
             openai_model: "gpt-3.5-turbo".to_string(),
             openai_temperature: 0.7,
@@ -165,6 +172,9 @@ mod tests {
     // Helper to create AppSettings for tests
     fn test_settings(gitlab_url: String, context_repo: Option<String>) -> Arc<AppSettings> {
         Arc::new(AppSettings {
+            auto_triage_enabled: true,
+            triage_lookback_hours: 24,
+            label_learning_samples: 3,
             prompt_prefix: None,
             gitlab_url: gitlab_url.clone(),
             gitlab_token: "test_token".to_string(),
@@ -216,6 +226,7 @@ mod tests {
             },
             web_url: "url".to_string(),
             labels: vec![],
+            created_at: "2023-01-01T00:00:00Z".to_string(),
             updated_at: "2023-01-01T00:00:00Z".to_string(),
         }
     }
@@ -367,6 +378,7 @@ mod tests {
                 avatar_url: None,
             },
             web_url: "https://gitlab.com/test/project/issues/1".to_string(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
             labels: vec![],
             updated_at: "2023-01-01T00:00:00Z".to_string(),
         };
@@ -806,6 +818,9 @@ mod tests {
     #[test]
     fn test_extract_relevant_file_sections() {
         let settings = AppSettings {
+            auto_triage_enabled: true,
+            triage_lookback_hours: 24,
+            label_learning_samples: 3,
             prompt_prefix: None,
             openai_model: "gpt-3.5-turbo".to_string(),
             openai_temperature: 0.7,
@@ -916,6 +931,9 @@ fn decode_jwt(token: &str) -> Result<Claims> {
     fn test_configurable_context_lines() {
         // Test that different context_lines settings produce different amounts of context
         let settings_3_lines = AppSettings {
+            auto_triage_enabled: true,
+            triage_lookback_hours: 24,
+            label_learning_samples: 3,
             prompt_prefix: None,
             openai_model: "gpt-3.5-turbo".to_string(),
             openai_temperature: 0.7,
@@ -943,6 +961,9 @@ fn decode_jwt(token: &str) -> Result<Claims> {
         };
 
         let settings_8_lines = AppSettings {
+            auto_triage_enabled: true,
+            triage_lookback_hours: 24,
+            label_learning_samples: 3,
             prompt_prefix: None,
             openai_model: "gpt-3.5-turbo".to_string(),
             openai_temperature: 0.7,
@@ -1038,6 +1059,9 @@ fn decode_jwt(token: &str) -> Result<Claims> {
     fn test_token_usage_reduction() {
         // This test demonstrates the token usage reduction
         let settings = AppSettings {
+            auto_triage_enabled: true,
+            triage_lookback_hours: 24,
+            label_learning_samples: 3,
             prompt_prefix: None,
             openai_model: "gpt-3.5-turbo".to_string(),
             openai_temperature: 0.7,
@@ -1133,6 +1157,9 @@ fn decode_jwt(token: &str) -> Result<Claims> {
     #[test]
     fn test_calculate_content_relevance_score() {
         let settings = AppSettings {
+            auto_triage_enabled: true,
+            triage_lookback_hours: 24,
+            label_learning_samples: 3,
             prompt_prefix: None,
             openai_model: "gpt-3.5-turbo".to_string(),
             openai_temperature: 0.7,
@@ -1227,6 +1254,9 @@ fn decode_jwt(token: &str) -> Result<Claims> {
     #[test]
     fn test_weighted_file_context_formatting() {
         let settings = AppSettings {
+            auto_triage_enabled: true,
+            triage_lookback_hours: 24,
+            label_learning_samples: 3,
             prompt_prefix: None,
             openai_model: "gpt-3.5-turbo".to_string(),
             openai_temperature: 0.7,

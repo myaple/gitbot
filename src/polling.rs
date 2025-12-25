@@ -16,6 +16,7 @@ use crate::models::{
     GitlabIssue, GitlabMergeRequest, GitlabNoteAttributes, GitlabNoteEvent, GitlabNoteObject,
     GitlabProject, GitlabUser,
 };
+use crate::triage::{triage_unlabeled_issues, TriageService};
 
 #[derive(Clone)]
 pub struct PollingService {
@@ -24,6 +25,7 @@ pub struct PollingService {
     pub(crate) last_checked: Arc<Mutex<u64>>,
     processed_mentions_cache: MentionCache,
     file_index_manager: Arc<FileIndexManager>,
+    triage_service: Option<TriageService>,
 }
 
 impl PollingService {
@@ -31,6 +33,7 @@ impl PollingService {
         gitlab_client: Arc<GitlabApiClient>,
         config: Arc<AppSettings>,
         file_index_manager: Arc<FileIndexManager>,
+        triage_service: Option<TriageService>,
     ) -> Self {
         // Initialize with current time minus 1 hour to check recent activity on startup
         let now = SystemTime::now()
@@ -46,6 +49,7 @@ impl PollingService {
             last_checked: Arc::new(Mutex::new(initial_time)),
             processed_mentions_cache: MentionCache::new(),
             file_index_manager,
+            triage_service,
         }
     }
 
@@ -193,6 +197,49 @@ impl PollingService {
 
         if let Err(e) = stale_check_task.await {
             error!("Task join error for stale issue checking: {}", e);
+        }
+
+        // Task for triaging unlabeled issues (if triage service is enabled)
+        if let Some(triage) = &self.triage_service {
+            let triage_clone = triage.clone();
+            let project_id_clone = project_id;
+            let gitlab_client_clone = self.gitlab_client.clone();
+            let config_clone = self.config.clone();
+            let triage_task = tokio::spawn(async move {
+                // Fetch recent issues for triage
+                match gitlab_client_clone.get_issues(project_id_clone, 0).await {
+                    Ok(all_issues) => {
+                        let open_issues: Vec<_> = all_issues
+                            .into_iter()
+                            .filter(|issue| issue.state == "opened")
+                            .collect();
+
+                        if let Err(e) = triage_unlabeled_issues(
+                            &triage_clone,
+                            project_id_clone,
+                            open_issues,
+                            config_clone.triage_lookback_hours,
+                        )
+                        .await
+                        {
+                            error!(
+                                "Error triaging unlabeled issues for project {}: {}",
+                                project_id_clone, e
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        error!(
+                            "Failed to fetch issues for triage for project {}: {}",
+                            project_id_clone, e
+                        );
+                    }
+                }
+            });
+
+            if let Err(e) = triage_task.await {
+                error!("Task join error for issue triage: {}", e);
+            }
         }
 
         Ok(())

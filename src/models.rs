@@ -26,6 +26,7 @@ pub struct GitlabIssue {
     pub author: GitlabUser,
     pub web_url: String,
     pub labels: Vec<String>,
+    pub created_at: String,
     pub updated_at: String,
 }
 
@@ -255,4 +256,13 @@ pub struct GitlabBranch {
     pub default: bool,
     pub can_push: bool,
     pub web_url: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct GitlabLabel {
+    pub id: i64,
+    pub name: String,
+    pub color: String,
+    pub description: Option<String>,
+    pub text_color: Option<String>,
 }

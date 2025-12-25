@@ -109,6 +109,18 @@ pub struct AppSettings {
     /// This field is populated from GITBOT_CLIENT_KEY_PASSWORD environment variable
     /// No CLI argument is provided for security reasons
     pub client_key_password: Option<String>,
+
+    /// Enable automatic issue triage (labeling unlabeled issues)
+    #[arg(long, env = "GITBOT_AUTO_TRIAGE_ENABLED", default_value_t = true)]
+    pub auto_triage_enabled: bool,
+
+    /// Number of sample issues to analyze per label for learning label meanings
+    #[arg(long, env = "GITBOT_LABEL_LEARNING_SAMPLES", default_value_t = 3)]
+    pub label_learning_samples: usize,
+
+    /// Number of hours to look back for unlabeled issues to triage (default: 24 hours)
+    #[arg(long, env = "GITBOT_TRIAGE_LOOKBACK_HOURS", default_value_t = 24)]
+    pub triage_lookback_hours: u64,
 }
 
 // fn parse_repos_list(s: &str) -> Result<Vec<String>, String> {

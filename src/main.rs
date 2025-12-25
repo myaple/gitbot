@@ -6,8 +6,10 @@ use tracing_subscriber::EnvFilter;
 use crate::config::load_config;
 use crate::file_indexer::FileIndexManager;
 use crate::gitlab::GitlabApiClient;
+use crate::openai::OpenAIApiClient;
 use crate::polling::PollingService;
 use crate::repo_context::RepoContextExtractor;
+use crate::triage::TriageService;
 
 mod config;
 mod file_indexer;
@@ -19,6 +21,7 @@ mod openai;
 mod polling;
 mod repo_context;
 mod tools;
+mod triage;
 
 #[cfg(test)]
 mod tests;
@@ -46,6 +49,11 @@ async fn main() -> Result<()> {
 
     info!("GitLab API client initialized successfully.");
     let gitlab_client = Arc::new(gitlab_client);
+
+    // Initialize OpenAI client
+    let openai_client =
+        OpenAIApiClient::new(&config_arc).with_context(|| "Failed to create OpenAI client")?;
+    let openai_client = Arc::new(openai_client);
 
     // Create shared file index manager
     let file_index_manager = Arc::new(FileIndexManager::new(gitlab_client.clone(), 3600));
@@ -101,11 +109,40 @@ async fn main() -> Result<()> {
         }
     });
 
+    // Initialize triage service if enabled
+    let triage_service = if config_arc.auto_triage_enabled {
+        info!("Initializing triage service...");
+
+        let project_ids: Vec<i64> = projects.iter().map(|p| p.id).collect();
+
+        let triage = TriageService::new(
+            gitlab_client.clone(),
+            openai_client.clone(),
+            config_arc.clone(),
+        );
+
+        // Learn labels for all projects
+        if let Err(e) = triage.learn_labels_for_projects(&project_ids).await {
+            warn!(
+                "Failed to learn labels for triage: {}. Continuing without triage.",
+                e
+            );
+            None
+        } else {
+            info!("Triage service initialized successfully");
+            Some(triage)
+        }
+    } else {
+        info!("Auto triage disabled, skipping triage service initialization");
+        None
+    };
+
     // Create polling service
     let polling_service = PollingService::new(
         gitlab_client,
         config_arc.clone(),
         file_index_manager.clone(),
+        triage_service,
     );
 
     info!(
