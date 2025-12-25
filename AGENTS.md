@@ -70,3 +70,46 @@ src/repo_context.rs
 # - `cargo check` to ensure it compiles
 # - `cargo clippy` to ensure it lints
 # - `cargo fmt` to ensure it is formatted properly
+
+# Test Configuration Management
+# When adding new fields to AppSettings, use the automated script to update test configurations:
+#
+# Location: scripts/update_test_config.py
+#
+# Usage examples:
+#   # Add a new string field
+#   python3 scripts/update_test_config.py --field new_field_name --value '"default_value"'
+#
+#   # Add a new numeric field
+#   python3 scripts/update_test_config.py --field timeout_secs --value "120"
+#
+#   # Add a new Option<T> field with None value
+#   python3 scripts/update_test_config.py --field optional_field --value 'None' --rust-option
+#
+#   # Add a new Option<T> field with Some(value)
+#   python3 scripts/update_test_config.py --field cert_path --value '"/path/to/cert"' --rust-option
+#
+#   # Dry run to see what would change
+#   python3 scripts/update_test_config.py --field new_field --value '"test"' --dry-run
+#
+#   # Check if a field is present in all test configs
+#   python3 scripts/update_test_config.py --field existing_field --value '"value"' --check
+#
+# The script automatically:
+# - Finds all AppSettings::default() patterns in test files
+# - Adds the new field assignment after existing field assignments
+# - Preserves proper indentation
+# - Skips if the field already exists (idempotent)
+# - Runs cargo fmt after making changes
+#
+# Workflow for adding new configuration fields:
+# 1. Add the field to AppSettings struct in src/config.rs
+# 2. Update Default implementation for AppSettings
+# 3. Run the update script to add the field to all test configurations
+# 4. Run cargo test to verify everything still works
+#
+# Example complete workflow:
+#   # After adding a new field "new_config_field" to AppSettings:
+#   python3 scripts/update_test_config.py --field new_config_field --value '"default_value"'
+#   cargo test
+#   cargo fmt

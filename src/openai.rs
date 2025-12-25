@@ -310,6 +310,7 @@ impl ChatRequestBuilder {
     }
 
     /// Add a system message
+    #[allow(dead_code)]
     pub fn with_system_message(&mut self, content: &str) -> &mut Self {
         self.messages.push(OpenAIChatMessage {
             role: "system".to_string(),
@@ -348,12 +349,14 @@ impl ChatRequestBuilder {
     }
 
     /// Add a single message (for tool calling loops)
+    #[allow(dead_code)]
     pub fn add_message(&mut self, message: OpenAIChatMessage) -> &mut Self {
         self.messages.push(message);
         self
     }
 
     /// Get mutable reference to messages (for advanced manipulation)
+    #[allow(dead_code)]
     pub fn messages_mut(&mut self) -> &mut Vec<OpenAIChatMessage> {
         &mut self.messages
     }
@@ -371,6 +374,7 @@ impl ChatRequestBuilder {
     }
 
     /// Override temperature (optional, defaults to config)
+    #[allow(dead_code)]
     pub fn with_temperature(&mut self, temperature: f32) -> &mut Self {
         self.temperature = temperature;
         self
