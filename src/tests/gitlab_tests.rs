@@ -7,35 +7,13 @@ use std::sync::Arc;
 
 // Helper to create AppSettings for tests
 fn create_test_settings(base_url: String) -> AppSettings {
-    AppSettings {
-        prompt_prefix: None,
-        gitlab_url: base_url,
-        gitlab_token: "test_token".to_string(),
-        openai_api_key: "key".to_string(),
-        openai_custom_url: "url".to_string(),
-        openai_model: "gpt-3.5-turbo".to_string(),
-        default_branch: "test-main".to_string(),
-        openai_temperature: 0.7,
-        openai_max_tokens: 1024,
-        openai_token_mode: "max_tokens".to_string(),
-        repos_to_poll: vec!["org/repo1".to_string()],
-        log_level: "debug".to_string(),
-        bot_username: "gitbot".to_string(),
-        poll_interval_seconds: 60,
-        stale_issue_days: 30,
-        max_age_hours: 24,
-        context_repo_path: None,
-        max_context_size: 60000,
-        max_comment_length: 1000,
-        context_lines: 10,
-        max_tool_calls: 3,
-        client_cert_path: None,
-        client_key_path: None,
-        client_key_password: None,
-        auto_triage_enabled: true,
-        triage_lookback_hours: 24,
-        label_learning_samples: 3,
-    }
+    let mut settings = AppSettings::default();
+    settings.gitlab_url = base_url;
+    settings.gitlab_token = "test_token".to_string();
+    settings.openai_api_key = "key".to_string();
+    settings.openai_custom_url = "url".to_string();
+    settings.default_branch = "test-main".to_string();
+    settings
 }
 
 #[tokio::test]

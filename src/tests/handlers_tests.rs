@@ -24,35 +24,14 @@ mod tests {
 
     // Helper to create a basic AppSettings for tests
     fn test_app_settings(base_url: String) -> Arc<AppSettings> {
-        Arc::new(AppSettings {
-            auto_triage_enabled: true,
-            triage_lookback_hours: 24,
-            label_learning_samples: 3,
-            prompt_prefix: None,
-            gitlab_url: base_url.clone(), // Cloning base_url if used for both
-            gitlab_token: "test_token".to_string(),
-            openai_api_key: "test_openai_key".to_string(),
-            openai_custom_url: base_url, // Corrected to use the mock server's URL
-            openai_model: "gpt-3.5-turbo".to_string(),
-            openai_temperature: 0.7,
-            openai_max_tokens: 150,
-            openai_token_mode: "max_tokens".to_string(),
-            repos_to_poll: vec!["test_org/test_repo".to_string()],
-            log_level: "debug".to_string(),
-            bot_username: TEST_BOT_USERNAME.to_string(),
-            poll_interval_seconds: 60,
-            default_branch: "main".to_string(),
-            client_cert_path: None,
-            client_key_path: None,
-            client_key_password: None,
-            max_comment_length: 1000,
-            context_lines: 10,
-            stale_issue_days: 30,
-            max_age_hours: 24,
-            context_repo_path: None,
-            max_context_size: 60000,
-            max_tool_calls: 3,
-        })
+        let mut settings = AppSettings::default();
+        settings.gitlab_url = base_url.clone();
+        settings.gitlab_token = "test_token".to_string();
+        settings.openai_api_key = "test_openai_key".to_string();
+        settings.openai_custom_url = base_url;
+        settings.openai_max_tokens = 150;
+        settings.bot_username = TEST_BOT_USERNAME.to_string();
+        Arc::new(settings)
     }
 
     // Simple wrapper around create_test_note_event_with_id with defaults
@@ -208,68 +187,23 @@ mod tests {
         event.object_attributes.note = "This is a comment without any bot mention".to_string();
 
         // Create test config
-        let config = Arc::new(AppSettings {
-            auto_triage_enabled: true,
-            triage_lookback_hours: 24,
-            label_learning_samples: 3,
-            prompt_prefix: None,
-            gitlab_url: "https://gitlab.example.com".to_string(),
-            gitlab_token: "test_token".to_string(),
-            openai_api_key: "test_key".to_string(),
-            openai_custom_url: "https://api.openai.com/v1".to_string(),
-            openai_model: "gpt-3.5-turbo".to_string(),
-            openai_temperature: 0.7,
-            openai_max_tokens: 1024,
-            openai_token_mode: "max_tokens".to_string(),
-            repos_to_poll: vec!["test/repo".to_string()],
-            log_level: "debug".to_string(),
-            bot_username: "gitbot".to_string(),
-            poll_interval_seconds: 60,
-            stale_issue_days: 30,
-            max_age_hours: 24,
-            context_repo_path: None,
-            max_context_size: 60000,
-            max_comment_length: 1000,
-            context_lines: 10,
-            default_branch: "main".to_string(),
-            max_tool_calls: 3,
-            client_cert_path: None,
-            client_key_path: None,
-            client_key_password: None,
-        });
+        let mut config = AppSettings::default();
+        // Set only the non-default fields
+        config.gitlab_url = "https://gitlab.example.com".to_string();
+        config.gitlab_token = "test_token".to_string();
+        config.openai_api_key = "test_key".to_string();
+        config.repos_to_poll = vec!["test/repo".to_string()];
+        config.log_level = "debug".to_string();
+        config.bot_username = "gitbot".to_string();
+        let config = Arc::new(config);
 
         // Create a mock GitLab client
         let server = mockito::Server::new_async().await;
         let base_url = server.url();
-        let settings = AppSettings {
-            auto_triage_enabled: true,
-            triage_lookback_hours: 24,
-            label_learning_samples: 3,
-            prompt_prefix: None,
-            gitlab_url: base_url,
-            gitlab_token: "test_token".to_string(),
-            openai_api_key: "test_key".to_string(),
-            openai_model: "gpt-3.5-turbo".to_string(),
-            openai_temperature: 0.7,
-            openai_max_tokens: 1024,
-            openai_token_mode: "max_tokens".to_string(),
-            openai_custom_url: "https://api.openai.com/v1".to_string(),
-            repos_to_poll: vec!["test/repo".to_string()],
-            log_level: "debug".to_string(),
-            bot_username: "gitbot".to_string(),
-            poll_interval_seconds: 60,
-            max_age_hours: 24,
-            stale_issue_days: 30, // Added default for tests
-            context_repo_path: None,
-            max_context_size: 60000,
-            max_comment_length: 1000,
-            context_lines: 10,
-            default_branch: "main".to_string(),
-            max_tool_calls: 3,
-            client_cert_path: None,
-            client_key_path: None,
-            client_key_password: None,
-        };
+        let mut settings = AppSettings::default();
+        settings.gitlab_url = base_url.clone();
+        settings.gitlab_token = "test_token".to_string();
+        settings.openai_api_key = "test_key".to_string();
         let gitlab_client = Arc::new(GitlabApiClient::new(Arc::new(settings.clone())).unwrap());
 
         // Create a cache for the test
@@ -293,35 +227,15 @@ mod tests {
         event.object_attributes.note = "This is a comment with no bot mention".to_string();
 
         // Create test config
-        let config = Arc::new(AppSettings {
-            auto_triage_enabled: true,
-            triage_lookback_hours: 24,
-            label_learning_samples: 3,
-            prompt_prefix: None,
-            gitlab_url: "https://gitlab.example.com".to_string(),
-            gitlab_token: "test_token".to_string(),
-            openai_api_key: "test_key".to_string(),
-            openai_custom_url: "https://api.openai.com/v1".to_string(),
-            openai_model: "gpt-3.5-turbo".to_string(),
-            openai_temperature: 0.7,
-            openai_max_tokens: 1024,
-            openai_token_mode: "max_tokens".to_string(),
-            repos_to_poll: vec!["org/repo1".to_string()],
-            log_level: "debug".to_string(),
-            bot_username: "gitbot".to_string(),
-            max_age_hours: 24,
-            poll_interval_seconds: 60,
-            stale_issue_days: 30, // Added default for tests
-            context_repo_path: None,
-            max_context_size: 60000,
-            max_comment_length: 1000,
-            context_lines: 10,
-            default_branch: "main".to_string(),
-            max_tool_calls: 3,
-            client_cert_path: None,
-            client_key_path: None,
-            client_key_password: None,
-        });
+        let mut config = AppSettings::default();
+        // Set only the non-default fields
+        config.gitlab_url = "https://gitlab.example.com".to_string();
+        config.gitlab_token = "test_token".to_string();
+        config.openai_api_key = "test_key".to_string();
+        config.repos_to_poll = vec!["org/repo1".to_string()];
+        config.log_level = "debug".to_string();
+        config.bot_username = "gitbot".to_string();
+        let config = Arc::new(config);
 
         // Create a cache for the test
         let cache = MentionCache::new();
@@ -329,35 +243,14 @@ mod tests {
         // Create a mock GitLab client
         let server = mockito::Server::new_async().await;
         let base_url = server.url();
-        let settings = AppSettings {
-            auto_triage_enabled: true,
-            triage_lookback_hours: 24,
-            label_learning_samples: 3,
-            prompt_prefix: None,
-            gitlab_url: base_url,
-            gitlab_token: "test_token".to_string(),
-            openai_api_key: "test_key".to_string(),
-            openai_model: "gpt-3.5-turbo".to_string(),
-            openai_temperature: 0.7,
-            openai_max_tokens: 1024,
-            openai_token_mode: "max_tokens".to_string(),
-            openai_custom_url: "https://api.openai.com/v1".to_string(),
-            repos_to_poll: vec!["org/repo1".to_string()],
-            log_level: "debug".to_string(),
-            max_age_hours: 24,
-            bot_username: "gitbot".to_string(),
-            poll_interval_seconds: 60,
-            stale_issue_days: 30, // Added default for tests
-            context_repo_path: None,
-            max_context_size: 60000,
-            max_comment_length: 1000,
-            context_lines: 10,
-            default_branch: "main".to_string(),
-            max_tool_calls: 3,
-            client_cert_path: None,
-            client_key_path: None,
-            client_key_password: None,
-        };
+        let mut settings = AppSettings::default();
+        // Set only the non-default fields
+        settings.gitlab_url = base_url;
+        settings.gitlab_token = "test_token".to_string();
+        settings.openai_api_key = "test_key".to_string();
+        settings.repos_to_poll = vec!["org/repo1".to_string()];
+        settings.log_level = "debug".to_string();
+        settings.bot_username = "gitbot".to_string();
         let gitlab_client = Arc::new(GitlabApiClient::new(Arc::new(settings.clone())).unwrap());
         let file_index_manager = Arc::new(FileIndexManager::new(gitlab_client.clone(), 3600));
 

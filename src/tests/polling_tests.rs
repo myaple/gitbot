@@ -16,35 +16,18 @@ mod tests {
     const PROJECT_ID: i64 = 1;
 
     fn test_config(stale_days: u64, bot_username: &str, base_url: String) -> Arc<AppSettings> {
-        Arc::new(AppSettings {
-            auto_triage_enabled: true,
-            triage_lookback_hours: 24,
-            label_learning_samples: 3,
-            prompt_prefix: None,
-            gitlab_url: base_url,
-            gitlab_token: "test_token".to_string(),
-            openai_api_key: "key".to_string(),
-            openai_custom_url: "url".to_string(),
-            openai_model: "gpt-3.5-turbo".to_string(),
-            openai_temperature: 0.7,
-            openai_max_tokens: 1024,
-            openai_token_mode: "max_tokens".to_string(),
-            repos_to_poll: vec!["org/repo1".to_string()],
-            log_level: "debug".to_string(),
-            bot_username: bot_username.to_string(),
-            poll_interval_seconds: 60,
-            stale_issue_days: stale_days,
-            max_age_hours: 24,
-            context_repo_path: Some("org/context-repo".to_string()),
-            max_context_size: 60000,
-            max_comment_length: 1000,
-            context_lines: 10,
-            default_branch: "main".to_string(),
-            max_tool_calls: 3,
-            client_cert_path: None,
-            client_key_path: None,
-            client_key_password: None,
-        })
+        let mut settings = AppSettings::default();
+        // Set only the non-default fields
+        settings.gitlab_url = base_url;
+        settings.gitlab_token = "test_token".to_string();
+        settings.openai_api_key = "key".to_string();
+        settings.openai_custom_url = "url".to_string();
+        settings.repos_to_poll = vec!["org/repo1".to_string()];
+        settings.log_level = "debug".to_string();
+        settings.bot_username = bot_username.to_string();
+        settings.stale_issue_days = stale_days;
+        settings.context_repo_path = Some("org/context-repo".to_string());
+        Arc::new(settings)
     }
 
     fn create_issue(
@@ -653,35 +636,16 @@ mod tests {
         let base_url = server.url();
 
         // Create settings with max_age_hours = 12
-        let settings = AppSettings {
-            auto_triage_enabled: true,
-            triage_lookback_hours: 24,
-            label_learning_samples: 3,
-            prompt_prefix: None,
-            gitlab_url: base_url.clone(),
-            gitlab_token: "test_token".to_string(),
-            openai_api_key: "test_key".to_string(),
-            openai_model: "gpt-3.5-turbo".to_string(),
-            openai_temperature: 0.7,
-            openai_max_tokens: 1024,
-            openai_token_mode: "max_tokens".to_string(),
-            openai_custom_url: "https://api.openai.com/v1".to_string(),
-            repos_to_poll: vec!["org/repo".to_string()],
-            log_level: "debug".to_string(),
-            bot_username: "test_bot".to_string(),
-            poll_interval_seconds: 60,
-            stale_issue_days: 30,
-            max_age_hours: 12, // Set to 12 hours for this test
-            context_repo_path: None,
-            max_context_size: 60000,
-            max_comment_length: 1000,
-            context_lines: 10,
-            default_branch: "main".to_string(),
-            max_tool_calls: 3,
-            client_cert_path: None,
-            client_key_path: None,
-            client_key_password: None,
-        };
+        let mut settings = AppSettings::default();
+        // Set only the non-default fields
+        settings.gitlab_url = base_url.clone();
+        settings.gitlab_token = "test_token".to_string();
+        settings.openai_api_key = "test_key".to_string();
+        settings.openai_custom_url = "https://api.openai.com/v1".to_string();
+        settings.repos_to_poll = vec!["org/repo".to_string()];
+        settings.log_level = "debug".to_string();
+        settings.bot_username = "test_bot".to_string();
+        settings.max_age_hours = 12; // Set to 12 hours for this test
 
         // Setup timestamp calculation test
         let now = SystemTime::now()

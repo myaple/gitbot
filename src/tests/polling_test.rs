@@ -5,35 +5,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[tokio::test]
 async fn test_max_age_hours_calculation() {
     // Create settings with max_age_hours = 12
-    let settings = AppSettings {
-        auto_triage_enabled: true,
-        triage_lookback_hours: 24,
-        label_learning_samples: 3,
-        prompt_prefix: None,
-        gitlab_url: "https://gitlab.example.com".to_string(),
-        gitlab_token: "test_token".to_string(),
-        openai_api_key: "test_key".to_string(),
-        openai_model: "gpt-3.5-turbo".to_string(),
-        openai_temperature: 0.7,
-        openai_max_tokens: 1024,
-        openai_token_mode: "max_tokens".to_string(),
-        openai_custom_url: "https://api.openai.com/v1".to_string(),
-        repos_to_poll: vec!["test/repo".to_string()],
-        log_level: "debug".to_string(),
-        bot_username: "gitbot".to_string(),
-        poll_interval_seconds: 60,
-        stale_issue_days: 30,
-        max_age_hours: 12,
-        context_repo_path: None,
-        max_context_size: 60000,
-        max_comment_length: 1000,
-        context_lines: 10,
-        default_branch: "main".to_string(),
-        max_tool_calls: 3,
-        client_cert_path: None,
-        client_key_path: None,
-        client_key_password: None,
-    };
+    let mut settings = AppSettings::default();
+    // Set only the non-default fields
+    settings.gitlab_url = "https://gitlab.example.com".to_string();
+    settings.gitlab_token = "test_token".to_string();
+    settings.openai_api_key = "test_key".to_string();
+    settings.repos_to_poll = vec!["test/repo".to_string()];
+    settings.log_level = "debug".to_string();
+    settings.bot_username = "gitbot".to_string();
+    settings.max_age_hours = 12;
 
     // Get current time and calculate a timestamp from 24 hours ago
     let now = SystemTime::now()

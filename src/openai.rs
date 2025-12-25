@@ -1,8 +1,14 @@
 use reqwest::{header, Client, Identity, StatusCode};
 use std::fs;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 use thiserror::Error;
-use tracing::{debug, error, instrument};
+use tracing::{debug, error, info, instrument, warn};
 use url::Url;
+
+use backoff::future::retry_notify;
+use backoff::ExponentialBackoff;
 
 use crate::config::AppSettings;
 use crate::models::{OpenAIChatMessage, OpenAIChatRequest, OpenAIChatResponse, Tool, ToolChoice};
@@ -19,6 +25,13 @@ pub enum OpenAIClient {
     Deserialization(reqwest::Error),
     #[error("File I/O error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("Request failed after {attempts} attempts over {duration:?}: {source}")]
+    RetryFailed {
+        attempts: usize,
+        duration: Duration,
+        #[source]
+        source: Box<OpenAIClient>,
+    },
 }
 
 #[derive(Debug)]
@@ -26,6 +39,10 @@ pub struct OpenAIApiClient {
     client: Client,
     openai_custom_url: Url,
     api_key: String,
+    retry_initial_delay_ms: u64,
+    retry_max_delay_ms: u64,
+    retry_backoff_multiplier: f64,
+    max_retries: usize,
 }
 
 pub const OPENAI_CHAT_COMPLETIONS_PATH: &str = "chat/completions";
@@ -34,8 +51,13 @@ impl OpenAIApiClient {
     pub fn new(settings: &AppSettings) -> Result<Self, OpenAIClient> {
         let openai_custom_url = Url::parse(&settings.openai_custom_url)?;
 
-        // Build the client with optional client certificate
-        let mut client_builder = Client::builder();
+        // Build the client with timeouts and connection pooling
+        let mut client_builder = Client::builder()
+            .timeout(Duration::from_secs(settings.openai_timeout_secs))
+            .connect_timeout(Duration::from_secs(settings.openai_connect_timeout_secs))
+            .pool_max_idle_per_host(0)
+            .pool_idle_timeout(Duration::from_secs(30))
+            .tcp_keepalive(Duration::from_secs(60));
 
         // Add client certificate if both cert and key paths are provided
         if let (Some(cert_path), Some(key_path)) =
@@ -78,11 +100,41 @@ impl OpenAIApiClient {
             client,
             openai_custom_url,
             api_key: settings.openai_api_key.clone(),
+            retry_initial_delay_ms: settings.openai_retry_initial_delay_ms,
+            retry_max_delay_ms: settings.openai_retry_max_delay_ms,
+            retry_backoff_multiplier: settings.openai_retry_backoff_multiplier,
+            max_retries: settings.openai_max_retries,
         })
     }
 
+    /// Check if reqwest error indicates a broken pipe (retryable connection issue)
+    fn is_broken_pipe(err: &reqwest::Error) -> bool {
+        let err_str = err.to_string().to_lowercase();
+        err_str.contains("broken pipe") || err_str.contains("connection reset")
+    }
+
+    /// Determine if an error is retryable
+    fn is_retryable_error(&self, error: &OpenAIClient) -> bool {
+        match error {
+            // Timeout and connection errors are retryable
+            OpenAIClient::Request(reqwest_err) => {
+                reqwest_err.is_timeout()
+                    || reqwest_err.is_connect()
+                    || Self::is_broken_pipe(reqwest_err)
+            }
+            // 5xx server errors, 408 timeout, 429 rate limit are retryable
+            OpenAIClient::Api { status, .. } => {
+                let code = status.as_u16();
+                code == 408 || code == 429 || status.is_server_error()
+            }
+            // Everything else is permanent
+            _ => false,
+        }
+    }
+
+    /// Internal method that performs a single API call (no retry logic)
     #[instrument(skip(self, request_payload), fields(model = %request_payload.model))]
-    pub async fn send_chat_completion(
+    async fn send_chat_completion_internal(
         &self,
         request_payload: &OpenAIChatRequest,
     ) -> Result<OpenAIChatResponse, OpenAIClient> {
@@ -131,6 +183,93 @@ impl OpenAIApiClient {
         // }
 
         Ok(parsed_response)
+    }
+
+    /// Public method with retry logic
+    #[instrument(skip(self, request_payload), fields(model = %request_payload.model))]
+    pub async fn send_chat_completion(
+        &self,
+        request_payload: &OpenAIChatRequest,
+    ) -> Result<OpenAIChatResponse, OpenAIClient> {
+        // Create backoff strategy from config
+        let backoff_strategy = ExponentialBackoff {
+            initial_interval: Duration::from_millis(self.retry_initial_delay_ms),
+            max_interval: Duration::from_millis(self.retry_max_delay_ms),
+            multiplier: self.retry_backoff_multiplier,
+            randomization_factor: 0.1, // Add jitter to prevent thundering herd
+            ..Default::default()
+        };
+
+        let attempt = Arc::new(AtomicUsize::new(0));
+        let start = Instant::now();
+
+        // Clone Arc for use in the operation closure
+        let attempt_clone = attempt.clone();
+
+        // Use retry_notify to track attempts and log retries
+        let operation = || async {
+            let current_attempt = attempt_clone.fetch_add(1, Ordering::SeqCst) + 1;
+
+            self.send_chat_completion_internal(request_payload)
+                .await
+                .map_err(|e| {
+                    if self.is_retryable_error(&e) {
+                        warn!(
+                            attempt = current_attempt,
+                            max_retries = self.max_retries,
+                            error = %e,
+                            error_type = std::any::type_name_of_val(&e),
+                            model = %request_payload.model,
+                            "OpenAI request failed, retrying with exponential backoff"
+                        );
+                        backoff::Error::transient(e)
+                    } else {
+                        backoff::Error::permanent(e)
+                    }
+                })
+        };
+
+        let notify = |err: OpenAIClient, duration: Duration| {
+            warn!(
+                error = %err,
+                next_retry_in_ms = duration.as_millis(),
+                "Scheduling next retry attempt"
+            );
+        };
+
+        match retry_notify(backoff_strategy, operation, notify).await {
+            Ok(response) => {
+                let final_attempt = attempt.load(Ordering::SeqCst);
+                if final_attempt > 1 {
+                    info!(
+                        retries = final_attempt - 1,
+                        total_time_ms = start.elapsed().as_millis(),
+                        "Request succeeded after retries"
+                    );
+                }
+                Ok(response)
+            }
+            Err(e) => {
+                // Only wrap in RetryFailed if we attempted multiple retries
+                let final_attempt = attempt.load(Ordering::SeqCst);
+                if final_attempt > 1 {
+                    error!(
+                        attempts = final_attempt,
+                        max_retries = self.max_retries,
+                        total_time_ms = start.elapsed().as_millis(),
+                        "Request failed after retries"
+                    );
+                    Err(OpenAIClient::RetryFailed {
+                        attempts: final_attempt,
+                        duration: start.elapsed(),
+                        source: Box::new(e),
+                    })
+                } else {
+                    // Single attempt failed - return the original error
+                    Err(e)
+                }
+            }
+        }
     }
 }
 

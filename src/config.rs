@@ -49,6 +49,38 @@ pub struct AppSettings {
     #[arg(long, env = "GITBOT_OPENAI_TOKEN_MODE", default_value = "max_tokens", value_parser = validate_token_mode)]
     pub openai_token_mode: String,
 
+    /// OpenAI request timeout in seconds (default: 120)
+    #[arg(long, env = "GITBOT_OPENAI_TIMEOUT_SECS", default_value_t = 120)]
+    pub openai_timeout_secs: u64,
+
+    /// OpenAI connection timeout in seconds (default: 10)
+    #[arg(long, env = "GITBOT_OPENAI_CONNECT_TIMEOUT_SECS", default_value_t = 10)]
+    pub openai_connect_timeout_secs: u64,
+
+    /// Number of retries for OpenAI API calls (default: 3, max: 10)
+    #[arg(long, env = "GITBOT_OPENAI_MAX_RETRIES", default_value_t = 3, value_parser = validate_max_retries)]
+    pub openai_max_retries: usize,
+
+    /// Initial retry delay in milliseconds (default: 1000)
+    #[arg(
+        long,
+        env = "GITBOT_OPENAI_RETRY_INITIAL_DELAY_MS",
+        default_value_t = 1000
+    )]
+    pub openai_retry_initial_delay_ms: u64,
+
+    /// Maximum retry delay in milliseconds (default: 30000)
+    #[arg(
+        long,
+        env = "GITBOT_OPENAI_RETRY_MAX_DELAY_MS",
+        default_value_t = 30000
+    )]
+    pub openai_retry_max_delay_ms: u64,
+
+    /// Exponential backoff multiplier (default: 2.0)
+    #[arg(long, env = "GITBOT_OPENAI_RETRY_BACKOFF_MULTIPLIER", default_value_t = 2.0, value_parser = validate_retry_backoff_multiplier)]
+    pub openai_retry_backoff_multiplier: f64,
+
     /// Comma-separated list of repositories to poll (format: group/project)
     #[arg(long, env = "GITBOT_REPOS_TO_POLL", value_delimiter = ',')]
     pub repos_to_poll: Vec<String>,
@@ -159,6 +191,41 @@ fn validate_max_tool_calls(value: u32) -> Result<u32, String> {
     }
 }
 
+/// Validate that openai_max_retries is within reasonable bounds
+fn validate_max_retries(value: &str) -> Result<usize, String> {
+    const MAX_RETRIES: usize = 10;
+
+    let parsed = value
+        .parse::<usize>()
+        .map_err(|_| format!("openai_max_retries must be a number, got '{value}'"))?;
+
+    if parsed > MAX_RETRIES {
+        Err(format!(
+            "openai_max_retries must be at most {MAX_RETRIES}, got {parsed}"
+        ))
+    } else {
+        Ok(parsed)
+    }
+}
+
+/// Validate that retry backoff multiplier is reasonable
+fn validate_retry_backoff_multiplier(value: &str) -> Result<f64, String> {
+    const MIN_MULTIPLIER: f64 = 1.0;
+    const MAX_MULTIPLIER: f64 = 10.0;
+
+    let parsed = value
+        .parse::<f64>()
+        .map_err(|_| format!("openai_retry_backoff_multiplier must be a number, got '{value}'"))?;
+
+    if !(MIN_MULTIPLIER..=MAX_MULTIPLIER).contains(&parsed) {
+        Err(format!(
+            "openai_retry_backoff_multiplier must be between {MIN_MULTIPLIER} and {MAX_MULTIPLIER}, got {parsed}"
+        ))
+    } else {
+        Ok(parsed)
+    }
+}
+
 pub fn load_config() -> anyhow::Result<AppSettings> {
     // Parse command line arguments and environment variables
     let mut app_settings = AppSettings::parse();
@@ -176,7 +243,82 @@ pub fn load_config() -> anyhow::Result<AppSettings> {
     app_settings.max_tool_calls =
         validate_max_tool_calls(app_settings.max_tool_calls).map_err(|e| anyhow::anyhow!(e))?;
 
+    // Validate retry configuration
+    app_settings.validate_retry_config()?;
+
     Ok(app_settings)
+}
+
+impl AppSettings {
+    /// Validate retry configuration to prevent invalid values
+    pub fn validate_retry_config(&self) -> anyhow::Result<()> {
+        // Validate retry initial delay doesn't exceed reasonable bounds
+        if self.openai_retry_initial_delay_ms > 60000 {
+            anyhow::bail!(
+                "openai_retry_initial_delay_ms cannot exceed 60 seconds, got {}",
+                self.openai_retry_initial_delay_ms
+            );
+        }
+
+        // Validate retry max delay doesn't exceed reasonable bounds
+        if self.openai_retry_max_delay_ms > 300000 {
+            anyhow::bail!(
+                "openai_retry_max_delay_ms cannot exceed 5 minutes, got {}",
+                self.openai_retry_max_delay_ms
+            );
+        }
+
+        // Ensure initial delay is less than max delay
+        if self.openai_retry_initial_delay_ms >= self.openai_retry_max_delay_ms {
+            anyhow::bail!(
+                "openai_retry_initial_delay_ms ({}) must be less than openai_retry_max_delay_ms ({})",
+                self.openai_retry_initial_delay_ms,
+                self.openai_retry_max_delay_ms
+            );
+        }
+
+        Ok(())
+    }
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            gitlab_url: "https://gitlab.com".to_string(),
+            prompt_prefix: None,
+            gitlab_token: "default_token".to_string(),
+            openai_api_key: "default_key".to_string(),
+            openai_custom_url: "https://api.openai.com/v1".to_string(),
+            openai_model: "gpt-3.5-turbo".to_string(),
+            openai_temperature: 0.7,
+            openai_max_tokens: 1024,
+            openai_token_mode: "max_tokens".to_string(),
+            openai_timeout_secs: 120,
+            openai_connect_timeout_secs: 10,
+            openai_max_retries: 3,
+            openai_retry_initial_delay_ms: 1000,
+            openai_retry_max_delay_ms: 30000,
+            openai_retry_backoff_multiplier: 2.0,
+            repos_to_poll: Vec::new(),
+            log_level: "info".to_string(),
+            bot_username: "gitbot".to_string(),
+            poll_interval_seconds: 60,
+            stale_issue_days: 30,
+            max_age_hours: 24,
+            context_repo_path: None,
+            max_context_size: 60000,
+            max_comment_length: 1000,
+            context_lines: 10,
+            default_branch: "main".to_string(),
+            max_tool_calls: 3,
+            client_cert_path: None,
+            client_key_path: None,
+            client_key_password: None,
+            auto_triage_enabled: true,
+            label_learning_samples: 3,
+            triage_lookback_hours: 24,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -226,5 +368,72 @@ mod tests {
         assert!(validate_max_tool_calls(11).is_err());
         let err = validate_max_tool_calls(11).unwrap_err();
         assert!(err.contains("must be at most 10"));
+    }
+
+    #[test]
+    fn test_validate_max_retries_valid_values() {
+        // Test valid values
+        assert_eq!(validate_max_retries("0"), Ok(0));
+        assert_eq!(validate_max_retries("3"), Ok(3));
+        assert_eq!(validate_max_retries("10"), Ok(10));
+    }
+
+    #[test]
+    fn test_validate_max_retries_invalid_values() {
+        // Test value above maximum
+        assert!(validate_max_retries("11").is_err());
+        let err = validate_max_retries("11").unwrap_err();
+        assert!(err.contains("must be at most 10"));
+    }
+
+    #[test]
+    fn test_validate_retry_backoff_multiplier_valid_values() {
+        // Test valid values within range
+        assert_eq!(validate_retry_backoff_multiplier("1.0"), Ok(1.0));
+        assert_eq!(validate_retry_backoff_multiplier("2.0"), Ok(2.0));
+        assert_eq!(validate_retry_backoff_multiplier("10.0"), Ok(10.0));
+    }
+
+    #[test]
+    fn test_validate_retry_backoff_multiplier_invalid_values() {
+        // Test values below minimum
+        assert!(validate_retry_backoff_multiplier("0.9").is_err());
+        let err = validate_retry_backoff_multiplier("0.9").unwrap_err();
+        assert!(err.contains("must be between"));
+
+        // Test values above maximum
+        assert!(validate_retry_backoff_multiplier("10.1").is_err());
+        let err = validate_retry_backoff_multiplier("10.1").unwrap_err();
+        assert!(err.contains("must be between"));
+    }
+
+    #[test]
+    fn test_validate_retry_config() {
+        // Valid configuration
+        let mut config = AppSettings {
+            openai_retry_initial_delay_ms: 1000,
+            openai_retry_max_delay_ms: 30000,
+            ..Default::default()
+        };
+        assert!(config.validate_retry_config().is_ok());
+
+        // Initial delay exceeds maximum
+        config.openai_retry_initial_delay_ms = 70000;
+        assert!(config.validate_retry_config().is_err());
+
+        // Max delay exceeds maximum
+        config.openai_retry_initial_delay_ms = 1000;
+        config.openai_retry_max_delay_ms = 400000;
+        assert!(config.validate_retry_config().is_err());
+
+        // Initial delay equals max delay
+        config.openai_retry_initial_delay_ms = 30000;
+        config.openai_retry_max_delay_ms = 30000;
+        assert!(config.validate_retry_config().is_err());
+
+        // Initial delay greater than max delay
+        config.openai_retry_initial_delay_ms = 40000;
+        config.openai_retry_max_delay_ms = 30000;
+        assert!(config.validate_retry_config().is_err());
     }
 }
