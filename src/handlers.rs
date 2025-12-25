@@ -31,24 +31,239 @@ pub(crate) fn extract_context_after_mention(note: &str, bot_name: &str) -> Optio
 pub enum SlashCommand {
     Summarize,
     Postmortem,
-    Suggestions,
     Help,
+    // Issue commands
+    Plan,
+    Fix,
+    // Merge request commands
+    Security,
+    Docs,
+    Tests,
 }
 
 impl SlashCommand {
     pub fn get_precanned_prompt(&self) -> &'static str {
         match self {
             SlashCommand::Summarize => {
-                "Summarize changes with a section for adherence to guidelines, possible changes to cpu/memory/big-O performance, strengths, areas for improvement in the changes, and a conclusion with recommendations."
+                "Summarize changes with detailed analysis including:\n\
+                1. **Guideline Adherence**: Review against CONTRIBUTING.md and project standards, providing specific examples\n\
+                2. **Performance Impact**: CPU and memory usage analysis, Big-O complexity assessment, database query optimization, scalability concerns\n\
+                3. **Code Quality**: Readability, maintainability, error handling, security implications\n\
+                4. **Risk Assessment**: Breaking changes for backward compatibility, integration points affected, dependency risks\n\
+                5. **Strengths**: Highlight notable improvements and best practices followed\n\
+                6. **Areas for Improvement**: Specific constructive feedback with actionable suggestions\n\
+                7. **Recommendations**: Clear next steps, additional reviews needed, or testing requirements\n\
+                Format your response in markdown with clear headings."
             }
             SlashCommand::Postmortem => {
-                "Summarize in a traditional, SaaS postmortem, including a timeline and root cause analysis sections."
-            }
-            SlashCommand::Suggestions => {
-                "Describe a possible solution or implementation to resolve this issue."
+                "Create a comprehensive incident postmortem following this structure:\n\
+                ## Executive Summary\n\
+                - Brief overview of what happened\n\
+                - Impact on users/systems\n\
+                - Duration and resolution time\n\
+                ## Timeline\n\
+                - Chronological sequence of events with timestamps (automatically extracted from issue discussion)\n\
+                - Key decisions and their timing\n\
+                ## Root Cause Analysis\n\
+                - Primary vs. contributing factors\n\
+                - Technical vs. systemic causes\n\
+                - Use '5 Whys' technique to dig deep\n\
+                ## Impact Assessment\n\
+                - Affected users/systems\n\
+                - Business impact\n\
+                - Performance impact\n\
+                ## Action Items\n\
+                - Specific, measurable, achievable, relevant, time-bound (SMART) actions\n\
+                - Owner for each action\n\
+                - Priority levels\n\
+                ## Lessons Learned\n\
+                - What worked well during the incident\n\
+                - What could be improved\n\
+                - Preventive measures\n\
+                ## Follow-up Plan\n\
+                - Review timeline\n\
+                - Action item tracking\n\
+                - Process improvements\n\
+                Be blameless and focus on learning and prevention. Format in markdown."
             }
             SlashCommand::Help => {
                 "You should respond by listing all available slash commands for GitBot and explaining their purposes. Also offer to help the user understand what GitBot can do for them. Be helpful and welcoming in your response, as the user is trying to understand GitBot's capabilities."
+            }
+            SlashCommand::Plan => {
+                "Create a comprehensive implementation plan for this issue using the following structure:\n\
+                ## Executive Summary\n\
+                - Brief overview of what will be implemented\n\
+                - Business value justification\n\
+                - Success criteria\n\
+                ## Technical Approach\n\
+                - Architecture overview and design decisions\n\
+                - Integration points with existing systems\n\
+                - Data flow and state management\n\
+                ## Implementation Breakdown (prioritized by order of execution)\n\
+                1. **Setup & Preparation** (environment, dependencies, scaffolding)\n\
+                2. **Core Implementation** (main feature components)\n\
+                3. **Integration & Edge Cases** (error handling, edge cases)\n\
+                4. **Testing & Validation** (comprehensive testing strategy)\n\
+                5. **Documentation & Deployment** (docs, deployment, monitoring)\n\
+                For each step, include:\n\
+                - Detailed description of work\n\
+                - Specific files/lines to modify\n\
+                - Estimated complexity (Low/Medium/High)\n\
+                - Dependencies on other steps\n\
+                - Success criteria for completion\n\
+                ## Risk Assessment\n\
+                - Technical risks and mitigation strategies\n\
+                - Rollback plan\n\
+                - Monitoring requirements\n\
+                - Performance considerations\n\
+                ## Testing Strategy\n\
+                - Unit tests (what to test, why)\n\
+                - Integration tests (components to validate)\n\
+                - End-to-end scenarios\n\
+                - Performance/load testing needs\n\
+                - Manual test cases\n\
+                ## Success Metrics\n\
+                - How to verify the implementation works\n\
+                - Performance benchmarks\n\
+                - User acceptance criteria\n\
+                Format your response in markdown with clear headings, code blocks for file paths, and checklists for tasks."
+            }
+            SlashCommand::Fix => {
+                "Analyze this bug report and provide a comprehensive fix following this structured approach:\n\
+                ## Investigation & Root Cause Analysis\n\
+                - Distinguish symptoms from root causes using the 5 whys technique\n\
+                - Analyze failure modes, edge cases, and boundary conditions\n\
+                - Suggest steps to reproduce the issue systematically\n\
+                - Examine any available error logs, stack traces, or debugging information\n\
+                - Check related commits, existing tests, and similar issues\n\
+                ## Specific Implementation Changes\n\
+                - Provide complete, working code snippets with proper syntax highlighting\n\
+                - Include before/after comparisons where helpful\n\
+                - Explain the logic and reasoning behind each change\n\
+                - Note performance implications and optimization opportunities\n\
+                - Identify any refactoring opportunities or cleanup needed\n\
+                ## Target Files & Functions (with precision)\n\
+                - List files with exact paths and line numbers for modifications\n\
+                - Prioritize changes (1=most critical, based on impact and risk)\n\
+                - Identify key functions and their interdependencies\n\
+                - Note files that should be read but not modified\n\
+                - Highlight potential ripple effects to other modules\n\
+                ## Comprehensive Testing Strategy\n\
+                - Unit tests for modified functions with example inputs/expected outputs\n\
+                - Integration tests for component interactions\n\
+                - Edge cases: null inputs, boundary values, error conditions\n\
+                - Mocking strategy for external dependencies\n\
+                - Regression tests to prevent similar bugs\n\
+                - Test coverage recommendation (aim for 80%+ on modified code)\n\
+                ## Risk Assessment & Mitigation\n\
+                - Potential side effects and how to detect them\n\
+                - Backward compatibility considerations\n\
+                - Performance impact assessment\n\
+                - Monitoring recommendations for early detection of issues\n\
+                - Rollback plan if the fix causes unexpected problems\n\
+                ## Code Quality & Documentation\n\
+                - Ensure changes follow project coding standards\n\
+                - Consider readability and maintainability\n\
+                - Document any new or modified functionality\n\
+                - Update relevant comments or documentation\n\
+                Use available tools to search code, read files, and verify your analysis before providing your final recommendation. Format in markdown."
+            }
+            SlashCommand::Security => {
+                "Perform a comprehensive security review using OWASP Top 10 2021 and OWASP ASVS guidelines. Analyze:\n\
+                1. **Input Validation**: Check for all user inputs - HTTP parameters, form data, headers, cookies, file uploads\n\
+                2. **Authentication**: Verify session management, password policies, MFA implementation\n\
+                3. **Authorization**: Check for privilege escalation, broken access control, horizontal/vertical privilege escalation\n\
+                4. **Data Security**: Analyze encryption at rest/transit, PII handling, secrets management\n\
+                5. **API Security**: Review rate limiting, input validation for REST/GraphQL, CORS policies\n\
+                6. **File Operations**: Check for path traversal, arbitrary file write, unsafe deserialization\n\
+                7. **Business Logic**: Examine for race conditions, transaction issues, payment security\n\
+                8. **Dependencies**: Scan for known vulnerabilities in npm/pip/Cargo/Go packages\n\
+                \n\
+                For each finding:\n\
+                - Provide exact file path and line number\n\
+                - Include code snippets demonstrating the issue\n\
+                - Assign severity (Critical/High/Medium/Low) with CVSS-like scoring\n\
+                - Give specific remediation code examples\n\
+                - Mention if this affects confidentiality, integrity, or availability\n\
+                \n\
+                Also check for:\n\
+                - Missing security headers (Content-Security-Policy, X-Frame-Options, etc.)\n\
+                - Information disclosure in error messages\n\
+                - Hardcoded credentials or API keys\n\
+                - Insecure random number generation\n\
+                - Cryptographic implementation flaws\n\
+                Format in markdown with severity tags."
+            }
+            SlashCommand::Docs => {
+                "Generate comprehensive documentation for the changes in this merge request. Focus on:\n\
+                ## Code Analysis\n\
+                First analyze the code changes to identify:\n\
+                - New public APIs, functions, classes, and modules\n\
+                - Modified existing interfaces\n\
+                - Complex algorithms or business logic\n\
+                - Any code with special safety or security requirements\n\
+                ## Documentation Requirements\n\
+                For each identified component, provide:\n\
+                - Module/class-level documentation for public interfaces\n\
+                - Function/method signatures with documented parameters and return values\n\
+                - Type/generic parameter documentation where applicable\n\
+                - Usage examples with proper code blocks for the project's programming language\n\
+                - Edge cases and error conditions\n\
+                ## Documentation Types Include\n\
+                - Module-level documentation for new/changed modules\n\
+                - Function/method documentation with parameters and return values\n\
+                - Inline comments for complex logic\n\
+                - CHANGELOG entries for breaking changes\n\
+                - README updates for new user-facing features\n\
+                ## Format and Style\n\
+                - Use the documentation conventions appropriate for the project's programming language\n\
+                - Include proper code blocks with syntax highlighting\n\
+                - Follow the project's existing documentation style from README.md and CONTRIBUTING.md\n\
+                - Ensure all public APIs are documented\n\
+                Review the existing codebase documentation patterns and maintain consistency while ensuring all public interfaces are properly documented. Format in markdown."
+            }
+            SlashCommand::Tests => {
+                "Suggest comprehensive tests for the changes in this merge request. Analyze the code changes and provide:\n\
+                ## Test Analysis\n\
+                - Identify specific functions/areas needing tests based on code complexity\n\
+                - Prioritize by criticality and risk\n\
+                - Consider the testing framework used in this repository\n\
+                ## Test Categories\n\
+                ### 1. Unit Tests\n\
+                - For each new public function, suggest tests covering:\n\
+                  * Happy path scenarios\n\
+                  * Input validation\n\
+                  * Error conditions\n\
+                  * Edge cases\n\
+                - Use the repository's testing framework conventions\n\
+                ### 2. Integration Tests\n\
+                - Component interactions\n\
+                - API contract validation\n\
+                - Data flow verification\n\
+                ### 3. Edge Cases and Boundary Conditions\n\
+                - Null/empty inputs\n\
+                - Boundary values\n\
+                - Race conditions (for concurrent code)\n\
+                - Resource limits\n\
+                ### 4. Error Handling Scenarios\n\
+                - Exception paths\n\
+                - Timeout scenarios\n\
+                - Network failures\n\
+                - Invalid states\n\
+                ### 5. Mock/Fixture Strategy\n\
+                - Mocking strategy for external dependencies\n\
+                - Test data factories\n\
+                - Fixture setup recommendations\n\
+                ### 6. Test Coverage\n\
+                - Aim for 80%+ coverage on modified code\n\
+                - Suggest coverage thresholds\n\
+                ### 7. Additional Testing\n\
+                - Property-based testing for pure functions\n\
+                - Performance/benchmark tests where applicable\n\
+                ### Test Organization\n\
+                - Suggest test file naming conventions\n\
+                - Test organization by module/function\n\
+                Provide specific test code examples using the testing framework detected in the repository. Format in markdown with code blocks."
             }
         }
     }
@@ -57,8 +272,12 @@ impl SlashCommand {
         match s.to_lowercase().as_str() {
             "summarize" => Some(SlashCommand::Summarize),
             "postmortem" => Some(SlashCommand::Postmortem),
-            "suggestions" => Some(SlashCommand::Suggestions),
             "help" => Some(SlashCommand::Help),
+            "plan" => Some(SlashCommand::Plan),
+            "fix" => Some(SlashCommand::Fix),
+            "security" => Some(SlashCommand::Security),
+            "docs" => Some(SlashCommand::Docs),
+            "tests" | "test" => Some(SlashCommand::Tests),
             _ => None,
         }
     }
@@ -85,16 +304,227 @@ pub(crate) fn parse_slash_command(context: &str) -> Option<(SlashCommand, Option
 pub(crate) fn generate_help_message() -> String {
     format!(
         "Available slash commands:\n\n\
-        • `/summarize` - {}\n\
+        ### Issue Commands:\n\
+        • `/plan` - Create a detailed implementation plan with steps, risks, and testing recommendations\n\
+        • `/fix` - Analyze bug and provide specific fix with root cause analysis\n\
         • `/postmortem` - {}\n\
-        • `/suggestions` - {}\n\
+        \n\
+        ### Merge Request Commands:\n\
+        • `/security` - Perform comprehensive security review\n\
+        • `/docs` - Generate documentation for the changes\n\
+        • `/tests` - Suggest comprehensive tests (unit, integration, edge cases)\n\
+        • `/summarize` - {}\n\
+        \n\
+        ### General:\n\
         • `/help` - {}\n\n\
-        You can add additional context after any command, e.g., `/summarize please focus on security implications`",
-        SlashCommand::Summarize.get_precanned_prompt(),
+        You can add additional context after any command, e.g., `/plan focus on the authentication module`",
         SlashCommand::Postmortem.get_precanned_prompt(),
-        SlashCommand::Suggestions.get_precanned_prompt(),
+        SlashCommand::Summarize.get_precanned_prompt(),
         SlashCommand::Help.get_precanned_prompt()
     )
+}
+
+// Helper function to format incident timeline for postmortem
+fn format_incident_timeline(
+    issue: &crate::models::GitlabIssue,
+    comments: &[crate::models::GitlabNoteAttributes],
+) -> String {
+    let mut events = Vec::new();
+
+    // Issue creation
+    events.push((
+        "Issue Created",
+        issue.created_at.clone(),
+        format!(
+            "Issue '{}' created by @{}",
+            issue.title, issue.author.username
+        ),
+    ));
+
+    // Add comments as timeline events
+    for comment in comments {
+        let content = comment.note.trim().to_string();
+        let preview = if content.len() > 200 {
+            format!("{}...", &content[..200])
+        } else {
+            content
+        };
+
+        events.push((
+            "Comment Posted",
+            comment.updated_at.clone(),
+            format!("@{} commented: {}", comment.author.username, preview),
+        ));
+    }
+
+    // Sort by timestamp
+    events.sort_by(|a, b| a.1.cmp(&b.1));
+
+    // Format the timeline
+    let mut timeline = String::from("## Incident Timeline\n\n");
+    for (event_type, timestamp, description) in events {
+        timeline.push_str(&format!(
+            "- **[{}] {}** - {}\n",
+            timestamp, event_type, description
+        ));
+    }
+
+    // Note if issue is closed (we can't calculate duration without closed_at)
+    if issue.state == "closed" {
+        timeline.push_str("\n**Note**: This issue has been closed.\n");
+    }
+
+    timeline
+}
+
+// Helper function to validate command is appropriate for context
+#[allow(dead_code)]
+fn validate_command_for_context(
+    command: &SlashCommand,
+    noteable_type: &str,
+) -> Result<(), &'static str> {
+    match command {
+        SlashCommand::Plan | SlashCommand::Fix | SlashCommand::Postmortem => {
+            if noteable_type != "Issue" {
+                Err("This command can only be used on issues")
+            } else {
+                Ok(())
+            }
+        }
+        SlashCommand::Security | SlashCommand::Docs | SlashCommand::Tests => {
+            if noteable_type != "MergeRequest" {
+                Err("This command can only be used on merge requests")
+            } else {
+                Ok(())
+            }
+        }
+        _ => Ok(()), // Other commands work everywhere
+    }
+}
+
+// Helper function to add security-specific context for /security command
+async fn add_security_context_to_prompt(
+    gitlab_client: &Arc<GitlabApiClient>,
+    project_id: i64,
+    prompt_parts: &mut Vec<String>,
+) {
+    // Check for common security files
+    let security_files = vec![
+        "SECURITY.md",
+        ".github/security/policy.md",
+        "security-policy.md",
+    ];
+
+    for file in security_files {
+        if let Ok(content) = gitlab_client.get_file_content(project_id, file).await {
+            if let Some(file_content) = content.content {
+                // Truncate to avoid overwhelming the prompt
+                let truncated = if file_content.len() > 1000 {
+                    format!("{}... [truncated]", &file_content[..1000])
+                } else {
+                    file_content
+                };
+                prompt_parts.push(format!(
+                    "Repository Security Policy (from {}):\n{}\n",
+                    file, truncated
+                ));
+                break;
+            }
+        }
+    }
+
+    // Add general security guidelines
+    prompt_parts.push(String::from(
+        "Security Review Checklist:\n\
+        - [ ] Input validation (sanitize all user input)\n\
+        - [ ] Output encoding (prevent XSS)\n\
+        - [ ] SQL parameterization (prevent SQL injection)\n\
+        - [ ] Authentication checks\n\
+        - [ ] Authorization checks\n\
+        - [ ] Sensitive data handling\n\
+        - [ ] Error messages don't leak information\n\
+        - [ ] Dependencies are up to date\n\
+        - [ ] Proper session management\n\
+        - [ ] CSRF protection",
+    ));
+}
+
+// Helper function to add testing-specific context for /tests command
+async fn add_testing_context_to_prompt(
+    gitlab_client: &Arc<GitlabApiClient>,
+    project_id: i64,
+    prompt_parts: &mut Vec<String>,
+) {
+    // Look for test configuration files
+    let test_configs = vec![
+        "Cargo.toml",     // Rust
+        "pytest.ini",     // Python
+        "jest.config.js", // JavaScript
+        "go.mod",         // Go
+    ];
+
+    for file in test_configs {
+        if let Ok(content) = gitlab_client.get_file_content(project_id, file).await {
+            if content.content.is_some() {
+                // Just mention we found test config, don't include content (too verbose)
+                prompt_parts.push(format!("Detected testing configuration file: {}", file));
+                break;
+            }
+        }
+    }
+
+    // Add testing guidelines
+    prompt_parts.push(String::from(
+        "Testing Best Practices:\n\
+        - Write tests before or alongside code (TDD)\n\
+        - Test public interfaces, not implementation details\n\
+        - Use descriptive test names\n\
+        - Follow AAA pattern (Arrange, Act, Assert)\n\
+        - Mock external dependencies\n\
+        - Test edge cases and error conditions\n\
+        - Maintain test independence\n\
+        - Keep tests fast and focused",
+    ));
+}
+
+// Helper function to add documentation-specific context for /docs command
+async fn add_documentation_context_to_prompt(
+    gitlab_client: &Arc<GitlabApiClient>,
+    project_id: i64,
+    prompt_parts: &mut Vec<String>,
+) {
+    // Check for common documentation files
+    let doc_files = vec!["README.md", "CONTRIBUTING.md", "docs/guidelines.md"];
+
+    for file in doc_files {
+        if let Ok(content) = gitlab_client.get_file_content(project_id, file).await {
+            if let Some(file_content) = content.content {
+                // Include a snippet to understand documentation style
+                let truncated = if file_content.len() > 500 {
+                    format!("{}... [truncated]", &file_content[..500])
+                } else {
+                    file_content.clone()
+                };
+                prompt_parts.push(format!(
+                    "Documentation style reference from {}:\n{}\n",
+                    file, truncated
+                ));
+                break;
+            }
+        }
+    }
+
+    // Add documentation guidelines
+    prompt_parts.push(String::from(
+        "Documentation Best Practices:\n\
+        - Write clear, concise descriptions\n\
+        - Include usage examples\n\
+        - Document parameters and return values\n\
+        - Note edge cases and limitations\n\
+        - Keep documentation up-to-date with code\n\
+        - Use consistent formatting\n\
+        - Include integration points and dependencies",
+    ));
 }
 
 // Helper function to parse mention timestamp
@@ -1248,8 +1678,12 @@ pub(crate) async fn build_issue_prompt_with_context(
     .await;
 
     // Add comments context
-    match fetch_all_issue_comments(context.gitlab_client, context.project_id, context.issue_iid)
-        .await
+    let comments = match fetch_all_issue_comments(
+        context.gitlab_client,
+        context.project_id,
+        context.issue_iid,
+    )
+    .await
     {
         Ok(comments) => {
             let formatted_comments = format_comments_for_context(
@@ -1258,10 +1692,20 @@ pub(crate) async fn build_issue_prompt_with_context(
                 context.event.object_attributes.id,
             );
             prompt_parts.push(formatted_comments);
+            comments
         }
         Err(e) => {
             warn!("Failed to fetch issue comments for context: {}", e);
             prompt_parts.push("Previous comments could not be retrieved.".to_string());
+            Vec::new()
+        }
+    };
+
+    // Add timeline for postmortem command
+    if let Some((slash_command, _)) = parse_slash_command(user_context) {
+        if matches!(slash_command, SlashCommand::Postmortem) {
+            let timeline = format_incident_timeline(&issue_details, &comments);
+            prompt_parts.push(timeline);
         }
     }
 
@@ -1571,6 +2015,37 @@ pub(crate) async fn build_mr_prompt_with_context(
     )
     .await;
 
+    // Add command-specific context for slash commands
+    if let Some((slash_command, _)) = parse_slash_command(user_context) {
+        match slash_command {
+            SlashCommand::Security => {
+                add_security_context_to_prompt(
+                    context.gitlab_client,
+                    context.event.project.id,
+                    prompt_parts,
+                )
+                .await;
+            }
+            SlashCommand::Tests => {
+                add_testing_context_to_prompt(
+                    context.gitlab_client,
+                    context.event.project.id,
+                    prompt_parts,
+                )
+                .await;
+            }
+            SlashCommand::Docs => {
+                add_documentation_context_to_prompt(
+                    context.gitlab_client,
+                    context.event.project.id,
+                    prompt_parts,
+                )
+                .await;
+            }
+            _ => {}
+        }
+    }
+
     // Add comments context
     match fetch_all_merge_request_comments(
         context.gitlab_client,
@@ -1713,4 +2188,188 @@ async fn handle_merge_request_mention(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_slash_command_plan() {
+        let result = parse_slash_command("/plan");
+        assert!(result.is_some());
+        let (cmd, ctx) = result.unwrap();
+        assert_eq!(cmd, SlashCommand::Plan);
+        assert!(ctx.is_none());
+    }
+
+    #[test]
+    fn test_parse_slash_command_fix() {
+        let result = parse_slash_command("/fix");
+        assert!(result.is_some());
+        let (cmd, ctx) = result.unwrap();
+        assert_eq!(cmd, SlashCommand::Fix);
+        assert!(ctx.is_none());
+    }
+
+    #[test]
+    fn test_parse_slash_command_security() {
+        let result = parse_slash_command("/security");
+        assert!(result.is_some());
+        let (cmd, ctx) = result.unwrap();
+        assert_eq!(cmd, SlashCommand::Security);
+        assert!(ctx.is_none());
+    }
+
+    #[test]
+    fn test_parse_slash_command_docs() {
+        let result = parse_slash_command("/docs");
+        assert!(result.is_some());
+        let (cmd, ctx) = result.unwrap();
+        assert_eq!(cmd, SlashCommand::Docs);
+        assert!(ctx.is_none());
+    }
+
+    #[test]
+    fn test_parse_slash_command_tests() {
+        let result = parse_slash_command("/tests");
+        assert!(result.is_some());
+        let (cmd, ctx) = result.unwrap();
+        assert_eq!(cmd, SlashCommand::Tests);
+        assert!(ctx.is_none());
+    }
+
+    #[test]
+    fn test_parse_slash_command_test_alternative() {
+        let result = parse_slash_command("/test");
+        assert!(result.is_some());
+        let (cmd, ctx) = result.unwrap();
+        assert_eq!(cmd, SlashCommand::Tests);
+        assert!(ctx.is_none());
+    }
+
+    #[test]
+    fn test_parse_slash_command_with_context() {
+        let result = parse_slash_command("/plan focus on auth");
+        assert!(result.is_some());
+        let (cmd, ctx) = result.unwrap();
+        assert_eq!(cmd, SlashCommand::Plan);
+        assert_eq!(ctx, Some("focus on auth".to_string()));
+    }
+
+    #[test]
+    fn test_parse_slash_command_case_insensitive() {
+        let result = parse_slash_command("/PLAN");
+        assert!(result.is_some());
+        let (cmd, _) = result.unwrap();
+        assert_eq!(cmd, SlashCommand::Plan);
+    }
+
+    #[test]
+    fn test_parse_slash_command_empty() {
+        let result = parse_slash_command("");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_parse_slash_command_no_slash() {
+        let result = parse_slash_command("plan");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_slash_command_from_str() {
+        assert_eq!(SlashCommand::from_str("plan"), Some(SlashCommand::Plan));
+        assert_eq!(SlashCommand::from_str("fix"), Some(SlashCommand::Fix));
+        assert_eq!(
+            SlashCommand::from_str("security"),
+            Some(SlashCommand::Security)
+        );
+        assert_eq!(SlashCommand::from_str("docs"), Some(SlashCommand::Docs));
+        assert_eq!(SlashCommand::from_str("test"), Some(SlashCommand::Tests));
+        assert_eq!(SlashCommand::from_str("tests"), Some(SlashCommand::Tests));
+        assert_eq!(
+            SlashCommand::from_str("summarize"),
+            Some(SlashCommand::Summarize)
+        );
+        assert_eq!(
+            SlashCommand::from_str("postmortem"),
+            Some(SlashCommand::Postmortem)
+        );
+        assert_eq!(SlashCommand::from_str("help"), Some(SlashCommand::Help));
+        assert_eq!(SlashCommand::from_str("unknown"), None);
+    }
+
+    #[test]
+    fn test_precanned_prompts_exist() {
+        assert!(!SlashCommand::Plan.get_precanned_prompt().is_empty());
+        assert!(!SlashCommand::Fix.get_precanned_prompt().is_empty());
+        assert!(!SlashCommand::Security.get_precanned_prompt().is_empty());
+        assert!(!SlashCommand::Docs.get_precanned_prompt().is_empty());
+        assert!(!SlashCommand::Tests.get_precanned_prompt().is_empty());
+        assert!(!SlashCommand::Summarize.get_precanned_prompt().is_empty());
+        assert!(!SlashCommand::Postmortem.get_precanned_prompt().is_empty());
+        assert!(!SlashCommand::Help.get_precanned_prompt().is_empty());
+    }
+
+    #[test]
+    fn test_validate_command_for_context() {
+        // Issue-only commands
+        assert!(validate_command_for_context(&SlashCommand::Plan, "Issue").is_ok());
+        assert!(validate_command_for_context(&SlashCommand::Plan, "MergeRequest").is_err());
+        assert!(validate_command_for_context(&SlashCommand::Fix, "Issue").is_ok());
+        assert!(validate_command_for_context(&SlashCommand::Fix, "MergeRequest").is_err());
+        assert!(validate_command_for_context(&SlashCommand::Postmortem, "Issue").is_ok());
+        assert!(validate_command_for_context(&SlashCommand::Postmortem, "MergeRequest").is_err());
+
+        // MR-only commands
+        assert!(validate_command_for_context(&SlashCommand::Security, "MergeRequest").is_ok());
+        assert!(validate_command_for_context(&SlashCommand::Security, "Issue").is_err());
+        assert!(validate_command_for_context(&SlashCommand::Docs, "MergeRequest").is_ok());
+        assert!(validate_command_for_context(&SlashCommand::Docs, "Issue").is_err());
+        assert!(validate_command_for_context(&SlashCommand::Tests, "MergeRequest").is_ok());
+        assert!(validate_command_for_context(&SlashCommand::Tests, "Issue").is_err());
+
+        // Universal commands
+        assert!(validate_command_for_context(&SlashCommand::Summarize, "Issue").is_ok());
+        assert!(validate_command_for_context(&SlashCommand::Summarize, "MergeRequest").is_ok());
+        assert!(validate_command_for_context(&SlashCommand::Help, "Issue").is_ok());
+        assert!(validate_command_for_context(&SlashCommand::Help, "MergeRequest").is_ok());
+    }
+
+    #[test]
+    fn test_generate_help_message_includes_all_commands() {
+        let help = generate_help_message();
+        assert!(help.contains("/plan"));
+        assert!(help.contains("/fix"));
+        assert!(help.contains("/security"));
+        assert!(help.contains("/docs"));
+        assert!(help.contains("/tests"));
+        assert!(help.contains("/summarize"));
+        assert!(help.contains("/postmortem"));
+        assert!(help.contains("/help"));
+    }
+
+    #[test]
+    fn test_slash_command_equality() {
+        assert_eq!(SlashCommand::Plan, SlashCommand::Plan);
+        assert_ne!(SlashCommand::Plan, SlashCommand::Fix);
+        assert_ne!(SlashCommand::Security, SlashCommand::Docs);
+    }
+
+    #[test]
+    fn test_extract_context_after_mention() {
+        let bot_name = "gitbot";
+        let note = "@gitbot /plan";
+        let result = extract_context_after_mention(note, bot_name);
+        assert_eq!(result, Some("/plan".to_string()));
+
+        let note = "@gitbot /plan with context";
+        let result = extract_context_after_mention(note, bot_name);
+        assert_eq!(result, Some("/plan with context".to_string()));
+
+        let note = "@gitbot   ";
+        let result = extract_context_after_mention(note, bot_name);
+        assert_eq!(result, None);
+    }
 }

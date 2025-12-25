@@ -736,11 +736,6 @@ mod tests {
         );
 
         assert_eq!(
-            parse_slash_command("/suggestions"),
-            Some((SlashCommand::Suggestions, None))
-        );
-
-        assert_eq!(
             parse_slash_command("/help"),
             Some((SlashCommand::Help, None))
         );
@@ -796,9 +791,6 @@ mod tests {
         assert!(SlashCommand::Postmortem
             .get_precanned_prompt()
             .contains("postmortem"));
-        assert!(SlashCommand::Suggestions
-            .get_precanned_prompt()
-            .contains("solution"));
         assert!(SlashCommand::Help
             .get_precanned_prompt()
             .contains("slash commands"));
@@ -809,7 +801,6 @@ mod tests {
         let help_msg = generate_help_message();
         assert!(help_msg.contains("/summarize"));
         assert!(help_msg.contains("/postmortem"));
-        assert!(help_msg.contains("/suggestions"));
         assert!(help_msg.contains("/help"));
         assert!(help_msg.contains("additional context"));
     }
