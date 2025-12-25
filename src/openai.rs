@@ -5,7 +5,7 @@ use tracing::{debug, error, instrument};
 use url::Url;
 
 use crate::config::AppSettings;
-use crate::models::{OpenAIChatRequest, OpenAIChatResponse};
+use crate::models::{OpenAIChatMessage, OpenAIChatRequest, OpenAIChatResponse, Tool, ToolChoice};
 
 #[derive(Error, Debug)]
 pub enum OpenAIClient {
@@ -131,5 +131,131 @@ impl OpenAIApiClient {
         // }
 
         Ok(parsed_response)
+    }
+}
+
+/// Error type for builder validation failures
+#[derive(Error, Debug)]
+pub enum BuilderError {
+    #[error("Cannot build request with no messages")]
+    NoMessages,
+}
+
+/// Builder for creating OpenAI chat completion requests with proper configuration
+pub struct ChatRequestBuilder {
+    model: String,
+    temperature: f32,
+    max_tokens: u32,
+    token_mode: String,
+    messages: Vec<OpenAIChatMessage>,
+    tools: Option<Vec<Tool>>,
+    tool_choice: Option<ToolChoice>,
+    prompt_prefix: Option<String>,
+    user_message_count: usize,
+}
+
+impl ChatRequestBuilder {
+    /// Create a new builder from configuration
+    pub fn new(config: &AppSettings) -> Self {
+        Self {
+            model: config.openai_model.clone(),
+            temperature: config.openai_temperature,
+            max_tokens: config.openai_max_tokens,
+            token_mode: config.openai_token_mode.clone(),
+            messages: Vec::new(),
+            tools: None,
+            tool_choice: None,
+            prompt_prefix: config.prompt_prefix.clone(),
+            user_message_count: 0,
+        }
+    }
+
+    /// Add a system message
+    pub fn with_system_message(&mut self, content: &str) -> &mut Self {
+        self.messages.push(OpenAIChatMessage {
+            role: "system".to_string(),
+            content: content.to_string(),
+            tool_calls: None,
+            tool_call_id: None,
+        });
+        self
+    }
+
+    /// Add a user message (applies prompt_prefix to first user message only)
+    pub fn with_user_message(&mut self, content: &str) -> &mut Self {
+        let final_content = if self.user_message_count == 0 {
+            self.prompt_prefix
+                .as_ref()
+                .map(|p| format!("{}\n\n{}", p, content))
+                .unwrap_or_else(|| content.to_string())
+        } else {
+            content.to_string()
+        };
+
+        self.user_message_count += 1;
+        self.messages.push(OpenAIChatMessage {
+            role: "user".to_string(),
+            content: final_content,
+            tool_calls: None,
+            tool_call_id: None,
+        });
+        self
+    }
+
+    /// Replace all messages (for complex multi-turn scenarios)
+    pub fn with_messages(&mut self, messages: Vec<OpenAIChatMessage>) -> &mut Self {
+        self.messages = messages;
+        self
+    }
+
+    /// Add a single message (for tool calling loops)
+    pub fn add_message(&mut self, message: OpenAIChatMessage) -> &mut Self {
+        self.messages.push(message);
+        self
+    }
+
+    /// Get mutable reference to messages (for advanced manipulation)
+    pub fn messages_mut(&mut self) -> &mut Vec<OpenAIChatMessage> {
+        &mut self.messages
+    }
+
+    /// Set tools for function calling
+    pub fn with_tools(&mut self, tools: Vec<Tool>) -> &mut Self {
+        self.tools = Some(tools);
+        self
+    }
+
+    /// Set tool choice strategy
+    pub fn with_tool_choice(&mut self, choice: ToolChoice) -> &mut Self {
+        self.tool_choice = Some(choice);
+        self
+    }
+
+    /// Override temperature (optional, defaults to config)
+    pub fn with_temperature(&mut self, temperature: f32) -> &mut Self {
+        self.temperature = temperature;
+        self
+    }
+
+    /// Build the request, validating state
+    pub fn build(self) -> Result<OpenAIChatRequest, BuilderError> {
+        if self.messages.is_empty() {
+            return Err(BuilderError::NoMessages);
+        }
+
+        let (max_tokens, max_completion_tokens) = match self.token_mode.as_str() {
+            "max_completion_tokens" => (None, Some(self.max_tokens)),
+            _ => (Some(self.max_tokens), None),
+        };
+
+        Ok(OpenAIChatRequest {
+            model: self.model,
+            messages: self.messages,
+            temperature: Some(self.temperature),
+            max_tokens,
+            max_completion_tokens,
+            tools: self.tools,
+            tool_choice: self.tool_choice,
+        })
     }
 }

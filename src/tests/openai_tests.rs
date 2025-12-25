@@ -1,6 +1,8 @@
 use crate::config::AppSettings;
-use crate::models::{OpenAIChatMessage, OpenAIChatRequest};
-use crate::openai::{OpenAIApiClient, OpenAIClient, OPENAI_CHAT_COMPLETIONS_PATH};
+use crate::models::{OpenAIChatMessage, OpenAIChatRequest, Tool, ToolChoice};
+use crate::openai::{
+    BuilderError, ChatRequestBuilder, OpenAIApiClient, OpenAIClient, OPENAI_CHAT_COMPLETIONS_PATH,
+};
 use mockito::Matcher;
 use reqwest::StatusCode;
 use serde_json::json;
@@ -478,4 +480,237 @@ async fn test_new_openai_api_client_without_client_cert() {
         "Expected success when no client cert configured: {:?}",
         result.err()
     );
+}
+
+// Builder tests
+#[test]
+fn test_builder_basic_construction() {
+    let config = create_test_settings("https://api.openai.com/v1".to_string());
+    let mut builder = ChatRequestBuilder::new(&config);
+    builder.with_user_message("Hello");
+    let request = builder.build().unwrap();
+
+    assert_eq!(request.messages.len(), 1);
+    assert_eq!(request.messages[0].role, "user");
+    assert_eq!(request.messages[0].content, "Hello");
+    assert_eq!(request.model, "gpt-3.5-turbo");
+    assert_eq!(request.temperature, Some(0.7));
+}
+
+#[test]
+fn test_builder_token_mode_max_tokens() {
+    let config = create_test_settings("https://api.openai.com/v1".to_string());
+    let mut builder = ChatRequestBuilder::new(&config);
+    builder.with_user_message("test");
+    let request = builder.build().unwrap();
+
+    assert!(request.max_tokens.is_some());
+    assert!(request.max_completion_tokens.is_none());
+    assert_eq!(request.max_tokens.unwrap(), 1024);
+}
+
+#[test]
+fn test_builder_token_mode_max_completion_tokens() {
+    let mut config = create_test_settings("https://api.openai.com/v1".to_string());
+    config.openai_token_mode = "max_completion_tokens".to_string();
+
+    let mut builder = ChatRequestBuilder::new(&config);
+    builder.with_user_message("test");
+    let request = builder.build().unwrap();
+
+    assert!(request.max_tokens.is_none());
+    assert!(request.max_completion_tokens.is_some());
+    assert_eq!(request.max_completion_tokens.unwrap(), 1024);
+}
+
+#[test]
+fn test_builder_prompt_prefix_first_message() {
+    let mut config = create_test_settings("https://api.openai.com/v1".to_string());
+    config.prompt_prefix = Some("You are helpful".to_string());
+
+    let mut builder = ChatRequestBuilder::new(&config);
+    builder.with_user_message("Hello");
+    let request = builder.build().unwrap();
+
+    assert!(request.messages[0].content.starts_with("You are helpful"));
+    assert!(request.messages[0].content.contains("Hello"));
+}
+
+#[test]
+fn test_builder_prompt_prefix_subsequent_messages() {
+    let mut config = create_test_settings("https://api.openai.com/v1".to_string());
+    config.prompt_prefix = Some("You are helpful".to_string());
+
+    let mut builder = ChatRequestBuilder::new(&config);
+    builder.with_user_message("First");
+    builder.with_user_message("Second");
+    let request = builder.build().unwrap();
+
+    // First message has prefix
+    assert!(request.messages[0].content.starts_with("You are helpful"));
+
+    // Second message does NOT have prefix
+    assert_eq!(request.messages[1].content, "Second");
+}
+
+#[test]
+fn test_builder_with_system_message() {
+    let config = create_test_settings("https://api.openai.com/v1".to_string());
+    let mut builder = ChatRequestBuilder::new(&config);
+    builder.with_system_message("You are a helpful assistant");
+    builder.with_user_message("Hello");
+    let request = builder.build().unwrap();
+
+    assert_eq!(request.messages.len(), 2);
+    assert_eq!(request.messages[0].role, "system");
+    assert_eq!(request.messages[0].content, "You are a helpful assistant");
+    assert_eq!(request.messages[1].role, "user");
+    assert_eq!(request.messages[1].content, "Hello");
+}
+
+#[test]
+fn test_builder_with_tools() {
+    let config = create_test_settings("https://api.openai.com/v1".to_string());
+    let tools = vec![Tool {
+        r#type: "function".to_string(),
+        function: serde_json::from_value(json!({
+            "name": "test_function",
+            "description": "A test function",
+            "parameters": {"type": "object"}
+        }))
+        .unwrap(),
+    }];
+
+    let mut builder = ChatRequestBuilder::new(&config);
+    builder.with_user_message("test");
+    builder.with_tools(tools.clone());
+    builder.with_tool_choice(ToolChoice::Auto);
+    let request = builder.build().unwrap();
+
+    assert!(request.tools.is_some());
+    assert_eq!(request.tools.unwrap().len(), 1);
+    assert!(request.tool_choice.is_some());
+}
+
+#[test]
+fn test_builder_multi_turn_conversation() {
+    let config = create_test_settings("https://api.openai.com/v1".to_string());
+
+    let mut builder = ChatRequestBuilder::new(&config);
+    builder.with_user_message("What's the weather?");
+
+    // Simulate assistant response
+    builder.add_message(OpenAIChatMessage {
+        role: "assistant".to_string(),
+        content: "I'll check.".to_string(),
+        tool_calls: Some(vec![]),
+        tool_call_id: None,
+    });
+
+    // Simulate tool response
+    builder.add_message(OpenAIChatMessage {
+        role: "tool".to_string(),
+        content: "It's sunny.".to_string(),
+        tool_calls: None,
+        tool_call_id: Some("call-123".to_string()),
+    });
+
+    let request = builder.build().unwrap();
+    assert_eq!(request.messages.len(), 3);
+    assert_eq!(request.messages[0].role, "user");
+    assert_eq!(request.messages[1].role, "assistant");
+    assert_eq!(request.messages[2].role, "tool");
+}
+
+#[test]
+fn test_builder_no_messages_error() {
+    let config = create_test_settings("https://api.openai.com/v1".to_string());
+
+    let builder = ChatRequestBuilder::new(&config);
+    let result = builder.build();
+    assert!(matches!(result, Err(BuilderError::NoMessages)));
+}
+
+#[test]
+fn test_builder_messages_mut_for_loop_scenario() {
+    let config = create_test_settings("https://api.openai.com/v1".to_string());
+
+    let mut builder = ChatRequestBuilder::new(&config);
+    builder.with_system_message("You are helpful");
+    builder.with_user_message("Hello");
+
+    // Simulate loop behavior
+    let new_messages = vec![OpenAIChatMessage {
+        role: "assistant".to_string(),
+        content: "Hi there!".to_string(),
+        tool_calls: None,
+        tool_call_id: None,
+    }];
+
+    *builder.messages_mut() = new_messages;
+
+    let request = builder.build().unwrap();
+    assert_eq!(request.messages.len(), 1);
+    assert_eq!(request.messages[0].role, "assistant");
+    assert_eq!(request.messages[0].content, "Hi there!");
+}
+
+#[test]
+fn test_builder_temperature_override() {
+    let config = create_test_settings("https://api.openai.com/v1".to_string());
+    let custom_temp = 0.1;
+
+    let mut builder = ChatRequestBuilder::new(&config);
+    builder.with_user_message("test");
+    builder.with_temperature(custom_temp);
+    let request = builder.build().unwrap();
+
+    assert_eq!(request.temperature.unwrap(), custom_temp);
+    assert_ne!(custom_temp, config.openai_temperature);
+}
+
+#[test]
+fn test_builder_with_messages_replace() {
+    let config = create_test_settings("https://api.openai.com/v1".to_string());
+
+    let messages = vec![
+        OpenAIChatMessage {
+            role: "system".to_string(),
+            content: "You are helpful".to_string(),
+            tool_calls: None,
+            tool_call_id: None,
+        },
+        OpenAIChatMessage {
+            role: "user".to_string(),
+            content: "Hello".to_string(),
+            tool_calls: None,
+            tool_call_id: None,
+        },
+    ];
+
+    let mut builder = ChatRequestBuilder::new(&config);
+    builder.with_messages(messages);
+    let request = builder.build().unwrap();
+
+    assert_eq!(request.messages.len(), 2);
+    assert_eq!(request.messages[0].role, "system");
+    assert_eq!(request.messages[1].role, "user");
+}
+
+#[test]
+fn test_builder_chaining() {
+    let config = create_test_settings("https://api.openai.com/v1".to_string());
+
+    let mut builder = ChatRequestBuilder::new(&config);
+    builder
+        .with_system_message("You are helpful")
+        .with_user_message("First")
+        .with_user_message("Second");
+
+    // Can check message count before building
+    // We need to call messages_mut() to access them
+    assert_eq!(builder.messages_mut().len(), 3);
+
+    let request = builder.build().unwrap();
+    assert_eq!(request.messages.len(), 3);
 }

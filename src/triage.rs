@@ -6,8 +6,8 @@ use tracing::{debug, error, info, warn};
 
 use crate::config::AppSettings;
 use crate::gitlab::GitlabApiClient;
-use crate::models::{GitlabIssue, OpenAIChatMessage, OpenAIChatRequest};
-use crate::openai::OpenAIApiClient;
+use crate::models::GitlabIssue;
+use crate::openai::{ChatRequestBuilder, OpenAIApiClient};
 
 /// Learned information about a label
 #[derive(Debug, Clone)]
@@ -253,28 +253,12 @@ impl TriageService {
             label_name
         ));
 
-        // Use the correct token parameter based on configuration
-        let (max_tokens, max_completion_tokens) =
-            if self.config.openai_token_mode == "max_completion_tokens" {
-                (None, Some(self.config.openai_max_tokens))
-            } else {
-                (Some(self.config.openai_max_tokens), None)
-            };
-
-        let request = OpenAIChatRequest {
-            model: self.config.openai_model.clone(),
-            messages: vec![OpenAIChatMessage {
-                role: "user".to_string(),
-                content: prompt,
-                tool_calls: None,
-                tool_call_id: None,
-            }],
-            temperature: Some(self.config.openai_temperature),
-            max_tokens,
-            max_completion_tokens,
-            tools: None,
-            tool_choice: None,
-        };
+        // Use ChatRequestBuilder to create the request
+        let mut builder = ChatRequestBuilder::new(&self.config);
+        builder.with_user_message(&prompt);
+        let request = builder
+            .build()
+            .map_err(|e| anyhow!("Failed to build request: {}", e))?;
 
         let response = self
             .openai_client
@@ -340,29 +324,12 @@ impl TriageService {
             Labels:",
         );
 
-        // Note: We could use structured output with response_format for models that support it
-        // Use the correct token parameter based on configuration
-        let (max_tokens, max_completion_tokens) =
-            if self.config.openai_token_mode == "max_completion_tokens" {
-                (None, Some(self.config.openai_max_tokens))
-            } else {
-                (Some(self.config.openai_max_tokens), None)
-            };
-
-        let request = OpenAIChatRequest {
-            model: self.config.openai_model.clone(),
-            messages: vec![OpenAIChatMessage {
-                role: "user".to_string(),
-                content: prompt,
-                tool_calls: None,
-                tool_call_id: None,
-            }],
-            temperature: Some(self.config.openai_temperature),
-            max_tokens,
-            max_completion_tokens,
-            tools: None,
-            tool_choice: None,
-        };
+        // Use ChatRequestBuilder to create the request
+        let mut builder = ChatRequestBuilder::new(&self.config);
+        builder.with_user_message(&prompt);
+        let request = builder
+            .build()
+            .map_err(|e| anyhow!("Failed to build request: {}", e))?;
 
         // Note: Using the non-structured API first. We could upgrade to use response_format for models that support it
         let response = self

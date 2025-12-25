@@ -7,10 +7,8 @@ use crate::config::AppSettings;
 use crate::file_indexer::FileIndexManager;
 use crate::gitlab::{GitlabApiClient, GitlabError};
 use crate::mention_cache::MentionCache;
-use crate::models::{
-    GitlabNoteAttributes, GitlabNoteEvent, OpenAIChatMessage, OpenAIChatRequest, Tool, ToolChoice,
-};
-use crate::openai::OpenAIApiClient;
+use crate::models::{GitlabNoteAttributes, GitlabNoteEvent, OpenAIChatMessage, ToolChoice};
+use crate::openai::{ChatRequestBuilder, OpenAIApiClient};
 use crate::repo_context::RepoContextExtractor;
 use crate::tools::{create_basic_tool_registry, ToolCallContext};
 
@@ -26,38 +24,6 @@ pub(crate) fn extract_context_after_mention(note: &str, bot_name: &str) -> Optio
             Some(trimmed_context.to_string())
         }
     })
-}
-
-// Helper function to create OpenAI request with appropriate token parameter
-fn create_openai_request(
-    model: &str,
-    token_mode: &str,
-    max_tokens: u32,
-    temperature: f32,
-    messages: Vec<OpenAIChatMessage>,
-    tools: Option<Vec<Tool>>,
-    tool_choice: Option<ToolChoice>,
-) -> OpenAIChatRequest {
-    match token_mode {
-        "max_completion_tokens" => OpenAIChatRequest {
-            model: model.to_string(),
-            messages,
-            temperature: Some(temperature),
-            max_tokens: None,
-            max_completion_tokens: Some(max_tokens),
-            tools,
-            tool_choice,
-        },
-        _ => OpenAIChatRequest {
-            model: model.to_string(),
-            messages,
-            temperature: Some(temperature),
-            max_tokens: Some(max_tokens),
-            max_completion_tokens: None,
-            tools,
-            tool_choice,
-        },
-    }
 }
 
 // Slash command definitions
@@ -727,30 +693,12 @@ async fn get_llm_reply(
     config: &Arc<AppSettings>,
     prompt_text: &str,
 ) -> Result<String> {
-    // Prepend prompt prefix if configured
-    let final_prompt = if let Some(prefix) = &config.prompt_prefix {
-        format!("{prefix}\n\n{prompt_text}")
-    } else {
-        prompt_text.to_string()
-    };
-
-    // Call OpenAI Client
-    let messages = vec![OpenAIChatMessage {
-        role: "user".to_string(),
-        content: final_prompt,
-        tool_calls: None,
-        tool_call_id: None,
-    }];
-
-    let openai_request = create_openai_request(
-        &config.openai_model,
-        &config.openai_token_mode,
-        config.openai_max_tokens,
-        config.openai_temperature,
-        messages,
-        None,
-        None,
-    );
+    // Use ChatRequestBuilder which automatically handles prompt_prefix
+    let mut builder = ChatRequestBuilder::new(config);
+    builder.with_user_message(prompt_text);
+    let openai_request = builder
+        .build()
+        .map_err(|e| anyhow!("Failed to build request: {}", e))?;
 
     let openai_response = openai_client
         .send_chat_completion(&openai_request)
@@ -826,6 +774,10 @@ async fn get_llm_reply_with_tools(
         tool_context.max_tool_calls()
     );
 
+    // Get tool specifications for the request
+    let tool_specs = tool_context.get_tool_specs();
+    let has_tools = !tool_specs.is_empty();
+
     // Prepend prompt prefix if configured
     let user_prompt = if let Some(prefix) = &config.prompt_prefix {
         format!("{prefix}\n\n{prompt_text}")
@@ -834,39 +786,19 @@ async fn get_llm_reply_with_tools(
     };
 
     // Create initial messages with system message first
-    let mut messages = vec![
-        OpenAIChatMessage {
-            role: "system".to_string(),
-            content: system_message,
-            tool_calls: None,
-            tool_call_id: None,
-        },
-        OpenAIChatMessage {
-            role: "user".to_string(),
-            content: user_prompt,
-            tool_calls: None,
-            tool_call_id: None,
-        },
-    ];
-
-    // Get tool specifications for the request
-    let tool_specs = tool_context.get_tool_specs();
-    let has_tools = !tool_specs.is_empty();
-
-    // Create the initial OpenAI request with tools
-    let mut openai_request = create_openai_request(
-        &config.openai_model,
-        &config.openai_token_mode,
-        config.openai_max_tokens,
-        config.openai_temperature,
-        messages.clone(),
-        if has_tools { Some(tool_specs) } else { None },
-        if has_tools {
-            Some(ToolChoice::Auto)
-        } else {
-            None
-        },
-    );
+    let mut messages = Vec::new();
+    messages.push(OpenAIChatMessage {
+        role: "system".to_string(),
+        content: system_message,
+        tool_calls: None,
+        tool_call_id: None,
+    });
+    messages.push(OpenAIChatMessage {
+        role: "user".to_string(),
+        content: user_prompt,
+        tool_calls: None,
+        tool_call_id: None,
+    });
 
     // Multi-turn conversation loop with safety checks
     // Use max_tool_calls as base for conversation turns (with reasonable upper limit)
@@ -885,6 +817,19 @@ async fn get_llm_reply_with_tools(
                 max_turns
             ));
         }
+
+        // Build the request using the builder with current messages
+        let mut builder = ChatRequestBuilder::new(config);
+        builder.with_messages(messages.clone());
+
+        if has_tools {
+            builder.with_tools(tool_specs.clone());
+            builder.with_tool_choice(ToolChoice::Auto);
+        }
+
+        let openai_request = builder
+            .build()
+            .map_err(|e| anyhow!("Failed to build request: {}", e))?;
 
         // Send request to OpenAI
         let openai_response = openai_client
@@ -1069,9 +1014,6 @@ async fn get_llm_reply_with_tools(
                         tool_call_id: None,
                     });
                 }
-
-                // Update the request with the new messages
-                openai_request.messages = messages.clone();
 
                 // If we reached the limit, log it for debugging
                 if reached_limit {
