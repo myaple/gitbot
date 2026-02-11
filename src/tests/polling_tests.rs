@@ -202,12 +202,13 @@ mod tests {
         let config = test_config(30, TEST_BOT_USERNAME, server.url());
         let client = Arc::new(GitlabApiClient::new(config.clone()).unwrap());
 
-        let issue_update_old = (Utc::now() - ChronoDuration::days(50)).to_rfc3339();
+        let _issue_update_old = (Utc::now() - ChronoDuration::days(50)).to_rfc3339();
         let recent_note_update = (Utc::now() - ChronoDuration::days(5)).to_rfc3339();
 
+        // Ensure the issue's updated_at reflects the recent note, consistent with GitLab behavior
         let issue1 = create_issue(
             1,
-            &issue_update_old,
+            &recent_note_update,
             vec![STALE_LABEL.to_string()],
             "opened",
         );
