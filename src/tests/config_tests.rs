@@ -1,15 +1,5 @@
 use crate::config::AppSettings;
 
-// #[test]
-// fn test_parse_repos_list() {
-//     let input = "group1/project1,group2/project2, group3/project3";
-//     let result = parse_repos_list(input).unwrap();
-//     assert_eq!(
-//         result,
-//         vec!["group1/project1", "group2/project2", "group3/project3"]
-//     );
-// }
-
 #[test]
 fn test_create_app_settings() {
     // Create AppSettings directly for testing
