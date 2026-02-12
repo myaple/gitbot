@@ -990,3 +990,59 @@ async fn test_get_branches() {
     assert_eq!(develop_branch.protected, false);
     assert_eq!(develop_branch.can_push, true);
 }
+
+#[tokio::test]
+async fn test_search_files() {
+    let mut server = mockito::Server::new_async().await;
+    let settings = Arc::new(create_test_settings(server.url()));
+    let client = GitlabApiClient::new(settings).unwrap();
+
+    let mock_search_response = json!([
+        {
+            "basename": "main.rs",
+            "data": "...",
+            "path": "src/main.rs",
+            "filename": "src/main.rs",
+            "id": null,
+            "ref": "main",
+            "startline": 1,
+            "project_id": 1
+        },
+        {
+            "basename": "utils.rs",
+            "data": "...",
+            "path": "src/utils.rs",
+            "filename": "src/utils.rs",
+            "id": null,
+            "ref": "main",
+            "startline": 1,
+            "project_id": 1
+        }
+    ]);
+
+    let _m = server
+        .mock("GET", "/api/v4/projects/1/search")
+        .match_query(mockito::Matcher::AllOf(vec![
+            mockito::Matcher::UrlEncoded("scope".into(), "blobs".into()),
+            mockito::Matcher::UrlEncoded("search".into(), "query".into()),
+            mockito::Matcher::UrlEncoded("ref".into(), "main".into()),
+            mockito::Matcher::UrlEncoded("per_page".into(), "20".into()),
+        ]))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(mock_search_response.to_string())
+        .create_async()
+        .await;
+
+    // Test search_files_by_name
+    let results = client.search_files_by_name(1, "query").await.unwrap();
+    assert_eq!(results.len(), 2);
+    assert!(results.contains(&"src/main.rs".to_string()));
+    assert!(results.contains(&"src/utils.rs".to_string()));
+
+    // Test search_files_by_content
+    let results = client.search_files_by_content(1, "query").await.unwrap();
+    assert_eq!(results.len(), 2);
+    assert!(results.contains(&"src/main.rs".to_string()));
+    assert!(results.contains(&"src/utils.rs".to_string()));
+}

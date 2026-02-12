@@ -505,30 +505,16 @@ impl GitlabApiClient {
     }
 
     /// Search for files by name
+    ///
+    /// Delegates to `search_files_by_content` as the GitLab search API with `scope=blobs`
+    /// searches both filenames and content.
     #[instrument(skip(self), fields(project_id, query))]
     pub async fn search_files_by_name(
         &self,
         project_id: i64,
         query: &str,
     ) -> Result<Vec<String>, GitlabError> {
-        let path = format!("/api/v4/projects/{project_id}/search");
-        let query_params = &[
-            ("scope", "blobs"),
-            ("search", query),
-            ("ref", "main"),
-            ("per_page", "20"),
-        ];
-
-        let results: Vec<serde_json::Value> = self
-            .send_request(Method::GET, &path, Some(query_params), None::<()>)
-            .await?;
-
-        let file_paths = results
-            .into_iter()
-            .filter_map(|item| item["path"].as_str().map(|s| s.to_string()))
-            .collect();
-
-        Ok(file_paths)
+        self.search_files_by_content(project_id, query).await
     }
 
     /// Search for files by content
