@@ -18,10 +18,10 @@ pub mod handlers_tests;
 #[cfg(test)]
 pub mod openai_tests;
 #[cfg(test)]
+pub mod polling_perf_test;
+#[cfg(test)]
 pub mod polling_test;
 #[cfg(test)]
 pub mod polling_tests;
-#[cfg(test)]
-pub mod polling_perf_test;
 #[cfg(test)]
 pub mod repo_context_tests;

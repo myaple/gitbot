@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::config::AppSettings;
-    use crate::gitlab::{GitlabApiClient};
+    use crate::gitlab::GitlabApiClient;
     use crate::models::{GitlabIssue, GitlabUser};
     use crate::polling::*;
     use chrono::{Duration as ChronoDuration, Utc};
@@ -61,7 +61,10 @@ mod tests {
         let issue1 = create_issue(1, &old_update, vec![], "opened");
 
         let _m_issues = server
-            .mock("GET", Matcher::Regex(r"/api/v4/projects/1/issues\?.+".to_string()))
+            .mock(
+                "GET",
+                Matcher::Regex(r"/api/v4/projects/1/issues\?.+".to_string()),
+            )
             .with_status(200)
             .with_body(json!([issue1]).to_string())
             .create_async()
@@ -69,7 +72,10 @@ mod tests {
 
         // In the unoptimized code, this SHOULD be called.
         let m_notes = server
-            .mock("GET", Matcher::Regex(r"/api/v4/projects/1/issues/1/notes\?.+".to_string()))
+            .mock(
+                "GET",
+                Matcher::Regex(r"/api/v4/projects/1/issues/1/notes\?.+".to_string()),
+            )
             .with_status(200)
             .with_body(json!([]).to_string())
             .expect(0) // Expect 0 calls after optimization
@@ -80,11 +86,15 @@ mod tests {
         let _m_add_label = server
             .mock("PUT", "/api/v4/projects/1/issues/1")
             .with_status(200)
-            .match_body(Matcher::JsonString(json!({"add_labels": STALE_LABEL}).to_string()))
+            .match_body(Matcher::JsonString(
+                json!({"add_labels": STALE_LABEL}).to_string(),
+            ))
             .create_async()
             .await;
 
-        check_stale_issues(PROJECT_ID, client, config).await.unwrap();
+        check_stale_issues(PROJECT_ID, client, config)
+            .await
+            .unwrap();
 
         m_notes.assert_async().await;
     }
