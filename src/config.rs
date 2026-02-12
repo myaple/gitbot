@@ -155,13 +155,6 @@ pub struct AppSettings {
     pub triage_lookback_hours: u64,
 }
 
-// fn parse_repos_list(s: &str) -> Result<Vec<String>, String> {
-// Ok(s.split(',')
-// .map(|item| item.trim().to_string())
-// .filter(|s| !s.is_empty())
-// .collect())
-// }
-
 /// Validate that openai_token_mode is a valid option
 fn validate_token_mode(value: &str) -> Result<String, String> {
     match value {
