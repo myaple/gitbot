@@ -498,18 +498,43 @@ pub(crate) async fn check_stale_issues(
                     }
                 }
 
-                // Fetch all notes for the issue (since_timestamp = 0 to get all)
-                let notes = match gitlab_client
-                    .get_issue_notes(project_id, issue.iid, 0)
-                    .await
-                {
-                    Ok(n) => n,
-                    Err(e) => {
-                        error!(
-                            "Failed to fetch notes for issue #{}: {}. Skipping note processing for this issue.",
-                            issue.iid, e
-                        );
-                        Vec::new() // Process with no notes if fetching failed
+                // Optimization: If the issue itself is already stale based on updated_at,
+                // and the last update was older than our threshold, we can skip fetching notes.
+                // Notes would only update the timestamp if they are NEWER than the issue updated_at,
+                // which generally shouldn't happen (issue updated_at includes note updates).
+                // Even if it did, if the issue hasn't been updated in X days, no note could have been added in X days.
+                let days_stale = config.stale_issue_days;
+                let staleness_threshold = ChronoDuration::days(days_stale as i64);
+                let now = Utc::now();
+                let threshold_ts = now - staleness_threshold;
+
+                let is_stale_by_issue_date = if let Some(last_ts) = last_activity_ts {
+                    last_ts < threshold_ts
+                } else {
+                    false // conservative: if we can't parse date, fetch notes
+                };
+
+                // Fetch notes only if issue is not already clearly stale
+                let notes = if is_stale_by_issue_date {
+                    debug!(
+                        "Issue #{} is stale based on updated_at. Skipping note fetch.",
+                        issue.iid
+                    );
+                    Vec::new()
+                } else {
+                    // Fetch all notes for the issue (since_timestamp = 0 to get all)
+                    match gitlab_client
+                        .get_issue_notes(project_id, issue.iid, 0)
+                        .await
+                    {
+                        Ok(n) => n,
+                        Err(e) => {
+                            error!(
+                                "Failed to fetch notes for issue #{}: {}. Skipping note processing for this issue.",
+                                issue.iid, e
+                            );
+                            Vec::new() // Process with no notes if fetching failed
+                        }
                     }
                 };
 
