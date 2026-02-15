@@ -465,7 +465,6 @@ pub(crate) async fn check_stale_issues(
     config: Arc<AppSettings>,
 ) -> Result<()> {
     info!("Checking for stale issues in project ID: {}", project_id);
-    let stale_label_name = "stale"; // Define the label name
 
     // Fetch all issues (or a broad set by passing 0 as since_timestamp)
     // We will filter for "opened" state client-side.
@@ -480,139 +479,173 @@ pub(crate) async fn check_stale_issues(
         .map(|issue| {
             let gitlab_client = gitlab_client.clone();
             let config = config.clone();
-            async move {
-                debug!("Processing issue #{} for staleness", issue.iid);
-
-                let mut last_activity_ts: Option<DateTime<Utc>> = None;
-
-                // Start with the issue's own updated_at timestamp
-                match DateTime::parse_from_rfc3339(&issue.updated_at) {
-                    Ok(ts) => last_activity_ts = Some(ts.with_timezone(&Utc)),
-                    Err(e) => {
-                        warn!(
-                            "Failed to parse issue updated_at timestamp for issue #{}: {}. Error: {}",
-                            issue.iid, issue.updated_at, e
-                        );
-                        // Continue, but this issue might not be accurately processed for staleness
-                        // if its own timestamp is the only one or the latest.
-                    }
-                }
-
-                // Optimization: If the issue itself is already stale based on updated_at,
-                // and the last update was older than our threshold, we can skip fetching notes.
-                // Notes would only update the timestamp if they are NEWER than the issue updated_at,
-                // which generally shouldn't happen (issue updated_at includes note updates).
-                // Even if it did, if the issue hasn't been updated in X days, no note could have been added in X days.
-                let days_stale = config.stale_issue_days;
-                let staleness_threshold = ChronoDuration::days(days_stale as i64);
-                let now = Utc::now();
-                let threshold_ts = now - staleness_threshold;
-
-                let is_stale_by_issue_date = if let Some(last_ts) = last_activity_ts {
-                    last_ts < threshold_ts
-                } else {
-                    false // conservative: if we can't parse date, fetch notes
-                };
-
-                // Fetch notes only if issue is not already clearly stale
-                let notes = if is_stale_by_issue_date {
-                    debug!(
-                        "Issue #{} is stale based on updated_at. Skipping note fetch.",
-                        issue.iid
-                    );
-                    Vec::new()
-                } else {
-                    // Fetch all notes for the issue (since_timestamp = 0 to get all)
-                    match gitlab_client
-                        .get_issue_notes(project_id, issue.iid, 0)
-                        .await
-                    {
-                        Ok(n) => n,
-                        Err(e) => {
-                            error!(
-                                "Failed to fetch notes for issue #{}: {}. Skipping note processing for this issue.",
-                                issue.iid, e
-                            );
-                            Vec::new() // Process with no notes if fetching failed
-                        }
-                    }
-                };
-
-                for note in notes {
-                    if note.author.username == config.bot_username {
-                        continue; // Skip notes from the bot itself
-                    }
-                    match DateTime::parse_from_rfc3339(&note.updated_at) {
-                        Ok(note_ts_rfc3339) => {
-                            let note_ts = note_ts_rfc3339.with_timezone(&Utc);
-                            if let Some(current_max_ts) = last_activity_ts {
-                                if note_ts > current_max_ts {
-                                    last_activity_ts = Some(note_ts);
-                                }
-                            } else {
-                                last_activity_ts = Some(note_ts);
-                            }
-                        }
-                        Err(e) => {
-                            warn!(
-                                "Failed to parse note updated_at for note #{} on issue #{}: {}. Error: {}",
-                                note.id, issue.iid, note.updated_at, e
-                            );
-                        }
-                    }
-                }
-
-                if let Some(last_active_date) = last_activity_ts {
-                    let now = Utc::now();
-                    let days_stale = config.stale_issue_days;
-                    let staleness_threshold = ChronoDuration::days(days_stale as i64);
-
-                    if now - last_active_date > staleness_threshold {
-                        // Issue is stale
-                        if !issue.labels.iter().any(|l| l == stale_label_name) {
-                            info!(
-                                "Issue #{} is stale and not labeled. Adding '{}' label.",
-                                issue.iid, stale_label_name
-                            );
-                            if let Err(e) = gitlab_client
-                                .add_issue_label(project_id, issue.iid, stale_label_name)
-                                .await
-                            {
-                                error!(
-                                    "Failed to add '{}' label to issue #{}: {}",
-                                    stale_label_name, issue.iid, e
-                                );
-                            }
-                        }
-                    } else {
-                        // Issue is not stale
-                        if issue.labels.iter().any(|l| l == stale_label_name) {
-                            info!(
-                                "Issue #{} is not stale but has '{}' label. Removing label.",
-                                issue.iid, stale_label_name
-                            );
-                            if let Err(e) = gitlab_client
-                                .remove_issue_label(project_id, issue.iid, stale_label_name)
-                                .await
-                            {
-                                error!(
-                                    "Failed to remove '{}' label from issue #{}: {}",
-                                    stale_label_name, issue.iid, e
-                                );
-                            }
-                        }
-                    }
-                } else {
-                    warn!(
-                        "Could not determine last activity timestamp for issue #{}. Skipping staleness check.",
-                        issue.iid
-                    );
-                }
-            }
+            process_issue_staleness(project_id, issue, gitlab_client, config)
         })
         .buffer_unordered(6) // Process 6 issues concurrently for stale checking
         .collect()
         .await;
 
+    Ok(())
+}
+
+async fn process_issue_staleness(
+    project_id: i64,
+    issue: GitlabIssue,
+    gitlab_client: Arc<GitlabApiClient>,
+    config: Arc<AppSettings>,
+) {
+    debug!("Processing issue #{} for staleness", issue.iid);
+    let last_activity_ts =
+        determine_last_activity(project_id, &issue, &gitlab_client, &config).await;
+    if let Err(e) = update_issue_staleness(
+        project_id,
+        &issue,
+        last_activity_ts,
+        &gitlab_client,
+        &config,
+    )
+    .await
+    {
+        error!("Error updating staleness for issue #{}: {}", issue.iid, e);
+    }
+}
+
+async fn determine_last_activity(
+    project_id: i64,
+    issue: &GitlabIssue,
+    gitlab_client: &GitlabApiClient,
+    config: &AppSettings,
+) -> Option<DateTime<Utc>> {
+    let mut last_activity_ts: Option<DateTime<Utc>> = None;
+
+    // Start with the issue's own updated_at timestamp
+    match DateTime::parse_from_rfc3339(&issue.updated_at) {
+        Ok(ts) => last_activity_ts = Some(ts.with_timezone(&Utc)),
+        Err(e) => {
+            warn!(
+                "Failed to parse issue updated_at timestamp for issue #{}: {}. Error: {}",
+                issue.iid, issue.updated_at, e
+            );
+        }
+    }
+
+    let days_stale = config.stale_issue_days;
+    let staleness_threshold = ChronoDuration::days(days_stale as i64);
+    let now = Utc::now();
+    let threshold_ts = now - staleness_threshold;
+
+    let is_stale_by_issue_date = if let Some(last_ts) = last_activity_ts {
+        last_ts < threshold_ts
+    } else {
+        false // conservative: if we can't parse date, fetch notes
+    };
+
+    // Fetch notes only if issue is not already clearly stale
+    let notes = if is_stale_by_issue_date {
+        debug!(
+            "Issue #{} is stale based on updated_at. Skipping note fetch.",
+            issue.iid
+        );
+        Vec::new()
+    } else {
+        match gitlab_client
+            .get_issue_notes(project_id, issue.iid, 0)
+            .await
+        {
+            Ok(n) => n,
+            Err(e) => {
+                error!(
+                    "Failed to fetch notes for issue #{}: {}. Skipping note processing for this issue.",
+                    issue.iid, e
+                );
+                Vec::new()
+            }
+        }
+    };
+
+    for note in notes {
+        if note.author.username == config.bot_username {
+            continue;
+        }
+        match DateTime::parse_from_rfc3339(&note.updated_at) {
+            Ok(note_ts_rfc3339) => {
+                let note_ts = note_ts_rfc3339.with_timezone(&Utc);
+                if let Some(current_max_ts) = last_activity_ts {
+                    if note_ts > current_max_ts {
+                        last_activity_ts = Some(note_ts);
+                    }
+                } else {
+                    last_activity_ts = Some(note_ts);
+                }
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to parse note updated_at for note #{} on issue #{}: {}. Error: {}",
+                    note.id, issue.iid, note.updated_at, e
+                );
+            }
+        }
+    }
+
+    last_activity_ts
+}
+
+async fn update_issue_staleness(
+    project_id: i64,
+    issue: &GitlabIssue,
+    last_active_date: Option<DateTime<Utc>>,
+    gitlab_client: &GitlabApiClient,
+    config: &AppSettings,
+) -> Result<()> {
+    let stale_label_name = "stale";
+
+    if let Some(last_ts) = last_active_date {
+        let now = Utc::now();
+        let days_stale = config.stale_issue_days;
+        let staleness_threshold = ChronoDuration::days(days_stale as i64);
+
+        if now - last_ts > staleness_threshold {
+            // Issue is stale
+            if !issue.labels.iter().any(|l| l == stale_label_name) {
+                info!(
+                    "Issue #{} is stale and not labeled. Adding '{}' label.",
+                    issue.iid, stale_label_name
+                );
+                if let Err(e) = gitlab_client
+                    .add_issue_label(project_id, issue.iid, stale_label_name)
+                    .await
+                {
+                    error!(
+                        "Failed to add '{}' label to issue #{}: {}",
+                        stale_label_name, issue.iid, e
+                    );
+                    return Err(e.into());
+                }
+            }
+        } else {
+            // Issue is not stale
+            if issue.labels.iter().any(|l| l == stale_label_name) {
+                info!(
+                    "Issue #{} is not stale but has '{}' label. Removing label.",
+                    issue.iid, stale_label_name
+                );
+                if let Err(e) = gitlab_client
+                    .remove_issue_label(project_id, issue.iid, stale_label_name)
+                    .await
+                {
+                    error!(
+                        "Failed to remove '{}' label from issue #{}: {}",
+                        stale_label_name, issue.iid, e
+                    );
+                    return Err(e.into());
+                }
+            }
+        }
+    } else {
+        warn!(
+            "Could not determine last activity timestamp for issue #{}. Skipping staleness check.",
+            issue.iid
+        );
+    }
     Ok(())
 }
