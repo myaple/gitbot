@@ -246,6 +246,35 @@ impl GitlabApiClient {
     }
 
     #[instrument(skip(self), fields(project_id, since_timestamp))]
+    pub async fn get_opened_issues(
+        &self,
+        project_id: i64,
+        since_timestamp: u64,
+    ) -> Result<Vec<GitlabIssue>, GitlabError> {
+        let path = format!("/api/v4/projects/{project_id}/issues");
+        let dt = DateTime::from_timestamp(since_timestamp as i64, 0).unwrap_or_else(|| {
+            Utc.timestamp_opt(0, 0)
+                .single()
+                .expect("Fallback timestamp failed for 0")
+        });
+        let formatted_timestamp_string = dt.to_rfc3339();
+
+        let query_params_values = [
+            ("updated_after", formatted_timestamp_string),
+            ("state", "opened".to_string()),
+            ("sort", "asc".to_string()),
+            ("per_page", "100".to_string()),
+        ];
+        let params: Vec<(&str, &str)> = query_params_values
+            .iter()
+            .map(|(k, v)| (*k, v.as_str()))
+            .collect();
+
+        self.send_request(Method::GET, &path, Some(&params), None::<()>)
+            .await
+    }
+
+    #[instrument(skip(self), fields(project_id, since_timestamp))]
     pub async fn get_merge_requests(
         &self,
         project_id: i64,
