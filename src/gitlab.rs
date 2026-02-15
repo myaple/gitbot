@@ -212,6 +212,86 @@ impl GitlabApiClient {
     }
 
     #[instrument(skip(self), fields(project_id, since_timestamp))]
+    pub async fn get_opened_issues(
+        &self,
+        project_id: i64,
+        since_timestamp: u64,
+    ) -> Result<Vec<GitlabIssue>, GitlabError> {
+        let path = format!("/api/v4/projects/{project_id}/issues");
+        let dt = DateTime::from_timestamp(since_timestamp as i64, 0).unwrap_or_else(|| {
+            Utc.timestamp_opt(0, 0)
+                .single()
+                .expect("Fallback timestamp failed for 0")
+        });
+        let formatted_timestamp_string = dt.to_rfc3339();
+
+        let mut all_issues = Vec::new();
+        let mut current_page = 1;
+        let per_page = 100;
+
+        loop {
+            let per_page_str = per_page.to_string();
+            let page_str = current_page.to_string();
+
+            let query_params_values = [
+                ("updated_after", formatted_timestamp_string.as_str()),
+                ("state", "opened"),
+                ("sort", "asc"),
+                ("per_page", per_page_str.as_str()),
+                ("page", page_str.as_str()),
+            ];
+
+            let mut url = self.gitlab_url.join(&path)?;
+            url.query_pairs_mut().extend_pairs(&query_params_values);
+
+            debug!("Fetching opened issues page {}", current_page);
+
+            let request_builder = self
+                .client
+                .request(Method::GET, url.clone())
+                .header("PRIVATE-TOKEN", &self.private_token);
+
+            let response = request_builder.send().await.map_err(GitlabError::Request)?;
+
+            let status = response.status();
+            if !status.is_success() {
+                let response_body = response
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "Could not read error body".to_string());
+                error!("API Error: {} - {}", status, response_body);
+                return Err(GitlabError::Api {
+                    status,
+                    body: response_body,
+                });
+            }
+
+            // Check pagination headers
+            let total_pages = response
+                .headers()
+                .get("X-Total-Pages")
+                .and_then(|h| h.to_str().ok())
+                .and_then(|s| s.parse::<usize>().ok())
+                .unwrap_or(1);
+
+            let issues: Vec<GitlabIssue> = response
+                .json()
+                .await
+                .map_err(GitlabError::Deserialization)?;
+
+            let is_empty = issues.is_empty();
+            all_issues.extend(issues);
+
+            if current_page >= total_pages || is_empty {
+                break;
+            }
+            current_page += 1;
+        }
+
+        Ok(all_issues)
+    }
+
+    #[instrument(skip(self), fields(project_id, since_timestamp))]
     pub async fn get_issues(
         &self,
         project_id: i64,

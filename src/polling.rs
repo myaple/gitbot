@@ -207,13 +207,8 @@ impl PollingService {
             let config_clone = self.config.clone();
             let triage_task = tokio::spawn(async move {
                 // Fetch recent issues for triage
-                match gitlab_client_clone.get_issues(project_id_clone, 0).await {
-                    Ok(all_issues) => {
-                        let open_issues: Vec<_> = all_issues
-                            .into_iter()
-                            .filter(|issue| issue.state == "opened")
-                            .collect();
-
+                match gitlab_client_clone.get_opened_issues(project_id_clone, 0).await {
+                    Ok(open_issues) => {
                         if let Err(e) = triage_unlabeled_issues(
                             &triage_clone,
                             project_id_clone,
@@ -467,13 +462,8 @@ pub(crate) async fn check_stale_issues(
     info!("Checking for stale issues in project ID: {}", project_id);
     let stale_label_name = "stale"; // Define the label name
 
-    // Fetch all issues (or a broad set by passing 0 as since_timestamp)
-    // We will filter for "opened" state client-side.
-    let all_issues = gitlab_client.get_issues(project_id, 0).await?;
-    let open_issues: Vec<_> = all_issues
-        .into_iter()
-        .filter(|issue| issue.state == "opened")
-        .collect();
+    // Fetch all opened issues (or a broad set by passing 0 as since_timestamp)
+    let open_issues = gitlab_client.get_opened_issues(project_id, 0).await?;
 
     // Process issues in parallel with controlled concurrency
     let _stale_results: Vec<_> = stream::iter(open_issues)

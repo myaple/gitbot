@@ -98,4 +98,23 @@ mod tests {
 
         m_notes.assert_async().await;
     }
+
+    #[tokio::test]
+    async fn test_check_stale_issues_uses_filtered_api() {
+        let mut server = mockito::Server::new_async().await;
+        // Use 30 days stale threshold
+        let config = test_config(30, TEST_BOT_USERNAME, server.url());
+        let client = Arc::new(GitlabApiClient::new(config.clone()).unwrap());
+
+        // This mock expects a request WITH `state=opened`
+        let _m = server
+            .mock("GET", Matcher::Regex(r"^/api/v4/projects/1/issues.*state=opened.*".to_string()))
+            .with_status(200)
+            .with_body("[]")
+            .create_async()
+            .await;
+
+        let result = check_stale_issues(PROJECT_ID, client, config).await;
+        assert!(result.is_ok());
+    }
 }
