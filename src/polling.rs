@@ -223,7 +223,8 @@ impl PollingService {
         // Fetch old issues for stale check (since 0)
         // We fetch separately because "sort=asc" means we get OLDEST updated issues with 0,
         // but recent ones with fetch_recent_ts.
-        let stale_issues = match self.gitlab_client.get_issues(project_id, 0).await {
+        // We use get_opened_issues to filter by state=opened server-side.
+        let open_stale_issues = match self.gitlab_client.get_opened_issues(project_id, 0).await {
             Ok(issues) => issues,
             Err(e) => {
                 error!(
@@ -233,11 +234,6 @@ impl PollingService {
                 Vec::new()
             }
         };
-
-        let open_stale_issues: Vec<GitlabIssue> = stale_issues
-            .into_iter()
-            .filter(|i| i.state == "opened")
-            .collect();
 
         // Task for checking stale issues
         let stale_check_task = {

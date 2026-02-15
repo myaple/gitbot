@@ -1046,3 +1046,42 @@ async fn test_search_files() {
     assert!(results.contains(&"src/main.rs".to_string()));
     assert!(results.contains(&"src/utils.rs".to_string()));
 }
+
+#[tokio::test]
+async fn test_get_opened_issues() {
+    let mut server = mockito::Server::new_async().await;
+    let base_url = server.url();
+    let settings = Arc::new(create_test_settings(base_url));
+    let client = GitlabApiClient::new(settings).unwrap();
+
+    let mock_issues_response = serde_json::json!([
+        {
+            "id": 1, "iid": 101, "project_id": 1, "title": "Test Issue 1",
+            "description": "A test issue 1", "state": "opened",
+            "author": {"id": 1, "username": "tester", "name": "Test User", "avatar_url": null, "web_url": "url"},
+            "web_url": "http://example.com/issue/1", "labels": [], "created_at": "2023-01-01T12:00:00Z", "updated_at": "2023-01-02T12:00:00Z"
+        }
+    ]);
+
+    let _m = server
+        .mock("GET", "/api/v4/projects/1/issues")
+        .match_query(mockito::Matcher::AllOf(vec![
+            mockito::Matcher::UrlEncoded(
+                "updated_after".into(),
+                "2021-05-03T00:00:00+00:00".into(),
+            ),
+            mockito::Matcher::UrlEncoded("state".into(), "opened".into()),
+            mockito::Matcher::UrlEncoded("sort".into(), "asc".into()),
+            mockito::Matcher::UrlEncoded("per_page".into(), "100".into()),
+        ]))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(mock_issues_response.to_string())
+        .create_async()
+        .await;
+
+    let issues = client.get_opened_issues(1, 1620000000).await.unwrap();
+    assert_eq!(issues.len(), 1);
+    assert_eq!(issues[0].title, "Test Issue 1");
+    assert_eq!(issues[0].state, "opened");
+}
