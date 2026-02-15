@@ -342,11 +342,11 @@ mod tests {
         let file_index_manager = Arc::new(FileIndexManager::new(gitlab_client.clone(), 3600));
 
         // Create the extractor with our custom file_index_manager
-        let extractor = RepoContextExtractor {
-            gitlab_client: gitlab_client.clone(),
-            settings: settings.clone(),
-            file_index_manager: file_index_manager.clone(),
-        };
+        let extractor = RepoContextExtractor::new_with_file_indexer(
+            gitlab_client.clone(),
+            settings.clone(),
+            file_index_manager.clone(),
+        );
 
         // Get the index for our project
         let index = file_index_manager.get_or_create_index(project.id);

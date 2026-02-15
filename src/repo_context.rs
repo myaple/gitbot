@@ -1,7 +1,9 @@
 use anyhow::Result;
+use dashmap::DashMap;
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tracing::{debug, info, warn};
 
 use crate::config::AppSettings;
@@ -12,6 +14,7 @@ use crate::models::{GitlabIssue, GitlabMergeRequest, GitlabProject};
 
 pub(crate) const MAX_SOURCE_FILES: usize = 250; // Maximum number of source files to include in context
 pub(crate) const AGENTS_MD_FILE: &str = "AGENTS.md";
+const AGENTS_MD_CACHE_TTL: Duration = Duration::from_secs(300); // 5 minutes
 
 /// Estimates the number of tokens in a text string.
 /// Uses a heuristic of approximately 4 characters per token for English text.
@@ -52,6 +55,8 @@ pub struct RepoContextExtractor {
     pub(crate) gitlab_client: Arc<GitlabApiClient>,
     pub(crate) settings: Arc<AppSettings>,
     pub(crate) file_index_manager: Arc<FileIndexManager>,
+    // Cache for AGENTS.md content: (project_id, context_repo_path) -> (timestamp, content)
+    agents_md_cache: DashMap<(i64, Option<String>), (Instant, Option<String>)>,
 }
 
 impl RepoContextExtractor {
@@ -64,6 +69,7 @@ impl RepoContextExtractor {
             gitlab_client,
             settings,
             file_index_manager,
+            agents_md_cache: DashMap::new(),
         }
     }
 
@@ -107,84 +113,105 @@ impl RepoContextExtractor {
         }
     }
 
-    async fn get_agents_md_content(
+    pub(crate) async fn get_agents_md_content(
         &self,
         project: &GitlabProject,
         context_repo_path: Option<&str>,
     ) -> Result<Option<String>> {
-        // Try fetching from the main project first
-        match self
-            .get_file_content_from_project(project.id, AGENTS_MD_FILE)
-            .await
-        {
-            Ok(Some(content)) => {
-                info!(
-                    "Found AGENTS.md in main project {}",
-                    project.path_with_namespace
-                );
-                return Ok(Some(content));
-            }
-            Ok(None) => {
-                // File not found in main project, proceed to context repo
-                debug!(
-                    "AGENTS.md not found in main project {}, trying context repo if available.",
-                    project.path_with_namespace
-                );
-            }
-            Err(e) => {
-                warn!(
-                    "Failed to fetch AGENTS.MD from main project {}: {}. Will try context repo if available.",
-                    project.path_with_namespace, e
-                );
-                // Do not return here; proceed to try context_repo_path
+        let cache_key = (project.id, context_repo_path.map(|s| s.to_string()));
+
+        // Check cache
+        if let Some(entry) = self.agents_md_cache.get(&cache_key) {
+            let (timestamp, content) = entry.value();
+            if timestamp.elapsed() < AGENTS_MD_CACHE_TTL {
+                // debug!("Cache hit for AGENTS.md in project {}", project.path_with_namespace);
+                return Ok(content.clone());
             }
         }
 
-        // If not found in main project (or an error occurred there) and context repo is specified, try fetching from context repo
-        if let Some(context_path) = context_repo_path {
-            match self.gitlab_client.get_project_by_path(context_path).await {
-                Ok(context_project) => {
-                    // The `?` here is acceptable as per requirements: if fetching context project's AGENTS.MD fails critically,
-                    // the whole operation should return Err. If it's just not found (Ok(None)), that's fine.
-                    match self
-                        .get_file_content_from_project(context_project.id, AGENTS_MD_FILE)
-                        .await
-                    {
-                        Ok(Some(content)) => {
-                            info!("Found AGENTS.md in context project {}", context_path);
-                            return Ok(Some(content));
-                        }
-                        Ok(None) => {
-                            // File not found in context project either
-                            debug!("AGENTS.md not found in context project {}.", context_path);
-                        }
-                        Err(e) => {
-                            // Critical error fetching from context project
-                            warn!(
-                                "Failed to fetch AGENTS.MD from context project {}: {}",
-                                context_path, e
-                            );
-                            return Err(e); // Return the error
-                        }
-                    }
+        let result = async {
+            // Try fetching from the main project first
+            match self
+                .get_file_content_from_project(project.id, AGENTS_MD_FILE)
+                .await
+            {
+                Ok(Some(content)) => {
+                    info!(
+                        "Found AGENTS.md in main project {}",
+                        project.path_with_namespace
+                    );
+                    return Ok(Some(content));
                 }
-                Err(e) => {
-                    // This error means the context_repo_path itself is problematic.
-                    // Log a warning and proceed to return Ok(None) as the file wasn't found.
-                    warn!(
-                        "Failed to get context repo project {}: {}. AGENTS.md cannot be fetched from it.",
-                        context_path, e
+                Ok(None) => {
+                    // File not found in main project, proceed to context repo
+                    debug!(
+                        "AGENTS.md not found in main project {}, trying context repo if available.",
+                        project.path_with_namespace
                     );
                 }
+                Err(e) => {
+                    warn!(
+                        "Failed to fetch AGENTS.MD from main project {}: {}. Will try context repo if available.",
+                        project.path_with_namespace, e
+                    );
+                    // Do not return here; proceed to try context_repo_path
+                }
             }
+
+            // If not found in main project (or an error occurred there) and context repo is specified, try fetching from context repo
+            if let Some(context_path) = context_repo_path {
+                match self.gitlab_client.get_project_by_path(context_path).await {
+                    Ok(context_project) => {
+                        // The `?` here is acceptable as per requirements: if fetching context project's AGENTS.MD fails critically,
+                        // the whole operation should return Err. If it's just not found (Ok(None)), that's fine.
+                        match self
+                            .get_file_content_from_project(context_project.id, AGENTS_MD_FILE)
+                            .await
+                        {
+                            Ok(Some(content)) => {
+                                info!("Found AGENTS.md in context project {}", context_path);
+                                return Ok(Some(content));
+                            }
+                            Ok(None) => {
+                                // File not found in context project either
+                                debug!("AGENTS.md not found in context project {}.", context_path);
+                            }
+                            Err(e) => {
+                                // Critical error fetching from context project
+                                warn!(
+                                    "Failed to fetch AGENTS.MD from context project {}: {}",
+                                    context_path, e
+                                );
+                                return Err(e); // Return the error
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        // This error means the context_repo_path itself is problematic.
+                        // Log a warning and proceed to return Ok(None) as the file wasn't found.
+                        warn!(
+                            "Failed to get context repo project {}: {}. AGENTS.md cannot be fetched from it.",
+                            context_path, e
+                        );
+                    }
+                }
+            }
+
+            // If we reach here, AGENTS.md was not found in either the main project or the context repo (or context repo was not specified/accessible)
+            info!(
+                "AGENTS.md not found in main project {} nor in context repo {:?}",
+                project.path_with_namespace, context_repo_path
+            );
+            Ok(None)
+        }
+        .await;
+
+        if let Ok(content) = &result {
+            self.agents_md_cache
+                .insert(cache_key, (Instant::now(), content.clone()));
         }
 
-        // If we reach here, AGENTS.md was not found in either the main project or the context repo (or context repo was not specified/accessible)
-        info!(
-            "AGENTS.md not found in main project {} nor in context repo {:?}",
-            project.path_with_namespace, context_repo_path
-        );
-        Ok(None)
+        result
     }
 
     /// Get all source code files in the repository, up to MAX_SOURCE_FILES limit

@@ -27,3 +27,5 @@ pub mod polling_test;
 pub mod polling_tests;
 #[cfg(test)]
 pub mod repo_context_tests;
+#[cfg(test)]
+pub mod agents_md_perf_test;
