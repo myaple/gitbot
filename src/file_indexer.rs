@@ -3,6 +3,7 @@ use dashmap::DashMap;
 use futures::stream::{self, StreamExt};
 use std::collections::{hash_map::DefaultHasher, HashSet};
 use std::hash::{Hash, Hasher};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
@@ -31,10 +32,16 @@ const INDEXABLE_EXTENSIONS: [&str; 22] = [
 /// Represents an index of file content using n-grams
 #[derive(Debug, Clone)]
 pub struct FileContentIndex {
-    /// Maps n-grams to file paths that contain them
-    ngram_to_files: Arc<DashMap<String, HashSet<String>>>,
-    /// Maps file paths to their last indexed content hash
-    file_hashes: Arc<DashMap<String, u64>>,
+    /// Maps n-grams to file IDs that contain them
+    ngram_to_files: Arc<DashMap<String, HashSet<u32>>>,
+    /// Maps file paths to their file IDs
+    path_to_file_id: Arc<DashMap<String, u32>>,
+    /// Maps file IDs to their file paths
+    file_id_to_path: Arc<DashMap<u32, String>>,
+    /// Maps file IDs to their last indexed content hash
+    file_hashes: Arc<DashMap<u32, u64>>,
+    /// Next available file ID
+    next_file_id: Arc<AtomicU32>,
     /// When the index was last updated
     last_updated: Arc<RwLock<Instant>>,
 }
@@ -44,7 +51,10 @@ impl FileContentIndex {
     pub fn new(_project_id: i64) -> Self {
         Self {
             ngram_to_files: Arc::new(DashMap::new()),
+            path_to_file_id: Arc::new(DashMap::new()),
+            file_id_to_path: Arc::new(DashMap::new()),
             file_hashes: Arc::new(DashMap::new()),
+            next_file_id: Arc::new(AtomicU32::new(1)),
             last_updated: Arc::new(RwLock::new(Instant::now())),
         }
     }
@@ -90,8 +100,19 @@ impl FileContentIndex {
 
         let content_hash = Self::calculate_content_hash(content);
 
+        // Get or create file ID for this path
+        let file_id = *self
+            .path_to_file_id
+            .entry(file_path.to_string())
+            .or_insert_with(|| self.next_file_id.fetch_add(1, Ordering::Relaxed));
+
+        // Ensure reverse mapping exists
+        self.file_id_to_path
+            .entry(file_id)
+            .or_insert_with(|| file_path.to_string());
+
         // Check if we've already indexed this file with the same content
-        if let Some(existing_hash) = self.file_hashes.get(file_path) {
+        if let Some(existing_hash) = self.file_hashes.get(&file_id) {
             if *existing_hash == content_hash {
                 // Content hasn't changed, no need to reindex
                 return;
@@ -106,27 +127,33 @@ impl FileContentIndex {
             self.ngram_to_files
                 .entry(ngram)
                 .or_default()
-                .insert(file_path.to_string());
+                .insert(file_id);
         }
 
         // Update the file hash
-        self.file_hashes.insert(file_path.to_string(), content_hash);
+        self.file_hashes.insert(file_id, content_hash);
     }
 
     /// Remove a file from the index
     /// This method is primarily used for testing and cleanup operations.
     #[cfg(test)]
     pub fn remove_file(&self, file_path: &str) {
-        // Remove file from file_hashes
-        self.file_hashes.remove(file_path);
+        // Find file ID
+        if let Some((_, file_id)) = self.path_to_file_id.remove(file_path) {
+            // Remove from reverse mapping
+            self.file_id_to_path.remove(&file_id);
 
-        // Remove file from all n-gram entries
-        for mut entry in self.ngram_to_files.iter_mut() {
-            entry.value_mut().remove(file_path);
+            // Remove file from file_hashes
+            self.file_hashes.remove(&file_id);
+
+            // Remove file from all n-gram entries
+            for mut entry in self.ngram_to_files.iter_mut() {
+                entry.value_mut().remove(&file_id);
+            }
+
+            // Clean up empty n-gram entries
+            self.ngram_to_files.retain(|_, files| !files.is_empty());
         }
-
-        // Clean up empty n-gram entries
-        self.ngram_to_files.retain(|_, files| !files.is_empty());
     }
 
     /// Search for files containing all the given keywords
@@ -141,11 +168,11 @@ impl FileContentIndex {
             .map(|keyword| Self::generate_ngrams(keyword))
             .collect();
 
-        // For each keyword, find files that contain any of its n-grams
-        let mut keyword_matches: Vec<HashSet<String>> = Vec::new();
+        // For each keyword, find file IDs that contain any of its n-grams
+        let mut keyword_matches: Vec<HashSet<u32>> = Vec::new();
 
         for (i, ngrams) in keyword_ngrams.iter().enumerate() {
-            let mut files_for_keyword = HashSet::new();
+            let mut file_ids_for_keyword = HashSet::new();
             let keyword = &keywords[i].to_lowercase();
 
             // Special handling for short keywords (less than NGRAM_SIZE)
@@ -155,20 +182,20 @@ impl FileContentIndex {
                 for item in self.ngram_to_files.iter() {
                     let ngram = item.key();
                     if ngram.contains(keyword) {
-                        files_for_keyword.extend(item.value().iter().cloned());
+                        file_ids_for_keyword.extend(item.value().iter().cloned());
                     }
                 }
             } else {
                 // Normal case: look for exact n-gram matches
                 for ngram in ngrams {
                     if let Some(files) = self.ngram_to_files.get(ngram) {
-                        files_for_keyword.extend(files.iter().cloned());
+                        file_ids_for_keyword.extend(files.iter().cloned());
                     }
                 }
             }
 
-            if !files_for_keyword.is_empty() {
-                keyword_matches.push(files_for_keyword);
+            if !file_ids_for_keyword.is_empty() {
+                keyword_matches.push(file_ids_for_keyword);
             }
         }
 
@@ -177,14 +204,17 @@ impl FileContentIndex {
             return Vec::new();
         }
 
-        // Find files that match all keywords (intersection of all sets)
-        let mut result = keyword_matches[0].clone();
-        for files in &keyword_matches[1..] {
-            result = result.intersection(files).cloned().collect();
+        // Find file IDs that match all keywords (intersection of all sets)
+        let mut result_ids = keyword_matches[0].clone();
+        for file_ids in &keyword_matches[1..] {
+            result_ids = result_ids.intersection(file_ids).cloned().collect();
         }
 
-        // Convert to Vec without sorting (for test consistency)
-        result.into_iter().collect()
+        // Convert IDs to file paths
+        result_ids
+            .into_iter()
+            .filter_map(|id| self.file_id_to_path.get(&id).map(|p| p.value().clone()))
+            .collect()
     }
 
     /// Get the time since the index was last updated
