@@ -13,8 +13,8 @@ use crate::gitlab::GitlabApiClient;
 use crate::handlers::process_mention;
 use crate::mention_cache::MentionCache;
 use crate::models::{
-    GitlabIssue, GitlabMergeRequest, GitlabNoteAttributes, GitlabNoteEvent, GitlabNoteObject,
-    GitlabProject, GitlabUser,
+    GitlabMergeRequest, GitlabNoteAttributes, GitlabNoteEvent, GitlabNoteObject, GitlabProject,
+    GitlabUser,
 };
 use crate::triage::{triage_unlabeled_issues, TriageService};
 
@@ -245,7 +245,7 @@ impl PollingService {
         Ok(())
     }
 
-    async fn poll_issues(
+    pub(crate) async fn poll_issues(
         &self,
         project_id: i64,
         since_timestamp: u64,
@@ -253,64 +253,114 @@ impl PollingService {
     ) -> Result<()> {
         debug!("Polling issues for project ID: {}", project_id);
 
-        // Get issues updated since last check
-        let issues = self
+        let project_path = &project.path_with_namespace;
+
+        // Fetch issues and their latest notes in a single GraphQL query
+        let issues = match self
             .gitlab_client
-            .get_issues(project_id, since_timestamp)
-            .await?;
+            .get_issues_with_notes_graphql(project_path, since_timestamp)
+            .await
+        {
+            Ok(i) => i,
+            Err(e) => {
+                error!(
+                    "Failed to fetch issues via GraphQL for project {}: {}",
+                    project_id, e
+                );
+                return Err(e.into());
+            }
+        };
 
         // Process issues in parallel with controlled concurrency
         let _issue_results: Vec<_> = stream::iter(issues)
-            .map(|issue| {
+            .map(|issue_data| {
                 let gitlab_client = self.gitlab_client.clone();
                 let config = self.config.clone();
                 let processed_mentions_cache = self.processed_mentions_cache.clone();
                 let file_index_manager = self.file_index_manager.clone();
                 let project = project.clone();
+                let project_id = project.id;
+
                 async move {
-                    // Get notes for this issue
-                    match gitlab_client
-                        .get_issue_notes(project_id, issue.iid, since_timestamp)
-                        .await
-                    {
-                        Ok(notes) => {
-                            for note in notes {
-                                // Skip notes by the bot itself
-                                if note.author.username == config.bot_username {
-                                    continue;
-                                }
+                    let issue_iid = issue_data.iid.parse::<i64>().unwrap_or(0);
+                    let issue_id = parse_gid(&issue_data.id);
 
-                                // Check if note mentions the bot
-                                if note.note.contains(&format!("@{}", config.bot_username)) {
-                                    info!(
-                                        "Found mention in issue #{} note #{}",
-                                        issue.iid, note.id
-                                    );
-
-                                    // Create a GitlabNoteEvent from the note
-                                    let event = Self::create_issue_note_event_static(
-                                        project.clone(),
-                                        note,
-                                        issue.clone(),
-                                    );
-
-                                    // Process the mention
-                                    if let Err(e) = process_mention(
-                                        event,
-                                        gitlab_client.clone(),
-                                        config.clone(),
-                                        &processed_mentions_cache,
-                                        file_index_manager.clone(),
-                                    )
-                                    .await
-                                    {
-                                        error!("Error processing mention: {}", e);
-                                    }
-                                }
-                            }
+                    for note in issue_data.notes.nodes {
+                        if note.system {
+                            continue;
                         }
-                        Err(e) => {
-                            error!("Failed to get notes for issue #{}: {}", issue.iid, e);
+
+                        if note.author.username == config.bot_username {
+                            continue;
+                        }
+
+                        // Check timestamp
+                        let note_ts = match DateTime::parse_from_rfc3339(&note.created_at) {
+                            Ok(dt) => dt.with_timezone(&Utc),
+                            Err(_) => continue,
+                        };
+
+                        let since_dt = DateTime::from_timestamp(since_timestamp as i64, 0)
+                            .map(|dt| dt.with_timezone(&Utc))
+                            .unwrap_or_else(|| Utc::now());
+
+                        if note_ts <= since_dt {
+                            continue;
+                        }
+
+                        if note.body.contains(&format!("@{}", config.bot_username)) {
+                            info!("Found mention in issue #{} note (GraphQL)", issue_iid);
+
+                            let author_id = parse_gid(&note.author.id);
+                            let note_id = parse_gid(&note.id);
+
+                            let author = GitlabUser {
+                                id: author_id,
+                                username: note.author.username.clone(),
+                                name: note.author.name.clone(),
+                                avatar_url: note.author.avatar_url.clone(),
+                            };
+
+                            let issue_object = GitlabNoteObject {
+                                id: issue_id,
+                                iid: issue_iid,
+                                title: issue_data.title.clone(),
+                                description: issue_data.description.clone(),
+                            };
+
+                            let note_attributes = GitlabNoteAttributes {
+                                id: note_id,
+                                note: note.body.clone(),
+                                author: author.clone(),
+                                project_id,
+                                noteable_type: "Issue".to_string(),
+                                noteable_id: Some(issue_id),
+                                iid: Some(issue_iid),
+                                url: None,
+                                updated_at: note.updated_at.clone(),
+                            };
+
+                            let event = GitlabNoteEvent {
+                                object_kind: "note".to_string(),
+                                event_type: "note".to_string(),
+                                user: author,
+                                project: project.clone(),
+                                object_attributes: note_attributes,
+                                issue: Some(issue_object),
+                                merge_request: None,
+                            };
+
+                            if let Err(e) = process_mention(
+                                event,
+                                gitlab_client.clone(),
+                                config.clone(),
+                                &processed_mentions_cache,
+                                file_index_manager.clone(),
+                            )
+                            .await
+                            {
+                                error!("Error processing mention: {}", e);
+                            }
                         }
                     }
                 }
@@ -322,7 +372,7 @@ impl PollingService {
         Ok(())
     }
 
-    async fn poll_merge_requests(
+    pub(crate) async fn poll_merge_requests(
         &self,
         project_id: i64,
         since_timestamp: u64,
@@ -396,36 +446,6 @@ impl PollingService {
         Ok(())
     }
 
-    fn create_issue_note_event_static(
-        project: GitlabProject,
-        note: GitlabNoteAttributes,
-        issue: GitlabIssue,
-    ) -> GitlabNoteEvent {
-        // Clone the author data to avoid ownership issues
-        let author = GitlabUser {
-            id: note.author.id,
-            username: note.author.username.clone(),
-            name: note.author.name.clone(),
-            avatar_url: note.author.avatar_url.clone(),
-        };
-
-        let issue_object = GitlabNoteObject {
-            id: issue.id,
-            iid: issue.iid,
-            title: issue.title.clone(),
-            description: issue.description.clone(),
-        };
-
-        GitlabNoteEvent {
-            object_kind: "note".to_string(),
-            event_type: "note".to_string(),
-            user: author,
-            project,
-            object_attributes: note,
-            issue: Some(issue_object),
-            merge_request: None,
-        }
-    }
 
     fn create_mr_note_event_static(
         project: GitlabProject,
@@ -615,4 +635,8 @@ pub(crate) async fn check_stale_issues(
         .await;
 
     Ok(())
+}
+
+fn parse_gid(gid: &str) -> i64 {
+    gid.split('/').last().unwrap_or("0").parse().unwrap_or(0)
 }

@@ -266,3 +266,63 @@ pub struct GitlabLabel {
     pub description: Option<String>,
     pub text_color: Option<String>,
 }
+
+// GraphQL Models
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct GraphqlResponse<T> {
+    pub data: T,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct GraphqlProjectData {
+    pub project: Option<GraphqlProject>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct GraphqlProject {
+    pub issues: GraphqlIssueConnection,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct GraphqlIssueConnection {
+    pub nodes: Vec<GraphqlIssue>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphqlIssue {
+    pub id: String, // "gid://gitlab/Issue/123"
+    pub iid: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub state: String,
+    pub web_url: String,
+    pub updated_at: String,
+    pub author: GraphqlUser,
+    pub notes: GraphqlNoteConnection,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct GraphqlNoteConnection {
+    pub nodes: Vec<GraphqlNote>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphqlNote {
+    pub id: String,
+    pub body: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub author: GraphqlUser,
+    pub system: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphqlUser {
+    pub id: String,
+    pub username: String,
+    pub name: String,
+    pub avatar_url: Option<String>,
+}

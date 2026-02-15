@@ -12,7 +12,7 @@ use urlencoding::encode;
 use crate::config::AppSettings;
 use crate::models::{
     GitlabBranch, GitlabCommit, GitlabIssue, GitlabLabel, GitlabMergeRequest, GitlabNoteAttributes,
-    GitlabProject, GitlabSearchResult,
+    GitlabProject, GitlabSearchResult, GraphqlIssue, GraphqlProjectData, GraphqlResponse,
 };
 use crate::repo_context::{GitlabDiff, GitlabFile};
 
@@ -700,5 +700,87 @@ impl GitlabApiClient {
         let body = serde_json::json!({ "add_labels": labels_str });
         self.send_request(Method::PUT, &path, None, Some(body))
             .await
+    }
+
+    #[instrument(skip(self, query, variables), fields(method = "POST", path = "/api/graphql"))]
+    pub async fn send_graphql_request<T: DeserializeOwned>(
+        &self,
+        query: &str,
+        variables: serde_json::Value,
+    ) -> Result<T, GitlabError> {
+        let path = "/api/graphql";
+        let body = serde_json::json!({
+            "query": query,
+            "variables": variables
+        });
+
+        self.send_request(Method::POST, path, None, Some(body)).await
+    }
+
+    #[instrument(skip(self), fields(project_path, since_timestamp))]
+    pub async fn get_issues_with_notes_graphql(
+        &self,
+        project_path: &str,
+        since_timestamp: u64,
+    ) -> Result<Vec<GraphqlIssue>, GitlabError> {
+        let query = r#"
+            query($projectPath: ID!, $updatedAfter: Time!) {
+                project(fullPath: $projectPath) {
+                    issues(updatedAfter: $updatedAfter, first: 100) {
+                        nodes {
+                            id
+                            iid
+                            title
+                            description
+                            state
+                            webUrl
+                            updatedAt
+                            author {
+                                id
+                                username
+                                name
+                                avatarUrl
+                            }
+                            notes(last: 20) {
+                                nodes {
+                                    id
+                                    body
+                                    createdAt
+                                    updatedAt
+                                    system
+                                    author {
+                                        id
+                                        username
+                                        name
+                                        avatarUrl
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        "#;
+
+        let dt = DateTime::from_timestamp(since_timestamp as i64, 0).unwrap_or_else(|| {
+            Utc.timestamp_opt(0, 0)
+                .single()
+                .expect("Fallback timestamp failed for 0")
+        });
+        let formatted_timestamp_string = dt.to_rfc3339();
+
+        let variables = serde_json::json!({
+            "projectPath": project_path,
+            "updatedAfter": formatted_timestamp_string
+        });
+
+        let response: GraphqlResponse<GraphqlProjectData> =
+            self.send_graphql_request(query, variables).await?;
+
+        Ok(response
+            .data
+            .project
+            .map(|p| p.issues.nodes)
+            .unwrap_or_default())
     }
 }
