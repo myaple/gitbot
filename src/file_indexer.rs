@@ -298,7 +298,7 @@ impl FileIndexManager {
                 let index = index.clone();
 
                 async move {
-                    match client.get_file_content(project_id, &file_path).await {
+                    match client.get_file_content(project_id, &file_path, None).await {
                         Ok(file) => {
                             if file.size <= MAX_FILE_SIZE {
                                 if let Some(content) = file.content {
@@ -394,7 +394,7 @@ impl FileIndexManager {
         for file_path in matching_files.iter().take(5) {
             match self
                 .gitlab_client
-                .get_file_content(project_id, file_path)
+                .get_file_content(project_id, file_path, None)
                 .await
             {
                 Ok(mut file) => {

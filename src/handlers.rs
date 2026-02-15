@@ -416,7 +416,7 @@ async fn add_security_context_to_prompt(
     ];
 
     for file in security_files {
-        if let Ok(content) = gitlab_client.get_file_content(project_id, file).await {
+        if let Ok(content) = gitlab_client.get_file_content(project_id, file, None).await {
             if let Some(file_content) = content.content {
                 // Truncate to avoid overwhelming the prompt
                 let truncated = if file_content.len() > 1000 {
@@ -464,7 +464,7 @@ async fn add_testing_context_to_prompt(
     ];
 
     for file in test_configs {
-        if let Ok(content) = gitlab_client.get_file_content(project_id, file).await {
+        if let Ok(content) = gitlab_client.get_file_content(project_id, file, None).await {
             if content.content.is_some() {
                 // Just mention we found test config, don't include content (too verbose)
                 prompt_parts.push(format!("Detected testing configuration file: {}", file));
@@ -497,7 +497,7 @@ async fn add_documentation_context_to_prompt(
     let doc_files = vec!["README.md", "CONTRIBUTING.md", "docs/guidelines.md"];
 
     for file in doc_files {
-        if let Ok(content) = gitlab_client.get_file_content(project_id, file).await {
+        if let Ok(content) = gitlab_client.get_file_content(project_id, file, None).await {
             if let Some(file_content) = content.content {
                 // Include a snippet to understand documentation style
                 let truncated = if file_content.len() > 500 {
@@ -1845,7 +1845,7 @@ async fn fetch_contributing_guidelines(
     project_id: i64,
 ) -> Option<String> {
     match gitlab_client
-        .get_file_content(project_id, "CONTRIBUTING.md")
+        .get_file_content(project_id, "CONTRIBUTING.md", None)
         .await
     {
         Ok(file_response) => {

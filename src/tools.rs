@@ -720,6 +720,205 @@ impl ToolTrait for ListBranchesTool {
     }
 }
 
+/// Tool for getting file content
+pub struct GetFileContentTool {
+    gitlab_client: Arc<GitlabApiClient>,
+}
+
+#[async_trait]
+impl ToolTrait for GetFileContentTool {
+    fn name(&self) -> &str {
+        "get_file_content"
+    }
+
+    fn description(&self) -> &str {
+        "Get the content of a file from a GitLab repository. Use the project ID and file path. Optionally specify a ref (branch/commit)."
+    }
+
+    fn parameters(&self) -> Option<Value> {
+        Some(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "project_id": {
+                    "type": "integer",
+                    "description": "The GitLab project ID"
+                },
+                "file_path": {
+                    "type": "string",
+                    "description": "The path to the file"
+                },
+                "ref": {
+                    "type": "string",
+                    "description": "The branch, tag or commit to use (optional, defaults to default branch)"
+                }
+            },
+            "required": ["project_id", "file_path"]
+        }))
+    }
+
+    async fn execute(&self, arguments: &str) -> Result<String> {
+        if arguments.is_empty() {
+            return Err(anyhow!("Tool requires arguments"));
+        }
+
+        let params: serde_json::Value = serde_json::from_str(arguments)
+            .map_err(|e| anyhow!("Failed to parse arguments: {}", e))?;
+
+        let project_id = params
+            .get("project_id")
+            .ok_or_else(|| anyhow!("Missing required parameter: project_id"))?;
+        let file_path = params
+            .get("file_path")
+            .ok_or_else(|| anyhow!("Missing required parameter: file_path"))?;
+
+        let project_id = project_id
+            .as_i64()
+            .ok_or_else(|| anyhow!("project_id must be an integer"))?;
+        let file_path = file_path
+            .as_str()
+            .ok_or_else(|| anyhow!("file_path must be a string"))?;
+
+        if project_id <= 0 {
+            return Err(anyhow!("project_id must be positive"));
+        }
+        if file_path.is_empty() {
+            return Err(anyhow!("file_path cannot be empty"));
+        }
+
+        // Handle optional ref parameter
+        let ref_param = params.get("ref").and_then(|r| r.as_str());
+
+        debug!(
+            "Fetching file content for project_id: {}, path: '{}', ref: '{:?}'",
+            project_id, file_path, ref_param
+        );
+
+        match self
+            .gitlab_client
+            .get_file_content(project_id, file_path, ref_param)
+            .await
+        {
+            Ok(file) => {
+                debug!("Successfully fetched content for '{}'", file_path);
+                Ok(file.content.unwrap_or_else(|| "".to_string()))
+            }
+            Err(e) => {
+                error!(
+                    "Failed to fetch file content for '{}' in project {}: {}",
+                    file_path, project_id, e
+                );
+                Err(anyhow!("GitLab API error: {}", e))
+            }
+        }
+    }
+}
+
+/// Tool for getting issue notes (comments)
+pub struct GetIssueNotesTool {
+    gitlab_client: Arc<GitlabApiClient>,
+}
+
+#[async_trait]
+impl ToolTrait for GetIssueNotesTool {
+    fn name(&self) -> &str {
+        "get_issue_notes"
+    }
+
+    fn description(&self) -> &str {
+        "Get the comments (notes) for a GitLab issue. Returns the conversation thread."
+    }
+
+    fn parameters(&self) -> Option<Value> {
+        Some(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "project_id": {
+                    "type": "integer",
+                    "description": "The GitLab project ID"
+                },
+                "issue_iid": {
+                    "type": "integer",
+                    "description": "The issue IID (internal ID)"
+                }
+            },
+            "required": ["project_id", "issue_iid"]
+        }))
+    }
+
+    async fn execute(&self, arguments: &str) -> Result<String> {
+        if arguments.is_empty() {
+            return Err(anyhow!("Tool requires arguments"));
+        }
+
+        let params: serde_json::Value = serde_json::from_str(arguments)
+            .map_err(|e| anyhow!("Failed to parse arguments: {}", e))?;
+
+        let project_id = params
+            .get("project_id")
+            .ok_or_else(|| anyhow!("Missing required parameter: project_id"))?;
+        let issue_iid = params
+            .get("issue_iid")
+            .ok_or_else(|| anyhow!("Missing required parameter: issue_iid"))?;
+
+        let project_id = project_id
+            .as_i64()
+            .ok_or_else(|| anyhow!("project_id must be an integer"))?;
+        let issue_iid = issue_iid
+            .as_i64()
+            .ok_or_else(|| anyhow!("issue_iid must be an integer"))?;
+
+        if project_id <= 0 {
+            return Err(anyhow!("project_id must be positive"));
+        }
+        if issue_iid <= 0 {
+            return Err(anyhow!("issue_iid must be positive"));
+        }
+
+        debug!(
+            "Fetching notes for issue #{} in project {}",
+            issue_iid, project_id
+        );
+
+        match self
+            .gitlab_client
+            .get_all_issue_notes(project_id, issue_iid)
+            .await
+        {
+            Ok(notes) => {
+                debug!(
+                    "Successfully fetched {} notes for issue #{}",
+                    notes.len(),
+                    issue_iid
+                );
+                // Format notes as a readable conversation thread
+                let mut conversation = String::new();
+                for note in notes {
+                    // Skip system notes (where system is true, but our model doesn't have that field exposed clearly?
+                    // GitlabNoteAttributes doesn't have system field. Usually system notes have a specific author or content pattern.
+                    // For now we include everything.
+                    conversation.push_str(&format!(
+                        "[{}] @{}:\n{}\n\n",
+                        note.updated_at, note.author.username, note.note
+                    ));
+                }
+
+                if conversation.is_empty() {
+                    Ok("No comments found.".to_string())
+                } else {
+                    Ok(conversation)
+                }
+            }
+            Err(e) => {
+                error!(
+                    "Failed to fetch notes for issue #{} in project {}: {}",
+                    issue_iid, project_id, e
+                );
+                Err(anyhow!("GitLab API error: {}", e))
+            }
+        }
+    }
+}
+
 /// Create a basic tool registry with GitLab tools
 pub fn create_basic_tool_registry(
     gitlab_client: Arc<GitlabApiClient>,
@@ -735,12 +934,20 @@ pub fn create_basic_tool_registry(
     }));
     registry.register_tool(Arc::new(SearchCodeTool {
         gitlab_client: gitlab_client.clone(),
-        config,
+        config: config.clone(),
     }));
     registry.register_tool(Arc::new(GetProjectByPathTool {
         gitlab_client: gitlab_client.clone(),
     }));
-    registry.register_tool(Arc::new(ListBranchesTool { gitlab_client }));
+    registry.register_tool(Arc::new(ListBranchesTool {
+        gitlab_client: gitlab_client.clone(),
+    }));
+    registry.register_tool(Arc::new(GetFileContentTool {
+        gitlab_client: gitlab_client.clone(),
+    }));
+    registry.register_tool(Arc::new(GetIssueNotesTool {
+        gitlab_client: gitlab_client.clone(),
+    }));
 
     registry
 }
@@ -874,5 +1081,74 @@ mod tests {
         // This is the correct behavior - we only count successful tool executions
         assert_eq!(context.remaining_tool_calls(), 1);
         assert_eq!(context.tool_calls_made, 0);
+    }
+
+    #[test]
+    fn test_all_tools_registered() {
+        // Create dummy dependencies
+        let config = Arc::new(AppSettings::default());
+        let gitlab_client =
+            Arc::new(GitlabApiClient::new(config.clone()).expect("Failed to create client"));
+
+        let registry = create_basic_tool_registry(gitlab_client, config);
+        let specs = registry.get_tool_specs();
+
+        // We expect 7 tools:
+        // 1. GetIssueDetailsTool
+        // 2. GetMergeRequestDetailsTool
+        // 3. SearchCodeTool
+        // 4. GetProjectByPathTool
+        // 5. ListBranchesTool
+        // 6. GetFileContentTool
+        // 7. GetIssueNotesTool
+        assert_eq!(specs.len(), 7);
+
+        // Verify specific tools are present
+        let tool_names: Vec<String> = specs.iter().map(|t| t.function.name.clone()).collect();
+        assert!(tool_names.contains(&"get_file_content".to_string()));
+        assert!(tool_names.contains(&"get_issue_notes".to_string()));
+    }
+
+    #[test]
+    fn test_get_file_content_tool_definition() {
+        let config = Arc::new(AppSettings::default());
+        let gitlab_client =
+            Arc::new(GitlabApiClient::new(config.clone()).expect("Failed to create client"));
+        let tool = GetFileContentTool { gitlab_client };
+
+        assert_eq!(tool.name(), "get_file_content");
+        assert!(tool
+            .description()
+            .contains("Get the content of a file from a GitLab repository"));
+
+        let params = tool.parameters().unwrap();
+        let properties = params.get("properties").unwrap();
+        assert!(properties.get("project_id").is_some());
+        assert!(properties.get("file_path").is_some());
+        assert!(properties.get("ref").is_some());
+
+        let required = params.get("required").unwrap().as_array().unwrap();
+        assert!(required.contains(&serde_json::json!("project_id")));
+        assert!(required.contains(&serde_json::json!("file_path")));
+    }
+
+    #[test]
+    fn test_get_issue_notes_tool_definition() {
+        let config = Arc::new(AppSettings::default());
+        let gitlab_client =
+            Arc::new(GitlabApiClient::new(config.clone()).expect("Failed to create client"));
+        let tool = GetIssueNotesTool { gitlab_client };
+
+        assert_eq!(tool.name(), "get_issue_notes");
+        assert!(tool.description().contains("Get the comments (notes)"));
+
+        let params = tool.parameters().unwrap();
+        let properties = params.get("properties").unwrap();
+        assert!(properties.get("project_id").is_some());
+        assert!(properties.get("issue_iid").is_some());
+
+        let required = params.get("required").unwrap().as_array().unwrap();
+        assert!(required.contains(&serde_json::json!("project_id")));
+        assert!(required.contains(&serde_json::json!("issue_iid")));
     }
 }

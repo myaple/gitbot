@@ -96,7 +96,7 @@ impl RepoContextExtractor {
     ) -> Result<Option<String>> {
         match self
             .gitlab_client
-            .get_file_content(project_id, file_path)
+            .get_file_content(project_id, file_path, None)
             .await
         {
             Ok(file) => Ok(file.content),
@@ -731,7 +731,7 @@ impl RepoContextExtractor {
         for (file_path, _path_score) in top_files {
             match self
                 .gitlab_client
-                .get_file_content(project.id, &file_path)
+                .get_file_content(project.id, &file_path, None)
                 .await
             {
                 Ok(mut file) => {

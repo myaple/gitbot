@@ -512,18 +512,20 @@ impl GitlabApiClient {
     }
 
     /// Get file content from repository
-    #[instrument(skip(self), fields(project_id, file_path))]
+    #[instrument(skip(self), fields(project_id, file_path, ref_name))]
     pub async fn get_file_content(
         &self,
         project_id: i64,
         file_path: &str,
+        ref_name: Option<&str>,
     ) -> Result<GitlabFile, GitlabError> {
         let path = format!(
             "/api/v4/projects/{}/repository/files/{}",
             project_id,
             encode(file_path)
         );
-        let ref_str = self.settings.default_branch.as_str();
+        let default_ref = self.settings.default_branch.as_str();
+        let ref_str = ref_name.unwrap_or(default_ref);
         let query = &[("ref", ref_str)];
 
         let mut file: GitlabFile = self
