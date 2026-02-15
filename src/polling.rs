@@ -138,20 +138,72 @@ impl PollingService {
             effective_timestamp, self.config.max_age_hours
         );
 
-        // Create tasks for polling issues and merge requests in parallel
-        let issues_task = {
+        // Determine fetch timestamp for recent issues (covering mentions and triage)
+        let fetch_recent_ts = if self.triage_service.is_some() {
+            let triage_lookback_seconds = self.config.triage_lookback_hours * 3600;
+            let triage_cutoff = now.saturating_sub(triage_lookback_seconds);
+            std::cmp::min(effective_timestamp, triage_cutoff)
+        } else {
+            effective_timestamp
+        };
+
+        // Fetch issues covering both mentions and triage needs
+        let recent_issues = match self
+            .gitlab_client
+            .get_issues(project_id, fetch_recent_ts)
+            .await
+        {
+            Ok(issues) => issues,
+            Err(e) => {
+                error!(
+                    "Failed to fetch recent issues for project {}: {}",
+                    project_id, e
+                );
+                Vec::new()
+            }
+        };
+
+        // Filter for mentions: update >= effective_timestamp
+        let mention_issues: Vec<GitlabIssue> = recent_issues
+            .iter()
+            .filter(|i| match DateTime::parse_from_rfc3339(&i.updated_at) {
+                Ok(dt) => dt.timestamp() as u64 >= effective_timestamp,
+                Err(_) => false,
+            })
+            .cloned()
+            .collect();
+
+        // Filter for triage: open issues
+        let open_recent_issues: Vec<GitlabIssue> = recent_issues
+            .iter()
+            .filter(|i| i.state == "opened")
+            .cloned()
+            .collect();
+
+        // Start task for processing mentions
+        let mentions_task = {
             let self_clone = self.clone();
             let project_clone = project.clone();
+            let mention_issues_clone = mention_issues;
             tokio::spawn(async move {
                 if let Err(e) = self_clone
-                    .poll_issues(project_id, effective_timestamp, &project_clone)
+                    .process_issues_for_mentions(
+                        project_id,
+                        &mention_issues_clone,
+                        effective_timestamp,
+                        &project_clone,
+                    )
                     .await
                 {
-                    error!("Error polling issues for project {}: {}", project_id, e);
+                    error!(
+                        "Error processing mentions for project {}: {}",
+                        project_id, e
+                    );
                 }
             })
         };
 
+        // Start task for polling merge requests
         let mrs_task = {
             let self_clone = self.clone();
             let project_clone = project.clone();
@@ -168,24 +220,39 @@ impl PollingService {
             })
         };
 
-        // Wait for both tasks to complete
-        if let Err(e) = issues_task.await {
-            error!("Task join error for issues polling: {}", e);
-        }
+        // Fetch old issues for stale check (since 0)
+        // We fetch separately because "sort=asc" means we get OLDEST updated issues with 0,
+        // but recent ones with fetch_recent_ts.
+        let stale_issues = match self.gitlab_client.get_issues(project_id, 0).await {
+            Ok(issues) => issues,
+            Err(e) => {
+                error!(
+                    "Failed to fetch issues for stale check for project {}: {}",
+                    project_id, e
+                );
+                Vec::new()
+            }
+        };
 
-        if let Err(e) = mrs_task.await {
-            error!("Task join error for merge requests polling: {}", e);
-        }
+        let open_stale_issues: Vec<GitlabIssue> = stale_issues
+            .into_iter()
+            .filter(|i| i.state == "opened")
+            .collect();
 
         // Task for checking stale issues
         let stale_check_task = {
-            let self_clone = self.clone();
-            let project_id_clone = project_id; // project_id is already i64
-            let gitlab_client_clone = self_clone.gitlab_client.clone();
-            let config_clone = self_clone.config.clone();
+            let project_id_clone = project_id;
+            let gitlab_client_clone = self.gitlab_client.clone();
+            let config_clone = self.config.clone();
+            let open_stale_issues_clone = open_stale_issues;
             tokio::spawn(async move {
-                if let Err(e) =
-                    check_stale_issues(project_id_clone, gitlab_client_clone, config_clone).await
+                if let Err(e) = check_stale_issues(
+                    project_id_clone,
+                    gitlab_client_clone,
+                    config_clone,
+                    &open_stale_issues_clone,
+                )
+                .await
                 {
                     error!(
                         "Error checking stale issues for project {}: {}",
@@ -195,49 +262,44 @@ impl PollingService {
             })
         };
 
+        // Task for triaging unlabeled issues
+        let triage_task = if let Some(triage) = &self.triage_service {
+            let triage_clone = triage.clone();
+            let project_id_clone = project_id;
+            let config_clone = self.config.clone();
+            let open_recent_issues_clone = open_recent_issues;
+
+            Some(tokio::spawn(async move {
+                if let Err(e) = triage_unlabeled_issues(
+                    &triage_clone,
+                    project_id_clone,
+                    &open_recent_issues_clone,
+                    config_clone.triage_lookback_hours,
+                )
+                .await
+                {
+                    error!(
+                        "Error triaging unlabeled issues for project {}: {}",
+                        project_id_clone, e
+                    );
+                }
+            }))
+        } else {
+            None
+        };
+
+        // Wait for all tasks
+        if let Err(e) = mentions_task.await {
+            error!("Task join error for mentions processing: {}", e);
+        }
+        if let Err(e) = mrs_task.await {
+            error!("Task join error for merge requests polling: {}", e);
+        }
         if let Err(e) = stale_check_task.await {
             error!("Task join error for stale issue checking: {}", e);
         }
-
-        // Task for triaging unlabeled issues (if triage service is enabled)
-        if let Some(triage) = &self.triage_service {
-            let triage_clone = triage.clone();
-            let project_id_clone = project_id;
-            let gitlab_client_clone = self.gitlab_client.clone();
-            let config_clone = self.config.clone();
-            let triage_task = tokio::spawn(async move {
-                // Fetch recent issues for triage
-                match gitlab_client_clone.get_issues(project_id_clone, 0).await {
-                    Ok(all_issues) => {
-                        let open_issues: Vec<_> = all_issues
-                            .into_iter()
-                            .filter(|issue| issue.state == "opened")
-                            .collect();
-
-                        if let Err(e) = triage_unlabeled_issues(
-                            &triage_clone,
-                            project_id_clone,
-                            open_issues,
-                            config_clone.triage_lookback_hours,
-                        )
-                        .await
-                        {
-                            error!(
-                                "Error triaging unlabeled issues for project {}: {}",
-                                project_id_clone, e
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        error!(
-                            "Failed to fetch issues for triage for project {}: {}",
-                            project_id_clone, e
-                        );
-                    }
-                }
-            });
-
-            if let Err(e) = triage_task.await {
+        if let Some(task) = triage_task {
+            if let Err(e) = task.await {
                 error!("Task join error for issue triage: {}", e);
             }
         }
@@ -245,22 +307,21 @@ impl PollingService {
         Ok(())
     }
 
-    async fn poll_issues(
+    async fn process_issues_for_mentions(
         &self,
         project_id: i64,
+        issues: &[GitlabIssue],
         since_timestamp: u64,
         project: &GitlabProject,
     ) -> Result<()> {
-        debug!("Polling issues for project ID: {}", project_id);
-
-        // Get issues updated since last check
-        let issues = self
-            .gitlab_client
-            .get_issues(project_id, since_timestamp)
-            .await?;
+        debug!(
+            "Processing {} issues for mentions for project ID: {}",
+            issues.len(),
+            project_id
+        );
 
         // Process issues in parallel with controlled concurrency
-        let _issue_results: Vec<_> = stream::iter(issues)
+        let _issue_results: Vec<_> = stream::iter(issues.iter().cloned())
             .map(|issue| {
                 let gitlab_client = self.gitlab_client.clone();
                 let config = self.config.clone();
@@ -463,20 +524,15 @@ pub(crate) async fn check_stale_issues(
     project_id: i64,
     gitlab_client: Arc<GitlabApiClient>,
     config: Arc<AppSettings>,
+    issues: &[GitlabIssue],
 ) -> Result<()> {
     info!("Checking for stale issues in project ID: {}", project_id);
     let stale_label_name = "stale"; // Define the label name
 
-    // Fetch all issues (or a broad set by passing 0 as since_timestamp)
-    // We will filter for "opened" state client-side.
-    let all_issues = gitlab_client.get_issues(project_id, 0).await?;
-    let open_issues: Vec<_> = all_issues
-        .into_iter()
-        .filter(|issue| issue.state == "opened")
-        .collect();
+    // Issues are filtered by the caller to be only "opened" state issues
 
     // Process issues in parallel with controlled concurrency
-    let _stale_results: Vec<_> = stream::iter(open_issues)
+    let _stale_results: Vec<_> = stream::iter(issues.iter().cloned())
         .map(|issue| {
             let gitlab_client = gitlab_client.clone();
             let config = config.clone();
