@@ -2,6 +2,9 @@ pub mod config_tests;
 pub mod file_indexer_search_test;
 pub mod file_indexer_simple_test;
 pub mod file_indexer_test;
+#[cfg(test)]
+pub mod gitlab_cache_test;
+#[cfg(test)]
 pub mod gitlab_tests;
 pub mod handlers_tests;
 pub mod openai_tests;

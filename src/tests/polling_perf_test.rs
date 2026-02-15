@@ -1,13 +1,15 @@
 #[cfg(test)]
 mod tests {
     use crate::config::AppSettings;
+    use crate::file_indexer::FileIndexManager;
     use crate::gitlab::GitlabApiClient;
-    use crate::models::{GitlabIssue, GitlabUser};
+    use crate::models::{GitlabIssue, GitlabProject, GitlabUser};
     use crate::polling::*;
     use chrono::{Duration as ChronoDuration, Utc};
     use mockito::Matcher;
     use serde_json::json;
     use std::sync::Arc;
+    use std::time::SystemTime;
 
     const TEST_BOT_USERNAME: &str = "test_bot";
     const STALE_LABEL: &str = "stale";
@@ -50,6 +52,14 @@ mod tests {
         }
     }
 
+    fn create_project() -> GitlabProject {
+        GitlabProject {
+            id: PROJECT_ID,
+            path_with_namespace: "org/repo1".to_string(),
+            web_url: "http://gitlab.com/org/repo1".to_string(),
+        }
+    }
+
     #[tokio::test]
     async fn test_stale_issue_fetches_notes_baseline() {
         let mut server = mockito::Server::new_async().await;
@@ -60,16 +70,6 @@ mod tests {
         let old_update = (Utc::now() - ChronoDuration::days(35)).to_rfc3339();
         let issue1 = create_issue(1, &old_update, vec![], "opened");
 
-        let _m_issues = server
-            .mock(
-                "GET",
-                Matcher::Regex(r"/api/v4/projects/1/issues\?.+".to_string()),
-            )
-            .with_status(200)
-            .with_body(json!([issue1]).to_string())
-            .create_async()
-            .await;
-
         // In the unoptimized code, this SHOULD be called.
         let m_notes = server
             .mock(
@@ -78,7 +78,7 @@ mod tests {
             )
             .with_status(200)
             .with_body(json!([]).to_string())
-            .expect(0) // Expect 0 calls after optimization
+            .expect(0) // Expect 0 calls after optimization (issue date is stale enough)
             .create_async()
             .await;
 
@@ -92,7 +92,7 @@ mod tests {
             .create_async()
             .await;
 
-        check_stale_issues(PROJECT_ID, client, config)
+        check_stale_issues(PROJECT_ID, client, config, &[issue1])
             .await
             .unwrap();
 
@@ -100,21 +100,56 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_check_stale_issues_uses_filtered_api() {
+    async fn test_poll_repository_optimizes_stale_fetch() {
         let mut server = mockito::Server::new_async().await;
-        // Use 30 days stale threshold
         let config = test_config(30, TEST_BOT_USERNAME, server.url());
         let client = Arc::new(GitlabApiClient::new(config.clone()).unwrap());
+        let file_indexer = Arc::new(FileIndexManager::new(client.clone(), 3600));
+        let polling_service = PollingService::new(client.clone(), config.clone(), file_indexer, None);
 
-        // This mock expects a request WITH `state=opened`
-        let _m = server
-            .mock("GET", Matcher::Regex(r"^/api/v4/projects/1/issues.*state=opened.*".to_string()))
+        // 1. Mock get_project_by_path
+        let _m_project = server
+            .mock("GET", "/api/v4/projects/org%2Frepo1")
+            .with_status(200)
+            .with_body(json!(create_project()).to_string())
+            .create_async()
+            .await;
+
+        // 2. Mock get_issues (recent issues for mentions/triage)
+        // This should match updated_after=20... (current year)
+        // The service logic uses min(since, max_age) so if we pass 'now', it uses 'now - max_age' (default 24h?)
+        // So updated_after will be 24h ago, which is recent (202X).
+        let _m_recent_issues = server
+            .mock("GET", Matcher::Regex(r"^/api/v4/projects/1/issues\?.*updated_after=2.*".to_string()))
             .with_status(200)
             .with_body("[]")
             .create_async()
             .await;
 
-        let result = check_stale_issues(PROJECT_ID, client, config).await;
-        assert!(result.is_ok());
+        // 3. Mock get_opened_issues (stale check) - THIS IS THE OPTIMIZATION
+        // Must match updated_after=1970... AND state=opened
+        let m_stale_fetch = server
+            .mock("GET", Matcher::Regex(r"^/api/v4/projects/1/issues.*updated_after=1970.*state=opened.*".to_string()))
+            .with_status(200)
+            .with_body("[]")
+            .expect(1)
+            .create_async()
+            .await;
+
+        // 4. Mock get_merge_requests
+        let _m_mrs = server
+            .mock("GET", Matcher::Regex(r"^/api/v4/projects/1/merge_requests\?.*".to_string()))
+            .with_status(200)
+            .with_body("[]")
+            .create_async()
+            .await;
+
+        let now = SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        polling_service.poll_repository("org/repo1", now).await.unwrap();
+
+        m_stale_fetch.assert_async().await;
     }
 }

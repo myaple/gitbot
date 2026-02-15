@@ -1,9 +1,11 @@
 use chrono::{DateTime, TimeZone, Utc};
+use dashmap::DashMap;
 use reqwest::{header, Client, Method, StatusCode};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::fmt::Debug;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use thiserror::Error;
 use tracing::{debug, error, instrument, warn};
 use url::Url;
@@ -28,12 +30,15 @@ pub enum GitlabError {
     Deserialization(reqwest::Error),
 }
 
+const REPO_TREE_CACHE_TTL: Duration = Duration::from_secs(300); // 5 minutes
+
 #[derive(Debug)]
 pub struct GitlabApiClient {
     client: Client,
     gitlab_url: Url,
     private_token: String,
     settings: Arc<AppSettings>,
+    repo_tree_cache: DashMap<i64, (Vec<String>, Instant)>,
 }
 
 impl GitlabApiClient {
@@ -77,6 +82,7 @@ impl GitlabApiClient {
             gitlab_url,
             private_token: settings.gitlab_token.clone(),
             settings,
+            repo_tree_cache: DashMap::new(),
         })
     }
 
@@ -457,6 +463,18 @@ impl GitlabApiClient {
     /// Get the repository file tree with pagination
     #[instrument(skip(self), fields(project_id))]
     pub async fn get_repository_tree(&self, project_id: i64) -> Result<Vec<String>, GitlabError> {
+        // Check cache first
+        if let Some(entry) = self.repo_tree_cache.get(&project_id) {
+            let (files, timestamp) = entry.value();
+            if timestamp.elapsed() < REPO_TREE_CACHE_TTL {
+                debug!(
+                    "Returning cached repository tree for project {}",
+                    project_id
+                );
+                return Ok(files.clone());
+            }
+        }
+
         let path = format!("/api/v4/projects/{project_id}/repository/tree");
         let per_page = 100;
 
@@ -531,11 +549,15 @@ impl GitlabApiClient {
         );
 
         // Extract file paths
-        let file_paths = all_items
+        let file_paths: Vec<String> = all_items
             .into_iter()
             .filter(|item| item["type"].as_str().unwrap_or("") == "blob") // Only include files, not directories
             .filter_map(|item| item["path"].as_str().map(|s| s.to_string()))
             .collect();
+
+        // Update cache
+        self.repo_tree_cache
+            .insert(project_id, (file_paths.clone(), Instant::now()));
 
         Ok(file_paths)
     }
