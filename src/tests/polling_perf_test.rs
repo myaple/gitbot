@@ -60,16 +60,6 @@ mod tests {
         let old_update = (Utc::now() - ChronoDuration::days(35)).to_rfc3339();
         let issue1 = create_issue(1, &old_update, vec![], "opened");
 
-        let _m_issues = server
-            .mock(
-                "GET",
-                Matcher::Regex(r"/api/v4/projects/1/issues\?.+".to_string()),
-            )
-            .with_status(200)
-            .with_body(json!([issue1]).to_string())
-            .create_async()
-            .await;
-
         // In the unoptimized code, this SHOULD be called.
         let m_notes = server
             .mock(
@@ -92,7 +82,7 @@ mod tests {
             .create_async()
             .await;
 
-        check_stale_issues(PROJECT_ID, client, config)
+        check_stale_issues(PROJECT_ID, client, config, &[issue1])
             .await
             .unwrap();
 

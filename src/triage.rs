@@ -388,7 +388,7 @@ impl TriageService {
 pub async fn triage_unlabeled_issues(
     triage_service: &TriageService,
     project_id: i64,
-    issues: Vec<GitlabIssue>,
+    issues: &[GitlabIssue],
     lookback_hours: u64,
 ) -> Result<usize> {
     let now = std::time::SystemTime::now()
@@ -399,7 +399,7 @@ pub async fn triage_unlabeled_issues(
     let cutoff_timestamp = now.saturating_sub(lookback_hours * 3600);
 
     let unlabeled_issues: Vec<_> = issues
-        .into_iter()
+        .iter()
         .filter(|issue| issue.labels.is_empty())
         .filter(|issue| {
             // Parse created_at timestamp and check if it's within the lookback window
@@ -433,7 +433,7 @@ pub async fn triage_unlabeled_issues(
     let mut labeled_count = 0;
 
     // Process issues in parallel with controlled concurrency
-    let results: Vec<_> = stream::iter(unlabeled_issues)
+    let results: Vec<_> = stream::iter(unlabeled_issues.into_iter().cloned())
         .map(|issue| {
             let triage = triage_service.clone();
             async move {

@@ -13,8 +13,8 @@ use crate::gitlab::GitlabApiClient;
 use crate::handlers::process_mention;
 use crate::mention_cache::MentionCache;
 use crate::models::{
-    GitlabMergeRequest, GitlabNoteAttributes, GitlabNoteEvent, GitlabNoteObject, GitlabProject,
-    GitlabUser,
+    GitlabIssue, GitlabMergeRequest, GitlabNoteAttributes, GitlabNoteEvent, GitlabNoteObject,
+    GitlabProject, GitlabUser,
 };
 use crate::triage::{triage_unlabeled_issues, TriageService};
 
@@ -177,15 +177,39 @@ impl PollingService {
             error!("Task join error for merge requests polling: {}", e);
         }
 
+        // Fetch old issues for stale check (since 0)
+        // We fetch separately because "sort=asc" means we get OLDEST updated issues with 0,
+        // but recent ones with fetch_recent_ts.
+        let stale_issues = match self.gitlab_client.get_issues(project_id, 0).await {
+            Ok(issues) => issues,
+            Err(e) => {
+                error!(
+                    "Failed to fetch issues for stale check for project {}: {}",
+                    project_id, e
+                );
+                Vec::new()
+            }
+        };
+
+        let open_stale_issues: Vec<GitlabIssue> = stale_issues
+            .into_iter()
+            .filter(|i| i.state == "opened")
+            .collect();
+
         // Task for checking stale issues
         let stale_check_task = {
-            let self_clone = self.clone();
             let project_id_clone = project_id; // project_id is already i64
-            let gitlab_client_clone = self_clone.gitlab_client.clone();
-            let config_clone = self_clone.config.clone();
+            let gitlab_client_clone = self.gitlab_client.clone();
+            let config_clone = self.config.clone();
+            let open_stale_issues_clone = open_stale_issues;
             tokio::spawn(async move {
-                if let Err(e) =
-                    check_stale_issues(project_id_clone, gitlab_client_clone, config_clone).await
+                if let Err(e) = check_stale_issues(
+                    project_id_clone,
+                    gitlab_client_clone,
+                    config_clone,
+                    &open_stale_issues_clone,
+                )
+                .await
                 {
                     error!(
                         "Error checking stale issues for project {}: {}",
@@ -198,6 +222,30 @@ impl PollingService {
         if let Err(e) = stale_check_task.await {
             error!("Task join error for stale issue checking: {}", e);
         }
+
+        // Determine fetch timestamp for recent issues (covering mentions and triage)
+        // We use effective_timestamp directly for mentions now via GraphQL,
+        // but if we were fetching conventionally we might need this.
+        // For now, let's keep it but mark unused to suppress warning if needed,
+        // or actually, we are using effective_timestamp for mentions (GraphQL)
+        // and 0 for stale. Triage needs its own separate fetch if it relies on a specific lookback.
+        // The original logic fetched once for all.
+        // With the split (GraphQL for mentions, separate fetch for stale),
+        // we might still need a conventional fetch if triage is enabled.
+
+        let fetch_recent_ts = if self.triage_service.is_some() {
+            let triage_lookback_seconds = self.config.triage_lookback_hours * 3600;
+            let triage_cutoff = now.saturating_sub(triage_lookback_seconds);
+            std::cmp::min(effective_timestamp, triage_cutoff)
+        } else {
+            effective_timestamp
+        };
+
+        // Fetch issues covering both mentions and triage needs
+        // Note: For mentions we can use GraphQL optimization, but for triage we need open issues
+        // We'll stick to the original triage flow here for simplicity in this merge, or adapt.
+        // The original code used poll_issues for mentions and a separate triage task.
+        // Let's keep triage separate for now as per original design, but fix the polling service structure.
 
         // Task for triaging unlabeled issues (if triage service is enabled)
         if let Some(triage) = &self.triage_service {
@@ -217,7 +265,7 @@ impl PollingService {
                         if let Err(e) = triage_unlabeled_issues(
                             &triage_clone,
                             project_id_clone,
-                            open_issues,
+                            &open_issues,
                             config_clone.triage_lookback_hours,
                         )
                         .await
@@ -479,148 +527,176 @@ impl PollingService {
     }
 }
 
+async fn determine_last_activity(
+    project_id: i64,
+    issue: &GitlabIssue,
+    gitlab_client: &GitlabApiClient,
+    config: &AppSettings,
+) -> Option<DateTime<Utc>> {
+    let mut last_activity_ts: Option<DateTime<Utc>> = None;
+
+    // Start with the issue's own updated_at timestamp
+    match DateTime::parse_from_rfc3339(&issue.updated_at) {
+        Ok(ts) => last_activity_ts = Some(ts.with_timezone(&Utc)),
+        Err(e) => {
+            warn!(
+                "Failed to parse issue updated_at timestamp for issue #{}: {}. Error: {}",
+                issue.iid, issue.updated_at, e
+            );
+        }
+    }
+
+    // Optimization: If the issue itself is already stale based on updated_at,
+    // and the last update was older than our threshold, we can skip fetching notes.
+    let days_stale = config.stale_issue_days;
+    let staleness_threshold = ChronoDuration::days(days_stale as i64);
+    let now = Utc::now();
+    let threshold_ts = now - staleness_threshold;
+
+    let is_stale_by_issue_date = if let Some(last_ts) = last_activity_ts {
+        last_ts < threshold_ts
+    } else {
+        false // conservative: if we can't parse date, fetch notes
+    };
+
+    // Fetch notes only if issue is not already clearly stale
+    let notes = if is_stale_by_issue_date {
+        debug!(
+            "Issue #{} is stale based on updated_at. Skipping note fetch.",
+            issue.iid
+        );
+        Vec::new()
+    } else {
+        // Fetch all notes for the issue (since_timestamp = 0 to get all)
+        match gitlab_client
+            .get_issue_notes(project_id, issue.iid, 0)
+            .await
+        {
+            Ok(n) => n,
+            Err(e) => {
+                error!(
+                    "Failed to fetch notes for issue #{}: {}. Skipping note processing for this issue.",
+                    issue.iid, e
+                );
+                Vec::new() // Process with no notes if fetching failed
+            }
+        }
+    };
+
+    for note in notes {
+        if note.author.username == config.bot_username {
+            continue; // Skip notes from the bot itself
+        }
+        match DateTime::parse_from_rfc3339(&note.updated_at) {
+            Ok(note_ts_rfc3339) => {
+                let note_ts = note_ts_rfc3339.with_timezone(&Utc);
+                if let Some(current_max_ts) = last_activity_ts {
+                    if note_ts > current_max_ts {
+                        last_activity_ts = Some(note_ts);
+                    }
+                } else {
+                    last_activity_ts = Some(note_ts);
+                }
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to parse note updated_at for note #{} on issue #{}: {}. Error: {}",
+                    note.id, issue.iid, note.updated_at, e
+                );
+            }
+        }
+    }
+
+    last_activity_ts
+}
+
+async fn manage_stale_label(
+    project_id: i64,
+    issue: &GitlabIssue,
+    is_stale: bool,
+    gitlab_client: &GitlabApiClient,
+    stale_label_name: &str,
+) -> Result<()> {
+    if is_stale {
+        // Issue is stale
+        if !issue.labels.iter().any(|l| l == stale_label_name) {
+            info!(
+                "Issue #{} is stale and not labeled. Adding '{}' label.",
+                issue.iid, stale_label_name
+            );
+            if let Err(e) = gitlab_client
+                .add_issue_label(project_id, issue.iid, stale_label_name)
+                .await
+            {
+                error!(
+                    "Failed to add '{}' label to issue #{}: {}",
+                    stale_label_name, issue.iid, e
+                );
+            }
+        }
+    } else {
+        // Issue is not stale
+        if issue.labels.iter().any(|l| l == stale_label_name) {
+            info!(
+                "Issue #{} is not stale but has '{}' label. Removing label.",
+                issue.iid, stale_label_name
+            );
+            if let Err(e) = gitlab_client
+                .remove_issue_label(project_id, issue.iid, stale_label_name)
+                .await
+            {
+                error!(
+                    "Failed to remove '{}' label from issue #{}: {}",
+                    stale_label_name, issue.iid, e
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 pub(crate) async fn check_stale_issues(
     project_id: i64,
     gitlab_client: Arc<GitlabApiClient>,
     config: Arc<AppSettings>,
+    issues: &[GitlabIssue],
 ) -> Result<()> {
     info!("Checking for stale issues in project ID: {}", project_id);
     let stale_label_name = "stale"; // Define the label name
 
-    // Fetch all issues (or a broad set by passing 0 as since_timestamp)
-    // We will filter for "opened" state client-side.
-    let all_issues = gitlab_client.get_issues(project_id, 0).await?;
-    let open_issues: Vec<_> = all_issues
-        .into_iter()
-        .filter(|issue| issue.state == "opened")
-        .collect();
+    // Issues are filtered by the caller to be only "opened" state issues
 
     // Process issues in parallel with controlled concurrency
-    let _stale_results: Vec<_> = stream::iter(open_issues)
+    let _stale_results: Vec<_> = stream::iter(issues.iter().cloned())
         .map(|issue| {
             let gitlab_client = gitlab_client.clone();
             let config = config.clone();
             async move {
                 debug!("Processing issue #{} for staleness", issue.iid);
 
-                let mut last_activity_ts: Option<DateTime<Utc>> = None;
-
-                // Start with the issue's own updated_at timestamp
-                match DateTime::parse_from_rfc3339(&issue.updated_at) {
-                    Ok(ts) => last_activity_ts = Some(ts.with_timezone(&Utc)),
-                    Err(e) => {
-                        warn!(
-                            "Failed to parse issue updated_at timestamp for issue #{}: {}. Error: {}",
-                            issue.iid, issue.updated_at, e
-                        );
-                        // Continue, but this issue might not be accurately processed for staleness
-                        // if its own timestamp is the only one or the latest.
-                    }
-                }
-
-                // Optimization: If the issue itself is already stale based on updated_at,
-                // and the last update was older than our threshold, we can skip fetching notes.
-                // Notes would only update the timestamp if they are NEWER than the issue updated_at,
-                // which generally shouldn't happen (issue updated_at includes note updates).
-                // Even if it did, if the issue hasn't been updated in X days, no note could have been added in X days.
-                let days_stale = config.stale_issue_days;
-                let staleness_threshold = ChronoDuration::days(days_stale as i64);
-                let now = Utc::now();
-                let threshold_ts = now - staleness_threshold;
-
-                let is_stale_by_issue_date = if let Some(last_ts) = last_activity_ts {
-                    last_ts < threshold_ts
-                } else {
-                    false // conservative: if we can't parse date, fetch notes
-                };
-
-                // Fetch notes only if issue is not already clearly stale
-                let notes = if is_stale_by_issue_date {
-                    debug!(
-                        "Issue #{} is stale based on updated_at. Skipping note fetch.",
-                        issue.iid
-                    );
-                    Vec::new()
-                } else {
-                    // Fetch all notes for the issue (since_timestamp = 0 to get all)
-                    match gitlab_client
-                        .get_issue_notes(project_id, issue.iid, 0)
-                        .await
-                    {
-                        Ok(n) => n,
-                        Err(e) => {
-                            error!(
-                                "Failed to fetch notes for issue #{}: {}. Skipping note processing for this issue.",
-                                issue.iid, e
-                            );
-                            Vec::new() // Process with no notes if fetching failed
-                        }
-                    }
-                };
-
-                for note in notes {
-                    if note.author.username == config.bot_username {
-                        continue; // Skip notes from the bot itself
-                    }
-                    match DateTime::parse_from_rfc3339(&note.updated_at) {
-                        Ok(note_ts_rfc3339) => {
-                            let note_ts = note_ts_rfc3339.with_timezone(&Utc);
-                            if let Some(current_max_ts) = last_activity_ts {
-                                if note_ts > current_max_ts {
-                                    last_activity_ts = Some(note_ts);
-                                }
-                            } else {
-                                last_activity_ts = Some(note_ts);
-                            }
-                        }
-                        Err(e) => {
-                            warn!(
-                                "Failed to parse note updated_at for note #{} on issue #{}: {}. Error: {}",
-                                note.id, issue.iid, note.updated_at, e
-                            );
-                        }
-                    }
-                }
+                let last_activity_ts =
+                    determine_last_activity(project_id, &issue, &gitlab_client, &config).await;
 
                 if let Some(last_active_date) = last_activity_ts {
                     let now = Utc::now();
                     let days_stale = config.stale_issue_days;
                     let staleness_threshold = ChronoDuration::days(days_stale as i64);
 
-                    if now - last_active_date > staleness_threshold {
-                        // Issue is stale
-                        if !issue.labels.iter().any(|l| l == stale_label_name) {
-                            info!(
-                                "Issue #{} is stale and not labeled. Adding '{}' label.",
-                                issue.iid, stale_label_name
-                            );
-                            if let Err(e) = gitlab_client
-                                .add_issue_label(project_id, issue.iid, stale_label_name)
-                                .await
-                            {
-                                error!(
-                                    "Failed to add '{}' label to issue #{}: {}",
-                                    stale_label_name, issue.iid, e
-                                );
-                            }
-                        }
-                    } else {
-                        // Issue is not stale
-                        if issue.labels.iter().any(|l| l == stale_label_name) {
-                            info!(
-                                "Issue #{} is not stale but has '{}' label. Removing label.",
-                                issue.iid, stale_label_name
-                            );
-                            if let Err(e) = gitlab_client
-                                .remove_issue_label(project_id, issue.iid, stale_label_name)
-                                .await
-                            {
-                                error!(
-                                    "Failed to remove '{}' label from issue #{}: {}",
-                                    stale_label_name, issue.iid, e
-                                );
-                            }
-                        }
+                    let is_stale = now - last_active_date > staleness_threshold;
+
+                    if let Err(e) = manage_stale_label(
+                        project_id,
+                        &issue,
+                        is_stale,
+                        &gitlab_client,
+                        stale_label_name,
+                    )
+                    .await
+                    {
+                        error!(
+                            "Failed to manage stale label for issue #{}: {}",
+                            issue.iid, e
+                        );
                     }
                 } else {
                     warn!(
