@@ -4,6 +4,8 @@
 //! Tests are organized by the module they test.
 
 #[cfg(test)]
+pub mod agents_md_perf_test;
+#[cfg(test)]
 pub mod config_tests;
 #[cfg(test)]
 pub mod file_indexer_search_test;
@@ -27,5 +29,3 @@ pub mod polling_test;
 pub mod polling_tests;
 #[cfg(test)]
 pub mod repo_context_tests;
-#[cfg(test)]
-pub mod agents_md_perf_test;

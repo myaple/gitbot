@@ -73,7 +73,10 @@ mod tests {
 
         let start = Instant::now();
         for _ in 0..100 {
-            let _ = extractor.get_agents_md_content(&project, None).await.unwrap();
+            let _ = extractor
+                .get_agents_md_content(&project, None)
+                .await
+                .unwrap();
         }
         let duration = start.elapsed();
 
