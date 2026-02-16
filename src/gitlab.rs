@@ -217,11 +217,12 @@ impl GitlabApiClient {
             .await
     }
 
-    #[instrument(skip(self), fields(project_id, since_timestamp))]
+    #[instrument(skip(self), fields(project_id, since_timestamp, state))]
     pub async fn get_issues(
         &self,
         project_id: i64,
         since_timestamp: u64,
+        state: Option<&str>,
     ) -> Result<Vec<GitlabIssue>, GitlabError> {
         let path = format!("/api/v4/projects/{project_id}/issues");
         let dt = DateTime::from_timestamp(since_timestamp as i64, 0).unwrap_or_else(|| {
@@ -231,40 +232,16 @@ impl GitlabApiClient {
         });
         let formatted_timestamp_string = dt.to_rfc3339();
 
-        let query_params_values = [
+        let mut query_params_values = vec![
             ("updated_after", formatted_timestamp_string),
             ("sort", "asc".to_string()),
             ("per_page", "100".to_string()),
         ];
-        let params: Vec<(&str, &str)> = query_params_values
-            .iter()
-            .map(|(k, v)| (*k, v.as_str()))
-            .collect();
 
-        self.send_request(Method::GET, &path, Some(&params), None::<()>)
-            .await
-    }
+        if let Some(s) = state {
+            query_params_values.push(("state", s.to_string()));
+        }
 
-    #[instrument(skip(self), fields(project_id, since_timestamp))]
-    pub async fn get_opened_issues(
-        &self,
-        project_id: i64,
-        since_timestamp: u64,
-    ) -> Result<Vec<GitlabIssue>, GitlabError> {
-        let path = format!("/api/v4/projects/{project_id}/issues");
-        let dt = DateTime::from_timestamp(since_timestamp as i64, 0).unwrap_or_else(|| {
-            Utc.timestamp_opt(0, 0)
-                .single()
-                .expect("Fallback timestamp failed for 0")
-        });
-        let formatted_timestamp_string = dt.to_rfc3339();
-
-        let query_params_values = [
-            ("updated_after", formatted_timestamp_string),
-            ("state", "opened".to_string()),
-            ("sort", "asc".to_string()),
-            ("per_page", "100".to_string()),
-        ];
         let params: Vec<(&str, &str)> = query_params_values
             .iter()
             .map(|(k, v)| (*k, v.as_str()))
@@ -630,28 +607,16 @@ impl GitlabApiClient {
         Ok(changes)
     }
 
-    #[instrument(skip(self), fields(project_id, issue_iid, label_name))]
-    pub async fn add_issue_label(
+    #[instrument(skip(self), fields(project_id, issue_iid, labels))]
+    pub async fn remove_issue_labels(
         &self,
         project_id: i64,
         issue_iid: i64,
-        label_name: &str,
+        labels: &[&str],
     ) -> Result<GitlabIssue, GitlabError> {
         let path = format!("/api/v4/projects/{project_id}/issues/{issue_iid}");
-        let body = serde_json::json!({ "add_labels": label_name });
-        self.send_request(Method::PUT, &path, None, Some(body))
-            .await
-    }
-
-    #[instrument(skip(self), fields(project_id, issue_iid, label_name))]
-    pub async fn remove_issue_label(
-        &self,
-        project_id: i64,
-        issue_iid: i64,
-        label_name: &str,
-    ) -> Result<GitlabIssue, GitlabError> {
-        let path = format!("/api/v4/projects/{project_id}/issues/{issue_iid}");
-        let body = serde_json::json!({ "remove_labels": label_name });
+        let labels_str = labels.join(",");
+        let body = serde_json::json!({ "remove_labels": labels_str });
         self.send_request(Method::PUT, &path, None, Some(body))
             .await
     }

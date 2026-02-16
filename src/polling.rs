@@ -150,7 +150,7 @@ impl PollingService {
         // Fetch issues covering both mentions and triage needs
         let recent_issues = match self
             .gitlab_client
-            .get_issues(project_id, fetch_recent_ts)
+            .get_issues(project_id, fetch_recent_ts, None)
             .await
         {
             Ok(issues) => issues,
@@ -223,8 +223,12 @@ impl PollingService {
         // Fetch old issues for stale check (since 0)
         // We fetch separately because "sort=asc" means we get OLDEST updated issues with 0,
         // but recent ones with fetch_recent_ts.
-        // We use get_opened_issues to filter by state=opened server-side.
-        let open_stale_issues = match self.gitlab_client.get_opened_issues(project_id, 0).await {
+        // We use get_issues with state="opened" to filter by state=opened server-side.
+        let open_stale_issues = match self
+            .gitlab_client
+            .get_issues(project_id, 0, Some("opened"))
+            .await
+        {
             Ok(issues) => issues,
             Err(e) => {
                 error!(
@@ -614,7 +618,7 @@ async fn manage_stale_label(
                 issue.iid, stale_label_name
             );
             if let Err(e) = gitlab_client
-                .add_issue_label(project_id, issue.iid, stale_label_name)
+                .add_issue_labels(project_id, issue.iid, &[stale_label_name])
                 .await
             {
                 error!(
@@ -631,7 +635,7 @@ async fn manage_stale_label(
                 issue.iid, stale_label_name
             );
             if let Err(e) = gitlab_client
-                .remove_issue_label(project_id, issue.iid, stale_label_name)
+                .remove_issue_labels(project_id, issue.iid, &[stale_label_name])
                 .await
             {
                 error!(

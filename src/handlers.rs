@@ -1522,9 +1522,15 @@ async fn extract_issue_details_and_handle_stale(
                     .any(|label| label == "stale")
                 {
                     info!("Issue #{} has 'stale' label and received a comment from user {}. Attempting to remove 'stale' label.", issue_iid, event.user.username);
-                    match gitlab_client.remove_issue_label(project_id, issue_iid, "stale").await {
+                    match gitlab_client
+                        .remove_issue_labels(project_id, issue_iid, &["stale"])
+                        .await
+                    {
                         Ok(_) => info!("Successfully removed 'stale' label from issue #{}", issue_iid),
-                        Err(e) => warn!("Failed to remove 'stale' label from issue #{}: {}. Processing will continue.", issue_iid, e),
+                        Err(e) => warn!(
+                            "Failed to remove 'stale' label from issue #{}: {}. Processing will continue.",
+                            issue_iid, e
+                        ),
                     }
                 }
             }

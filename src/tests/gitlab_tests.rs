@@ -273,7 +273,7 @@ async fn test_get_issues() {
         .create_async()
         .await;
 
-    let issues = client.get_issues(1, 1620000000).await.unwrap();
+    let issues = client.get_issues(1, 1620000000, None).await.unwrap();
     assert_eq!(issues.len(), 2);
     assert_eq!(issues[0].title, "Test Issue 1");
     assert_eq!(issues[0].updated_at, "2023-01-02T12:00:00Z");
@@ -445,7 +445,7 @@ async fn test_get_merge_request_notes() {
 }
 
 #[tokio::test]
-async fn test_add_issue_label_success() {
+async fn test_add_issue_labels_success() {
     let mut server = mockito::Server::new_async().await;
     let base_url = server.url();
     let settings = Arc::new(create_test_settings(base_url));
@@ -481,7 +481,9 @@ async fn test_add_issue_label_success() {
         .create_async()
         .await;
 
-    let result = client.add_issue_label(1, 101, label_to_add).await;
+    let result = client
+        .add_issue_labels(1, 101, &[label_to_add])
+        .await;
 
     mock.assert_async().await;
     assert!(result.is_ok());
@@ -491,7 +493,7 @@ async fn test_add_issue_label_success() {
 }
 
 #[tokio::test]
-async fn test_remove_issue_label_success() {
+async fn test_remove_issue_labels_success() {
     let mut server = mockito::Server::new_async().await;
     let base_url = server.url();
     let settings = Arc::new(create_test_settings(base_url));
@@ -527,7 +529,9 @@ async fn test_remove_issue_label_success() {
         .create_async()
         .await;
 
-    let result = client.remove_issue_label(1, 101, label_to_remove).await;
+    let result = client
+        .remove_issue_labels(1, 101, &[label_to_remove])
+        .await;
 
     mock.assert_async().await;
     assert!(result.is_ok());
@@ -537,7 +541,7 @@ async fn test_remove_issue_label_success() {
 }
 
 #[tokio::test]
-async fn test_add_issue_label_not_found() {
+async fn test_add_issue_labels_not_found() {
     let mut server = mockito::Server::new_async().await;
     let base_url = server.url();
     let settings = Arc::new(create_test_settings(base_url));
@@ -554,7 +558,9 @@ async fn test_add_issue_label_not_found() {
         .create_async()
         .await;
 
-    let result = client.add_issue_label(99, 999, label_to_add).await;
+    let result = client
+        .add_issue_labels(99, 999, &[label_to_add])
+        .await;
     assert!(result.is_err());
     match result.err().unwrap() {
         GitlabError::Api { status, body } => {
@@ -566,7 +572,7 @@ async fn test_add_issue_label_not_found() {
 }
 
 #[tokio::test]
-async fn test_remove_issue_label_not_found() {
+async fn test_remove_issue_labels_not_found() {
     let mut server = mockito::Server::new_async().await;
     let base_url = server.url();
     let settings = Arc::new(create_test_settings(base_url));
@@ -583,7 +589,9 @@ async fn test_remove_issue_label_not_found() {
         .create_async()
         .await;
 
-    let result = client.remove_issue_label(88, 888, label_to_remove).await;
+    let result = client
+        .remove_issue_labels(88, 888, &[label_to_remove])
+        .await;
     assert!(result.is_err());
     match result.err().unwrap() {
         GitlabError::Api { status, body } => {
@@ -1051,7 +1059,7 @@ async fn test_search_files() {
 }
 
 #[tokio::test]
-async fn test_get_opened_issues() {
+async fn test_get_issues_with_state() {
     let mut server = mockito::Server::new_async().await;
     let base_url = server.url();
     let settings = Arc::new(create_test_settings(base_url));
@@ -1073,9 +1081,9 @@ async fn test_get_opened_issues() {
                 "updated_after".into(),
                 "2021-05-03T00:00:00+00:00".into(),
             ),
-            mockito::Matcher::UrlEncoded("state".into(), "opened".into()),
             mockito::Matcher::UrlEncoded("sort".into(), "asc".into()),
             mockito::Matcher::UrlEncoded("per_page".into(), "100".into()),
+            mockito::Matcher::UrlEncoded("state".into(), "opened".into()),
         ]))
         .with_status(200)
         .with_header("content-type", "application/json")
@@ -1083,7 +1091,10 @@ async fn test_get_opened_issues() {
         .create_async()
         .await;
 
-    let issues = client.get_opened_issues(1, 1620000000).await.unwrap();
+    let issues = client
+        .get_issues(1, 1620000000, Some("opened"))
+        .await
+        .unwrap();
     assert_eq!(issues.len(), 1);
     assert_eq!(issues[0].title, "Test Issue 1");
     assert_eq!(issues[0].state, "opened");
