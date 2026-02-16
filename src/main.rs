@@ -15,6 +15,7 @@ mod config;
 mod file_indexer;
 mod gitlab;
 mod handlers;
+mod log_dedup;
 mod mention_cache;
 mod models;
 mod openai;
