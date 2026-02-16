@@ -3,6 +3,7 @@ name = "gitbot"
 version = "0.1.0"
 edition = "2021"
 description = "A GitLab bot that responds to mentions using AI"
+license = "MIT"
 
 [dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

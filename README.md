@@ -171,6 +171,7 @@ GitBot supports extensive configuration through command line arguments or enviro
 1. **Set up the bot**: Configure GitBot with your GitLab and LLM API credentials
 2. **Add to repositories**: Ensure the bot user has access to the repositories you want to monitor
 3. **Mention the bot**: Use `@your-bot-username` in issue or MR comments to trigger responses
+   - **Note**: Commands must follow the mention (e.g., `@gitbot /plan`, not `/plan @gitbot`)
 4. **Get AI assistance**: The bot will analyze the context and provide intelligent responses
 
 ### Example Interactions
