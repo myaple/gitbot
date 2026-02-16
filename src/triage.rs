@@ -75,7 +75,7 @@ impl TriageService {
 
     /// Learn label meanings for a specific project
     async fn learn_labels_for_project(&self, project_id: i64) -> Result<()> {
-        info!("Learning labels for project {}", project_id);
+        debug!("Learning labels for project {}", project_id);
 
         // Get all labels for the project
         let labels = self
@@ -84,7 +84,7 @@ impl TriageService {
             .await
             .map_err(|e| anyhow::anyhow!("Failed to fetch labels: {}", e))?;
 
-        info!("Found {} labels for project {}", labels.len(), project_id);
+        debug!("Found {} labels for project {}", labels.len(), project_id);
 
         // Filter out system labels we don't want to learn or apply
         let excluded_labels = ["stale", "doing", "todo", "in progress"];
@@ -409,7 +409,7 @@ pub async fn triage_unlabeled_issues(
                     created_ts >= cutoff_timestamp
                 }
                 Err(e) => {
-                    warn!(
+                    debug!(
                         "Failed to parse created_at timestamp for issue #{}: {}. Skipping issue.",
                         issue.iid, e
                     );
@@ -424,7 +424,7 @@ pub async fn triage_unlabeled_issues(
         return Ok(0);
     }
 
-    info!(
+    debug!(
         "Found {} unlabeled issues to triage for project {}",
         unlabeled_issues.len(),
         project_id
@@ -440,7 +440,7 @@ pub async fn triage_unlabeled_issues(
                 match triage.suggest_labels_for_issue(project_id, &issue).await {
                     Ok(labels) => Some((issue, labels)),
                     Err(e) => {
-                        error!("Failed to suggest labels for issue #{}: {}", issue.iid, e);
+                        debug!("Failed to suggest labels for issue #{}: {}", issue.iid, e);
                         None
                     }
                 }
@@ -456,7 +456,7 @@ pub async fn triage_unlabeled_issues(
             continue;
         }
 
-        info!("Applying labels {:?} to issue #{}", labels, issue.iid);
+        debug!("Applying labels {:?} to issue #{}", labels, issue.iid);
 
         if let Err(e) = triage_service
             .gitlab_client
@@ -473,10 +473,12 @@ pub async fn triage_unlabeled_issues(
         }
     }
 
-    info!(
-        "Successfully labeled {} issues for project {}",
-        labeled_count, project_id
-    );
+    if labeled_count > 0 {
+        info!(
+            "Auto-triaged {} issue(s) for project {}",
+            labeled_count, project_id
+        );
+    }
 
     Ok(labeled_count)
 }

@@ -11,6 +11,7 @@ use crate::config::AppSettings;
 use crate::file_indexer::FileIndexManager;
 use crate::gitlab::GitlabApiClient;
 use crate::handlers::process_mention;
+use crate::log_dedup::LogDeduplicator;
 use crate::mention_cache::MentionCache;
 use crate::models::{
     GitlabIssue, GitlabMergeRequest, GitlabNoteAttributes, GitlabNoteEvent, GitlabNoteObject,
@@ -26,6 +27,7 @@ pub struct PollingService {
     processed_mentions_cache: MentionCache,
     file_index_manager: Arc<FileIndexManager>,
     triage_service: Option<TriageService>,
+    log_dedup: LogDeduplicator,
 }
 
 impl PollingService {
@@ -43,6 +45,9 @@ impl PollingService {
 
         let initial_time = now.saturating_sub(3600); // 1 hour ago
 
+        // Create log deduplicator with 5 minute suppression window
+        let log_dedup = LogDeduplicator::new(Duration::from_secs(300));
+
         Self {
             gitlab_client,
             config,
@@ -50,6 +55,7 @@ impl PollingService {
             processed_mentions_cache: MentionCache::new(),
             file_index_manager,
             triage_service,
+            log_dedup,
         }
     }
 
@@ -77,7 +83,7 @@ impl PollingService {
             .unwrap_or_else(|_| Duration::from_secs(0))
             .as_secs();
 
-        info!("Polling repositories since timestamp: {}", *last_checked);
+        debug!("Polling repositories since timestamp: {}", *last_checked);
 
         // Create a vector of futures for parallel execution
         let mut polling_tasks = Vec::new();
@@ -94,7 +100,11 @@ impl PollingService {
                     .poll_repository(&repo_path_clone, timestamp)
                     .await
                 {
-                    error!("Error polling repository {}: {}", repo_path_clone, e);
+                    // Only log errors that haven't been logged recently
+                    let log_key = format!("poll_error_{}", repo_path_clone);
+                    if self_clone.log_dedup.should_log(&log_key).await {
+                        error!("Error polling repository {}: {}", repo_path_clone, e);
+                    }
                 }
             });
 
@@ -114,7 +124,7 @@ impl PollingService {
     }
 
     pub async fn poll_repository(&self, repo_path: &str, since_timestamp: u64) -> Result<()> {
-        info!("Polling repository: {}", repo_path);
+        debug!("Polling repository: {}", repo_path);
 
         // Get project ID from path
         let project = self.gitlab_client.get_project_by_path(repo_path).await?;
@@ -133,7 +143,7 @@ impl PollingService {
         // Use the less recent of since_timestamp and max_age_timestamp
         let effective_timestamp = std::cmp::min(since_timestamp, max_age_timestamp);
 
-        info!(
+        debug!(
             "Using effective timestamp: {} (max age: {} hours)",
             effective_timestamp, self.config.max_age_hours
         );
@@ -155,10 +165,14 @@ impl PollingService {
         {
             Ok(issues) => issues,
             Err(e) => {
-                error!(
-                    "Failed to fetch recent issues for project {}: {}",
-                    project_id, e
-                );
+                // Only log this error if we haven't logged it recently
+                let log_key = format!("fetch_issues_error_{}", project_id);
+                if self.log_dedup.should_log(&log_key).await {
+                    error!(
+                        "Failed to fetch recent issues for project {}: {}",
+                        project_id, e
+                    );
+                }
                 Vec::new()
             }
         };
@@ -227,10 +241,14 @@ impl PollingService {
         let open_stale_issues = match self.gitlab_client.get_opened_issues(project_id, 0).await {
             Ok(issues) => issues,
             Err(e) => {
-                error!(
-                    "Failed to fetch issues for stale check for project {}: {}",
-                    project_id, e
-                );
+                // Only log this error if we haven't logged it recently
+                let log_key = format!("stale_fetch_error_{}", project_id);
+                if self.log_dedup.should_log(&log_key).await {
+                    error!(
+                        "Failed to fetch issues for stale check for project {}: {}",
+                        project_id, e
+                    );
+                }
                 Vec::new()
             }
         };
@@ -310,11 +328,21 @@ impl PollingService {
         since_timestamp: u64,
         project: &GitlabProject,
     ) -> Result<()> {
+        if issues.is_empty() {
+            debug!(
+                "No issues to process for mentions in project ID: {}",
+                project_id
+            );
+            return Ok(());
+        }
+
         debug!(
             "Processing {} issues for mentions for project ID: {}",
             issues.len(),
             project_id
         );
+
+        let mention_count = Arc::new(Mutex::new(0_u32));
 
         // Process issues in parallel with controlled concurrency
         let _issue_results: Vec<_> = stream::iter(issues.iter().cloned())
@@ -324,6 +352,8 @@ impl PollingService {
                 let processed_mentions_cache = self.processed_mentions_cache.clone();
                 let file_index_manager = self.file_index_manager.clone();
                 let project = project.clone();
+                let mention_count = mention_count.clone();
+                let log_dedup = self.log_dedup.clone();
                 async move {
                     // Get notes for this issue
                     match gitlab_client
@@ -339,6 +369,7 @@ impl PollingService {
 
                                 // Check if note mentions the bot
                                 if note.note.contains(&format!("@{}", config.bot_username)) {
+                                    *mention_count.lock().await += 1;
                                     info!(
                                         "Found mention in issue #{} note #{}",
                                         issue.iid, note.id
@@ -367,7 +398,12 @@ impl PollingService {
                             }
                         }
                         Err(e) => {
-                            error!("Failed to get notes for issue #{}: {}", issue.iid, e);
+                            // Only log errors if we haven't logged them recently
+                            let log_key =
+                                format!("get_notes_error_issue_{}_{}", project_id, issue.iid);
+                            if log_dedup.should_log(&log_key).await {
+                                error!("Failed to get notes for issue #{}: {}", issue.iid, e);
+                            }
                         }
                     }
                 }
@@ -375,6 +411,16 @@ impl PollingService {
             .buffer_unordered(4) // Process 4 issues concurrently
             .collect()
             .await;
+
+        let total_mentions = *mention_count.lock().await;
+        if total_mentions > 0 {
+            info!(
+                "Processed {} mention(s) in {} issue(s) for project {}",
+                total_mentions,
+                issues.len(),
+                project_id
+            );
+        }
 
         Ok(())
     }
@@ -393,14 +439,26 @@ impl PollingService {
             .get_merge_requests(project_id, since_timestamp)
             .await?;
 
+        if merge_requests.is_empty() {
+            debug!(
+                "No merge requests to process for project ID: {}",
+                project_id
+            );
+            return Ok(());
+        }
+
+        let mention_count = Arc::new(Mutex::new(0_u32));
+
         // Process merge requests in parallel with controlled concurrency
-        let _mr_results: Vec<_> = stream::iter(merge_requests)
+        let _mr_results: Vec<_> = stream::iter(merge_requests.iter().cloned())
             .map(|mr| {
                 let gitlab_client = self.gitlab_client.clone();
                 let config = self.config.clone();
                 let processed_mentions_cache = self.processed_mentions_cache.clone();
                 let file_index_manager = self.file_index_manager.clone();
                 let project = project.clone();
+                let mention_count = mention_count.clone();
+                let log_dedup = self.log_dedup.clone();
                 async move {
                     // Get notes for this merge request
                     match gitlab_client
@@ -416,6 +474,7 @@ impl PollingService {
 
                                 // Check if note mentions the bot
                                 if note.note.contains(&format!("@{}", config.bot_username)) {
+                                    *mention_count.lock().await += 1;
                                     info!("Found mention in MR !{} note #{}", mr.iid, note.id);
 
                                     // Create a GitlabNoteEvent from the note
@@ -441,7 +500,11 @@ impl PollingService {
                             }
                         }
                         Err(e) => {
-                            error!("Failed to get notes for MR !{}: {}", mr.iid, e);
+                            // Only log errors if we haven't logged them recently
+                            let log_key = format!("get_notes_error_mr_{}_{}", project_id, mr.iid);
+                            if log_dedup.should_log(&log_key).await {
+                                error!("Failed to get notes for MR !{}: {}", mr.iid, e);
+                            }
                         }
                     }
                 }
@@ -449,6 +512,16 @@ impl PollingService {
             .buffer_unordered(4) // Process 4 MRs concurrently
             .collect()
             .await;
+
+        let total_mentions = *mention_count.lock().await;
+        if total_mentions > 0 {
+            info!(
+                "Processed {} mention(s) in {} merge request(s) for project {}",
+                total_mentions,
+                merge_requests.len(),
+                project_id
+            );
+        }
 
         Ok(())
     }
@@ -605,11 +678,11 @@ async fn manage_stale_label(
     is_stale: bool,
     gitlab_client: &GitlabApiClient,
     stale_label_name: &str,
-) -> Result<()> {
+) -> Result<StaleAction> {
     if is_stale {
         // Issue is stale
         if !issue.labels.iter().any(|l| l == stale_label_name) {
-            info!(
+            debug!(
                 "Issue #{} is stale and not labeled. Adding '{}' label.",
                 issue.iid, stale_label_name
             );
@@ -621,12 +694,14 @@ async fn manage_stale_label(
                     "Failed to add '{}' label to issue #{}: {}",
                     stale_label_name, issue.iid, e
                 );
+                return Ok(StaleAction::NoChange);
             }
+            return Ok(StaleAction::Labeled);
         }
     } else {
         // Issue is not stale
         if issue.labels.iter().any(|l| l == stale_label_name) {
-            info!(
+            debug!(
                 "Issue #{} is not stale but has '{}' label. Removing label.",
                 issue.iid, stale_label_name
             );
@@ -638,10 +713,12 @@ async fn manage_stale_label(
                     "Failed to remove '{}' label from issue #{}: {}",
                     stale_label_name, issue.iid, e
                 );
+                return Ok(StaleAction::NoChange);
             }
+            return Ok(StaleAction::Unlabeled);
         }
     }
-    Ok(())
+    Ok(StaleAction::NoChange)
 }
 
 pub(crate) async fn check_stale_issues(
@@ -650,8 +727,23 @@ pub(crate) async fn check_stale_issues(
     config: Arc<AppSettings>,
     issues: &[GitlabIssue],
 ) -> Result<()> {
-    info!("Checking for stale issues in project ID: {}", project_id);
+    if issues.is_empty() {
+        debug!(
+            "No issues to check for staleness in project ID: {}",
+            project_id
+        );
+        return Ok(());
+    }
+
+    debug!(
+        "Checking {} issues for staleness in project ID: {}",
+        issues.len(),
+        project_id
+    );
     let stale_label_name = "stale"; // Define the label name
+
+    let labeled_count = Arc::new(Mutex::new(0_u32));
+    let unlabeled_count = Arc::new(Mutex::new(0_u32));
 
     // Issues are filtered by the caller to be only "opened" state issues
 
@@ -660,6 +752,8 @@ pub(crate) async fn check_stale_issues(
         .map(|issue| {
             let gitlab_client = gitlab_client.clone();
             let config = config.clone();
+            let labeled_count = labeled_count.clone();
+            let unlabeled_count = unlabeled_count.clone();
             async move {
                 debug!("Processing issue #{} for staleness", issue.iid);
 
@@ -673,7 +767,7 @@ pub(crate) async fn check_stale_issues(
 
                     let is_stale = now - last_active_date > staleness_threshold;
 
-                    if let Err(e) = manage_stale_label(
+                    match manage_stale_label(
                         project_id,
                         &issue,
                         is_stale,
@@ -682,13 +776,22 @@ pub(crate) async fn check_stale_issues(
                     )
                     .await
                     {
-                        error!(
-                            "Failed to manage stale label for issue #{}: {}",
-                            issue.iid, e
-                        );
+                        Ok(action) => {
+                            match action {
+                                StaleAction::Labeled => *labeled_count.lock().await += 1,
+                                StaleAction::Unlabeled => *unlabeled_count.lock().await += 1,
+                                StaleAction::NoChange => {},
+                            }
+                        }
+                        Err(e) => {
+                            error!(
+                                "Failed to manage stale label for issue #{}: {}",
+                                issue.iid, e
+                            );
+                        }
                     }
                 } else {
-                    warn!(
+                    debug!(
                         "Could not determine last activity timestamp for issue #{}. Skipping staleness check.",
                         issue.iid
                     );
@@ -699,5 +802,20 @@ pub(crate) async fn check_stale_issues(
         .collect()
         .await;
 
+    let total_labeled = *labeled_count.lock().await;
+    let total_unlabeled = *unlabeled_count.lock().await;
+
+    if total_labeled > 0 || total_unlabeled > 0 {
+        info!("Stale check for project {}: labeled {} issue(s) as stale, removed stale label from {} issue(s)",
+              project_id, total_labeled, total_unlabeled);
+    }
+
     Ok(())
+}
+
+#[derive(Debug)]
+enum StaleAction {
+    Labeled,
+    Unlabeled,
+    NoChange,
 }
