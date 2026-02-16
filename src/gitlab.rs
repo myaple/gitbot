@@ -608,6 +608,20 @@ impl GitlabApiClient {
     }
 
     #[instrument(skip(self), fields(project_id, issue_iid, labels))]
+    pub async fn add_issue_labels(
+        &self,
+        project_id: i64,
+        issue_iid: i64,
+        labels: &[&str],
+    ) -> Result<GitlabIssue, GitlabError> {
+        let path = format!("/api/v4/projects/{project_id}/issues/{issue_iid}");
+        let labels_str = labels.join(",");
+        let body = serde_json::json!({ "add_labels": labels_str });
+        self.send_request(Method::PUT, &path, None, Some(body))
+            .await
+    }
+
+    #[instrument(skip(self), fields(project_id, issue_iid, labels))]
     pub async fn remove_issue_labels(
         &self,
         project_id: i64,
