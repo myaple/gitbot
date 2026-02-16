@@ -9,11 +9,16 @@ mod tests {
     use mockito::Matcher;
     use serde_json::json;
     use std::sync::Arc;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    use tokio::sync::Mutex;
 
     const TEST_BOT_USERNAME: &str = "test_bot";
     const STALE_LABEL: &str = "stale";
     const PROJECT_ID: i64 = 1;
+
+    fn test_error_tracker() -> Arc<Mutex<ErrorTracker>> {
+        Arc::new(Mutex::new(ErrorTracker::new(Duration::from_secs(3600))))
+    }
 
     fn test_config(stale_days: u64, bot_username: &str, base_url: String) -> Arc<AppSettings> {
         let mut settings = AppSettings::default();
@@ -118,7 +123,7 @@ mod tests {
             .create_async()
             .await;
 
-        check_stale_issues(PROJECT_ID, client, config, &[issue1])
+        check_stale_issues(PROJECT_ID, client, config, &[issue1], test_error_tracker())
             .await
             .unwrap();
         m_add_label.assert_async().await;
@@ -161,7 +166,7 @@ mod tests {
             .create_async()
             .await;
 
-        check_stale_issues(PROJECT_ID, client, config, &[issue1])
+        check_stale_issues(PROJECT_ID, client, config, &[issue1], test_error_tracker())
             .await
             .unwrap();
     }
@@ -205,7 +210,7 @@ mod tests {
             .create_async()
             .await;
 
-        check_stale_issues(PROJECT_ID, client, config, &[issue1])
+        check_stale_issues(PROJECT_ID, client, config, &[issue1], test_error_tracker())
             .await
             .unwrap();
         m_remove_label.assert_async().await;
@@ -248,7 +253,7 @@ mod tests {
             .create_async()
             .await;
 
-        check_stale_issues(PROJECT_ID, client, config, &[issue1])
+        check_stale_issues(PROJECT_ID, client, config, &[issue1], test_error_tracker())
             .await
             .unwrap();
     }
@@ -285,7 +290,7 @@ mod tests {
             .create_async()
             .await;
 
-        check_stale_issues(PROJECT_ID, client, config, &[issue1])
+        check_stale_issues(PROJECT_ID, client, config, &[issue1], test_error_tracker())
             .await
             .unwrap();
         m_add_label.assert_async().await;
@@ -318,7 +323,7 @@ mod tests {
             .create_async()
             .await;
 
-        check_stale_issues(PROJECT_ID, client, config, &[issue1])
+        check_stale_issues(PROJECT_ID, client, config, &[issue1], test_error_tracker())
             .await
             .unwrap();
         m_add_label.assert_async().await;
@@ -354,7 +359,7 @@ mod tests {
             .create_async()
             .await;
 
-        check_stale_issues(PROJECT_ID, client, config, &[issue1])
+        check_stale_issues(PROJECT_ID, client, config, &[issue1], test_error_tracker())
             .await
             .unwrap();
         m_add_label.assert_async().await;
@@ -413,7 +418,14 @@ mod tests {
             .create_async()
             .await;
 
-        let result = check_stale_issues(PROJECT_ID, client, config, &[issue1, issue2]).await;
+        let result = check_stale_issues(
+            PROJECT_ID,
+            client,
+            config,
+            &[issue1, issue2],
+            test_error_tracker(),
+        )
+        .await;
         assert!(result.is_ok()); // The function itself should complete
         m_add_label_issue1_actually_called.assert_async().await; // issue1 gets labeled based on its own old date
         m_add_label_issue2.assert_async().await; // issue2 gets labeled
@@ -468,7 +480,7 @@ mod tests {
             .create_async()
             .await;
 
-        let result = check_stale_issues(PROJECT_ID, client, config, &[issue1, issue2]).await;
+        let result = check_stale_issues(PROJECT_ID, client, config, &[issue1, issue2], test_error_tracker()).await;
         assert!(result.is_ok()); // Function completes
         m_add_label1_fail.assert_async().await; // Call was made
         m_add_label2_ok.assert_async().await; // Call was made

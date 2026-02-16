@@ -1,6 +1,7 @@
 use anyhow::Result;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use futures::stream::{self, StreamExt};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
@@ -18,6 +19,69 @@ use crate::models::{
 };
 use crate::triage::{triage_unlabeled_issues, TriageService};
 
+#[derive(Clone, Debug)]
+struct ErrorState {
+    last_error: String,
+    last_log_time: SystemTime,
+    repeat_count: u32,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ErrorTracker {
+    errors: HashMap<String, ErrorState>,
+    throttle_duration: Duration,
+}
+
+impl ErrorTracker {
+    pub fn new(throttle_duration: Duration) -> Self {
+        Self {
+            errors: HashMap::new(),
+            throttle_duration,
+        }
+    }
+
+    pub fn log_error(&mut self, key: &str, error_msg: &str) {
+        let now = SystemTime::now();
+
+        if let Some(state) = self.errors.get_mut(key) {
+            if state.last_error == error_msg {
+                // Same error
+                state.repeat_count += 1;
+                if let Ok(duration) = now.duration_since(state.last_log_time) {
+                    if duration >= self.throttle_duration {
+                        error!("{} (repeated {} times)", error_msg, state.repeat_count);
+                        state.last_log_time = now;
+                        state.repeat_count = 0;
+                    }
+                }
+            } else {
+                // Different error
+                if state.repeat_count > 0 {
+                    warn!(
+                        "Previous error for {} repeated {} times: {}",
+                        key, state.repeat_count, state.last_error
+                    );
+                }
+                error!("{}", error_msg);
+                state.last_error = error_msg.to_string();
+                state.last_log_time = now;
+                state.repeat_count = 0;
+            }
+        } else {
+            // New error key
+            error!("{}", error_msg);
+            self.errors.insert(
+                key.to_string(),
+                ErrorState {
+                    last_error: error_msg.to_string(),
+                    last_log_time: now,
+                    repeat_count: 0,
+                },
+            );
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct PollingService {
     gitlab_client: Arc<GitlabApiClient>,
@@ -26,6 +90,7 @@ pub struct PollingService {
     processed_mentions_cache: MentionCache,
     file_index_manager: Arc<FileIndexManager>,
     triage_service: Option<TriageService>,
+    error_tracker: Arc<Mutex<ErrorTracker>>,
 }
 
 impl PollingService {
@@ -50,6 +115,7 @@ impl PollingService {
             processed_mentions_cache: MentionCache::new(),
             file_index_manager,
             triage_service,
+            error_tracker: Arc::new(Mutex::new(ErrorTracker::new(Duration::from_secs(3600)))),
         }
     }
 
@@ -61,11 +127,24 @@ impl PollingService {
 
         let interval_duration = Duration::from_secs(self.config.poll_interval_seconds);
         let mut interval = time::interval(interval_duration);
+        let mut last_heartbeat = SystemTime::now();
 
         loop {
             interval.tick().await;
+
+            let now = SystemTime::now();
+            if let Ok(duration) = now.duration_since(last_heartbeat) {
+                if duration.as_secs() >= 3600 {
+                    info!("Polling service active...");
+                    last_heartbeat = now;
+                }
+            }
+
             if let Err(e) = self.poll_repositories().await {
-                error!("Error polling repositories: {}", e);
+                self.error_tracker.lock().await.log_error(
+                    "poll_repositories_global",
+                    &format!("Error polling repositories: {}", e),
+                );
             }
         }
     }
@@ -77,7 +156,7 @@ impl PollingService {
             .unwrap_or_else(|_| Duration::from_secs(0))
             .as_secs();
 
-        info!("Polling repositories since timestamp: {}", *last_checked);
+        debug!("Polling repositories since timestamp: {}", *last_checked);
 
         // Create a vector of futures for parallel execution
         let mut polling_tasks = Vec::new();
@@ -94,7 +173,10 @@ impl PollingService {
                     .poll_repository(&repo_path_clone, timestamp)
                     .await
                 {
-                    error!("Error polling repository {}: {}", repo_path_clone, e);
+                    self_clone.error_tracker.lock().await.log_error(
+                        &format!("poll_repo_{}", repo_path_clone),
+                        &format!("Error polling repository {}: {}", repo_path_clone, e),
+                    );
                 }
             });
 
@@ -104,7 +186,10 @@ impl PollingService {
         // Wait for all polling tasks to complete
         for task in polling_tasks {
             if let Err(e) = task.await {
-                error!("Task join error: {}", e);
+                self.error_tracker
+                    .lock()
+                    .await
+                    .log_error("poll_repo_task_join", &format!("Task join error: {}", e));
             }
         }
 
@@ -114,7 +199,7 @@ impl PollingService {
     }
 
     pub async fn poll_repository(&self, repo_path: &str, since_timestamp: u64) -> Result<()> {
-        info!("Polling repository: {}", repo_path);
+        debug!("Polling repository: {}", repo_path);
 
         // Get project ID from path
         let project = self.gitlab_client.get_project_by_path(repo_path).await?;
@@ -133,7 +218,7 @@ impl PollingService {
         // Use the less recent of since_timestamp and max_age_timestamp
         let effective_timestamp = std::cmp::min(since_timestamp, max_age_timestamp);
 
-        info!(
+        debug!(
             "Using effective timestamp: {} (max age: {} hours)",
             effective_timestamp, self.config.max_age_hours
         );
@@ -155,9 +240,9 @@ impl PollingService {
         {
             Ok(issues) => issues,
             Err(e) => {
-                error!(
-                    "Failed to fetch recent issues for project {}: {}",
-                    project_id, e
+                self.error_tracker.lock().await.log_error(
+                    &format!("fetch_recent_issues_{}", project_id),
+                    &format!("Failed to fetch recent issues for project {}: {}", project_id, e),
                 );
                 Vec::new()
             }
@@ -195,9 +280,9 @@ impl PollingService {
                     )
                     .await
                 {
-                    error!(
-                        "Error processing mentions for project {}: {}",
-                        project_id, e
+                    self_clone.error_tracker.lock().await.log_error(
+                        &format!("process_mentions_{}", project_id),
+                        &format!("Error processing mentions for project {}: {}", project_id, e),
                     );
                 }
             })
@@ -212,9 +297,9 @@ impl PollingService {
                     .poll_merge_requests(project_id, effective_timestamp, &project_clone)
                     .await
                 {
-                    error!(
-                        "Error polling merge requests for project {}: {}",
-                        project_id, e
+                    self_clone.error_tracker.lock().await.log_error(
+                        &format!("poll_mrs_{}", project_id),
+                        &format!("Error polling merge requests for project {}: {}", project_id, e),
                     );
                 }
             })
@@ -227,9 +312,12 @@ impl PollingService {
         let open_stale_issues = match self.gitlab_client.get_opened_issues(project_id, 0).await {
             Ok(issues) => issues,
             Err(e) => {
-                error!(
-                    "Failed to fetch issues for stale check for project {}: {}",
-                    project_id, e
+                self.error_tracker.lock().await.log_error(
+                    &format!("fetch_stale_issues_{}", project_id),
+                    &format!(
+                        "Failed to fetch issues for stale check for project {}: {}",
+                        project_id, e
+                    ),
                 );
                 Vec::new()
             }
@@ -241,18 +329,23 @@ impl PollingService {
             let gitlab_client_clone = self.gitlab_client.clone();
             let config_clone = self.config.clone();
             let open_stale_issues_clone = open_stale_issues;
+            let error_tracker_clone = self.error_tracker.clone();
             tokio::spawn(async move {
                 if let Err(e) = check_stale_issues(
                     project_id_clone,
                     gitlab_client_clone,
                     config_clone,
                     &open_stale_issues_clone,
+                    error_tracker_clone.clone(),
                 )
                 .await
                 {
-                    error!(
-                        "Error checking stale issues for project {}: {}",
-                        project_id_clone, e
+                    error_tracker_clone.lock().await.log_error(
+                        &format!("check_stale_{}", project_id_clone),
+                        &format!(
+                            "Error checking stale issues for project {}: {}",
+                            project_id_clone, e
+                        ),
                     );
                 }
             })
@@ -324,6 +417,7 @@ impl PollingService {
                 let processed_mentions_cache = self.processed_mentions_cache.clone();
                 let file_index_manager = self.file_index_manager.clone();
                 let project = project.clone();
+                let error_tracker = self.error_tracker.clone();
                 async move {
                     // Get notes for this issue
                     match gitlab_client
@@ -339,10 +433,8 @@ impl PollingService {
 
                                 // Check if note mentions the bot
                                 if note.note.contains(&format!("@{}", config.bot_username)) {
-                                    info!(
-                                        "Found mention in issue #{} note #{}",
-                                        issue.iid, note.id
-                                    );
+                                    let note_id = note.id;
+                                    info!("Found mention in issue #{} note #{}", issue.iid, note_id);
 
                                     // Create a GitlabNoteEvent from the note
                                     let event = Self::create_issue_note_event_static(
@@ -361,13 +453,19 @@ impl PollingService {
                                     )
                                     .await
                                     {
-                                        error!("Error processing mention: {}", e);
+                                        error_tracker.lock().await.log_error(
+                                            &format!("process_mention_{}", note_id),
+                                            &format!("Error processing mention: {}", e),
+                                        );
                                     }
                                 }
                             }
                         }
                         Err(e) => {
-                            error!("Failed to get notes for issue #{}: {}", issue.iid, e);
+                            error_tracker.lock().await.log_error(
+                                &format!("fetch_notes_mention_{}_{}", project_id, issue.iid),
+                                &format!("Failed to get notes for issue #{}: {}", issue.iid, e),
+                            );
                         }
                     }
                 }
@@ -401,6 +499,7 @@ impl PollingService {
                 let processed_mentions_cache = self.processed_mentions_cache.clone();
                 let file_index_manager = self.file_index_manager.clone();
                 let project = project.clone();
+                let error_tracker = self.error_tracker.clone();
                 async move {
                     // Get notes for this merge request
                     match gitlab_client
@@ -416,7 +515,8 @@ impl PollingService {
 
                                 // Check if note mentions the bot
                                 if note.note.contains(&format!("@{}", config.bot_username)) {
-                                    info!("Found mention in MR !{} note #{}", mr.iid, note.id);
+                                    let note_id = note.id;
+                                    info!("Found mention in MR !{} note #{}", mr.iid, note_id);
 
                                     // Create a GitlabNoteEvent from the note
                                     let event = Self::create_mr_note_event_static(
@@ -435,13 +535,19 @@ impl PollingService {
                                     )
                                     .await
                                     {
-                                        error!("Error processing mention: {}", e);
+                                        error_tracker.lock().await.log_error(
+                                            &format!("process_mr_mention_{}", note_id),
+                                            &format!("Error processing mention: {}", e),
+                                        );
                                     }
                                 }
                             }
                         }
                         Err(e) => {
-                            error!("Failed to get notes for MR !{}: {}", mr.iid, e);
+                            error_tracker.lock().await.log_error(
+                                &format!("fetch_mr_notes_{}_{}", project_id, mr.iid),
+                                &format!("Failed to get notes for MR !{}: {}", mr.iid, e),
+                            );
                         }
                     }
                 }
@@ -521,6 +627,7 @@ async fn determine_last_activity(
     issue: &GitlabIssue,
     gitlab_client: &GitlabApiClient,
     config: &AppSettings,
+    error_tracker: &Arc<Mutex<ErrorTracker>>,
 ) -> Option<DateTime<Utc>> {
     let mut last_activity_ts: Option<DateTime<Utc>> = None;
 
@@ -528,9 +635,12 @@ async fn determine_last_activity(
     match DateTime::parse_from_rfc3339(&issue.updated_at) {
         Ok(ts) => last_activity_ts = Some(ts.with_timezone(&Utc)),
         Err(e) => {
-            warn!(
-                "Failed to parse issue updated_at timestamp for issue #{}: {}. Error: {}",
-                issue.iid, issue.updated_at, e
+            error_tracker.lock().await.log_error(
+                &format!("parse_updated_at_{}_{}", project_id, issue.iid),
+                &format!(
+                    "Failed to parse issue updated_at timestamp for issue #{}: {}. Error: {}",
+                    issue.iid, issue.updated_at, e
+                ),
             );
         }
     }
@@ -563,9 +673,12 @@ async fn determine_last_activity(
         {
             Ok(n) => n,
             Err(e) => {
-                error!(
-                    "Failed to fetch notes for issue #{}: {}. Skipping note processing for this issue.",
-                    issue.iid, e
+                error_tracker.lock().await.log_error(
+                    &format!("fetch_notes_{}_{}", project_id, issue.iid),
+                    &format!(
+                        "Failed to fetch notes for issue #{}: {}. Skipping note processing for this issue.",
+                        issue.iid, e
+                    ),
                 );
                 Vec::new() // Process with no notes if fetching failed
             }
@@ -588,9 +701,12 @@ async fn determine_last_activity(
                 }
             }
             Err(e) => {
-                warn!(
-                    "Failed to parse note updated_at for note #{} on issue #{}: {}. Error: {}",
-                    note.id, issue.iid, note.updated_at, e
+                error_tracker.lock().await.log_error(
+                    &format!("parse_note_updated_at_{}_{}", project_id, note.id),
+                    &format!(
+                        "Failed to parse note updated_at for note #{} on issue #{}: {}. Error: {}",
+                        note.id, issue.iid, note.updated_at, e
+                    ),
                 );
             }
         }
@@ -605,6 +721,7 @@ async fn manage_stale_label(
     is_stale: bool,
     gitlab_client: &GitlabApiClient,
     stale_label_name: &str,
+    error_tracker: &Arc<Mutex<ErrorTracker>>,
 ) -> Result<()> {
     if is_stale {
         // Issue is stale
@@ -617,9 +734,12 @@ async fn manage_stale_label(
                 .add_issue_label(project_id, issue.iid, stale_label_name)
                 .await
             {
-                error!(
-                    "Failed to add '{}' label to issue #{}: {}",
-                    stale_label_name, issue.iid, e
+                error_tracker.lock().await.log_error(
+                    &format!("add_stale_label_{}_{}", project_id, issue.iid),
+                    &format!(
+                        "Failed to add '{}' label to issue #{}: {}",
+                        stale_label_name, issue.iid, e
+                    ),
                 );
             }
         }
@@ -634,9 +754,12 @@ async fn manage_stale_label(
                 .remove_issue_label(project_id, issue.iid, stale_label_name)
                 .await
             {
-                error!(
-                    "Failed to remove '{}' label from issue #{}: {}",
-                    stale_label_name, issue.iid, e
+                error_tracker.lock().await.log_error(
+                    &format!("remove_stale_label_{}_{}", project_id, issue.iid),
+                    &format!(
+                        "Failed to remove '{}' label from issue #{}: {}",
+                        stale_label_name, issue.iid, e
+                    ),
                 );
             }
         }
@@ -649,8 +772,9 @@ pub(crate) async fn check_stale_issues(
     gitlab_client: Arc<GitlabApiClient>,
     config: Arc<AppSettings>,
     issues: &[GitlabIssue],
+    error_tracker: Arc<Mutex<ErrorTracker>>,
 ) -> Result<()> {
-    info!("Checking for stale issues in project ID: {}", project_id);
+    debug!("Checking for stale issues in project ID: {}", project_id);
     let stale_label_name = "stale"; // Define the label name
 
     // Issues are filtered by the caller to be only "opened" state issues
@@ -660,11 +784,18 @@ pub(crate) async fn check_stale_issues(
         .map(|issue| {
             let gitlab_client = gitlab_client.clone();
             let config = config.clone();
+            let error_tracker = error_tracker.clone();
             async move {
                 debug!("Processing issue #{} for staleness", issue.iid);
 
-                let last_activity_ts =
-                    determine_last_activity(project_id, &issue, &gitlab_client, &config).await;
+                let last_activity_ts = determine_last_activity(
+                    project_id,
+                    &issue,
+                    &gitlab_client,
+                    &config,
+                    &error_tracker,
+                )
+                .await;
 
                 if let Some(last_active_date) = last_activity_ts {
                     let now = Utc::now();
@@ -679,12 +810,16 @@ pub(crate) async fn check_stale_issues(
                         is_stale,
                         &gitlab_client,
                         stale_label_name,
+                        &error_tracker,
                     )
                     .await
                     {
-                        error!(
-                            "Failed to manage stale label for issue #{}: {}",
-                            issue.iid, e
+                        error_tracker.lock().await.log_error(
+                            &format!("manage_stale_label_{}_{}", project_id, issue.iid),
+                            &format!(
+                                "Failed to manage stale label for issue #{}: {}",
+                                issue.iid, e
+                            ),
                         );
                     }
                 } else {

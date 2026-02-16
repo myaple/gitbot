@@ -8,10 +8,16 @@ mod tests {
     use mockito::Matcher;
     use serde_json::json;
     use std::sync::Arc;
+    use std::time::Duration;
+    use tokio::sync::Mutex;
 
     const TEST_BOT_USERNAME: &str = "test_bot";
     const STALE_LABEL: &str = "stale";
     const PROJECT_ID: i64 = 1;
+
+    fn test_error_tracker() -> Arc<Mutex<ErrorTracker>> {
+        Arc::new(Mutex::new(ErrorTracker::new(Duration::from_secs(3600))))
+    }
 
     fn test_config(stale_days: u64, bot_username: &str, base_url: String) -> Arc<AppSettings> {
         let mut settings = AppSettings::default();
@@ -82,7 +88,7 @@ mod tests {
             .create_async()
             .await;
 
-        check_stale_issues(PROJECT_ID, client, config, &[issue1])
+        check_stale_issues(PROJECT_ID, client, config, &[issue1], test_error_tracker())
             .await
             .unwrap();
 
