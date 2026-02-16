@@ -557,45 +557,6 @@ impl GitlabApiClient {
         Ok(file)
     }
 
-    /// Search for files by name
-    ///
-    /// Delegates to `search_files_by_content` as the GitLab search API with `scope=blobs`
-    /// searches both filenames and content.
-    #[instrument(skip(self), fields(project_id, query))]
-    pub async fn search_files_by_name(
-        &self,
-        project_id: i64,
-        query: &str,
-    ) -> Result<Vec<String>, GitlabError> {
-        self.search_files_by_content(project_id, query).await
-    }
-
-    /// Search for files by content
-    #[instrument(skip(self), fields(project_id, query))]
-    pub async fn search_files_by_content(
-        &self,
-        project_id: i64,
-        query: &str,
-    ) -> Result<Vec<String>, GitlabError> {
-        let path = format!("/api/v4/projects/{project_id}/search");
-        let query_params = &[
-            ("scope", "blobs"),
-            ("search", query),
-            ("ref", "main"),
-            ("per_page", "20"),
-        ];
-
-        let results: Vec<serde_json::Value> = self
-            .send_request(Method::GET, &path, Some(query_params), None::<()>)
-            .await?;
-
-        let file_paths = results
-            .into_iter()
-            .filter_map(|item| item["path"].as_str().map(|s| s.to_string()))
-            .collect();
-
-        Ok(file_paths)
-    }
 
     /// Get changes for a merge request
     #[instrument(skip(self), fields(project_id, merge_request_iid))]
@@ -674,6 +635,14 @@ impl GitlabApiClient {
     }
 
     /// Search for code in a GitLab repository
+    ///
+    /// Searches both file names and file content using GitLab's search API with scope=blobs.
+    /// This is the consolidated method for all code/file searching operations.
+    ///
+    /// # Arguments
+    /// * `project_id` - The project ID to search in
+    /// * `search_query` - The search query string
+    /// * `branch` - The branch/ref to search in (e.g., "main", "develop")
     #[instrument(skip(self), fields(project_id, search_query, branch))]
     pub async fn search_code(
         &self,
@@ -681,10 +650,15 @@ impl GitlabApiClient {
         search_query: &str,
         branch: &str,
     ) -> Result<Vec<GitlabSearchResult>, GitlabError> {
-        let encoded_query = urlencoding::encode(search_query);
-        let encoded_branch = urlencoding::encode(branch);
-        let path = format!("/api/v4/projects/{project_id}/search?scope=blobs&search={encoded_query}&ref={encoded_branch}");
-        self.send_request(Method::GET, &path, None, None::<()>)
+        let path = format!("/api/v4/projects/{project_id}/search");
+        let query_params = &[
+            ("scope", "blobs"),
+            ("search", search_query),
+            ("ref", branch),
+            ("per_page", "100"),
+        ];
+
+        self.send_request(Method::GET, &path, Some(query_params), None::<()>)
             .await
     }
 

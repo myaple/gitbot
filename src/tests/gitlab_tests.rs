@@ -1029,7 +1029,7 @@ async fn test_search_files() {
             mockito::Matcher::UrlEncoded("scope".into(), "blobs".into()),
             mockito::Matcher::UrlEncoded("search".into(), "query".into()),
             mockito::Matcher::UrlEncoded("ref".into(), "main".into()),
-            mockito::Matcher::UrlEncoded("per_page".into(), "20".into()),
+            mockito::Matcher::UrlEncoded("per_page".into(), "100".into()),
         ]))
         .with_status(200)
         .with_header("content-type", "application/json")
@@ -1037,17 +1037,13 @@ async fn test_search_files() {
         .create_async()
         .await;
 
-    // Test search_files_by_name
-    let results = client.search_files_by_name(1, "query").await.unwrap();
+    // Test search_code (consolidated search method)
+    let results = client.search_code(1, "query", "main").await.unwrap();
     assert_eq!(results.len(), 2);
-    assert!(results.contains(&"src/main.rs".to_string()));
-    assert!(results.contains(&"src/utils.rs".to_string()));
-
-    // Test search_files_by_content
-    let results = client.search_files_by_content(1, "query").await.unwrap();
-    assert_eq!(results.len(), 2);
-    assert!(results.contains(&"src/main.rs".to_string()));
-    assert!(results.contains(&"src/utils.rs".to_string()));
+    assert_eq!(results[0].path, "src/main.rs");
+    assert_eq!(results[0].basename, "main.rs");
+    assert_eq!(results[1].path, "src/utils.rs");
+    assert_eq!(results[1].basename, "utils.rs");
 }
 
 #[tokio::test]
