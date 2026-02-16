@@ -51,6 +51,7 @@ pub struct IssueQueryOptions {
 
 /// Label operation type for updating issue labels
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum LabelOperation {
     /// Add labels to an issue (preserves existing labels)
     Add(Vec<String>),
@@ -561,7 +562,6 @@ impl GitlabApiClient {
         Ok(file)
     }
 
-
     /// Get changes for a merge request
     #[instrument(skip(self), fields(project_id, merge_request_iid))]
     pub async fn get_merge_request_changes(
@@ -712,6 +712,4 @@ impl GitlabApiClient {
         self.send_request(Method::GET, &path, Some(query_params), None::<()>)
             .await
     }
-
-
 }

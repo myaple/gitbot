@@ -1,3 +1,5 @@
+#![allow(clippy::field_reassign_with_default)]
+
 use crate::config::AppSettings;
 use crate::gitlab::{GitlabApiClient, GitlabError, IssueQueryOptions, LabelOperation};
 use mockito;
@@ -949,10 +951,7 @@ async fn test_get_all_merge_request_notes() {
         .create_async()
         .await;
 
-    let notes = client
-        .get_merge_request_notes(1, 20, None)
-        .await
-        .unwrap();
+    let notes = client.get_merge_request_notes(1, 20, None).await.unwrap();
     assert_eq!(notes.len(), 1);
     assert_eq!(notes[0].id, 3);
     assert_eq!(notes[0].note, "First MR comment");
@@ -1006,23 +1005,23 @@ async fn test_get_branches() {
     // Check main branch (default branch)
     let main_branch = &branches[0];
     assert_eq!(main_branch.name, "main");
-    assert_eq!(main_branch.default, true);
-    assert_eq!(main_branch.protected, true);
-    assert_eq!(main_branch.can_push, false);
+    assert!(main_branch.default);
+    assert!(main_branch.protected);
+    assert!(!main_branch.can_push);
 
     // Check feature branch
     let feature_branch = &branches[1];
     assert_eq!(feature_branch.name, "feature/new-feature");
-    assert_eq!(feature_branch.default, false);
-    assert_eq!(feature_branch.protected, false);
-    assert_eq!(feature_branch.can_push, true);
+    assert!(!feature_branch.default);
+    assert!(!feature_branch.protected);
+    assert!(feature_branch.can_push);
 
     // Check develop branch
     let develop_branch = &branches[2];
     assert_eq!(develop_branch.name, "develop");
-    assert_eq!(develop_branch.default, false);
-    assert_eq!(develop_branch.protected, false);
-    assert_eq!(develop_branch.can_push, true);
+    assert!(!develop_branch.default);
+    assert!(!develop_branch.protected);
+    assert!(develop_branch.can_push);
 }
 
 #[tokio::test]

@@ -1,4 +1,5 @@
 #[cfg(test)]
+#[allow(clippy::field_reassign_with_default)]
 mod tests {
     use crate::config::AppSettings;
     use crate::gitlab::GitlabApiClient;

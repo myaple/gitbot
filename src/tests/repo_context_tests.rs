@@ -1,4 +1,5 @@
 #[cfg(test)]
+#[allow(clippy::field_reassign_with_default)]
 mod tests {
     use crate::config::AppSettings;
     use crate::file_indexer::FileIndexManager;
@@ -853,27 +854,29 @@ fn decode_jwt(token: &str) -> Result<Claims> {
     #[test]
     fn test_configurable_context_lines() {
         // Test that different context_lines settings produce different amounts of context
-        let mut settings_3_lines = AppSettings::default();
-        // Set only the non-default fields
-        settings_3_lines.gitlab_url = "https://gitlab.com".to_string();
-        settings_3_lines.gitlab_token = "test_token".to_string();
-        settings_3_lines.openai_api_key = "key".to_string();
-        settings_3_lines.openai_custom_url = "url".to_string();
-        settings_3_lines.repos_to_poll = vec!["org/repo1".to_string()];
-        settings_3_lines.log_level = "debug".to_string();
-        settings_3_lines.bot_username = "gitbot".to_string();
-        settings_3_lines.context_lines = 3; // Small context
+        let settings_3_lines = AppSettings {
+            gitlab_url: "https://gitlab.com".to_string(),
+            gitlab_token: "test_token".to_string(),
+            openai_api_key: "key".to_string(),
+            openai_custom_url: "url".to_string(),
+            repos_to_poll: vec!["org/repo1".to_string()],
+            log_level: "debug".to_string(),
+            bot_username: "gitbot".to_string(),
+            context_lines: 3, // Small context
+            ..Default::default()
+        };
 
-        let mut settings_8_lines = AppSettings::default();
-        // Set only the non-default fields
-        settings_8_lines.gitlab_url = "https://gitlab.com".to_string();
-        settings_8_lines.gitlab_token = "test_token".to_string();
-        settings_8_lines.openai_api_key = "key".to_string();
-        settings_8_lines.openai_custom_url = "url".to_string();
-        settings_8_lines.repos_to_poll = vec!["org/repo1".to_string()];
-        settings_8_lines.log_level = "debug".to_string();
-        settings_8_lines.bot_username = "gitbot".to_string();
-        settings_8_lines.context_lines = 8; // Larger context
+        let settings_8_lines = AppSettings {
+            gitlab_url: "https://gitlab.com".to_string(),
+            gitlab_token: "test_token".to_string(),
+            openai_api_key: "key".to_string(),
+            openai_custom_url: "url".to_string(),
+            repos_to_poll: vec!["org/repo1".to_string()],
+            log_level: "debug".to_string(),
+            bot_username: "gitbot".to_string(),
+            context_lines: 8, // Larger context
+            ..Default::default()
+        };
 
         // Create test content with keyword on line 10 of 20 lines
         let file_content = (1..=20)
@@ -943,15 +946,16 @@ fn decode_jwt(token: &str) -> Result<Claims> {
     #[test]
     fn test_token_usage_reduction() {
         // This test demonstrates the token usage reduction
-        let mut settings = AppSettings::default();
-        // Set only the non-default fields
-        settings.gitlab_url = "https://gitlab.com".to_string();
-        settings.gitlab_token = "test_token".to_string();
-        settings.openai_api_key = "key".to_string();
-        settings.openai_custom_url = "url".to_string();
-        settings.repos_to_poll = vec!["org/repo1".to_string()];
-        settings.log_level = "debug".to_string();
-        settings.bot_username = "gitbot".to_string();
+        let settings = AppSettings {
+            gitlab_url: "https://gitlab.com".to_string(),
+            gitlab_token: "test_token".to_string(),
+            openai_api_key: "key".to_string(),
+            openai_custom_url: "url".to_string(),
+            repos_to_poll: vec!["org/repo1".to_string()],
+            log_level: "debug".to_string(),
+            bot_username: "gitbot".to_string(),
+            ..Default::default()
+        };
 
         let settings_arc = Arc::new(settings.clone());
         let gitlab_client = Arc::new(GitlabApiClient::new(settings_arc.clone()).unwrap());
@@ -1021,15 +1025,16 @@ fn decode_jwt(token: &str) -> Result<Claims> {
 
     #[test]
     fn test_calculate_content_relevance_score() {
-        let mut settings = AppSettings::default();
-        // Set only the non-default fields
-        settings.gitlab_url = "https://gitlab.com".to_string();
-        settings.gitlab_token = "test_token".to_string();
-        settings.openai_api_key = "key".to_string();
-        settings.openai_custom_url = "url".to_string();
-        settings.repos_to_poll = vec!["org/repo1".to_string()];
-        settings.log_level = "debug".to_string();
-        settings.bot_username = "gitbot".to_string();
+        let settings = AppSettings {
+            gitlab_url: "https://gitlab.com".to_string(),
+            gitlab_token: "test_token".to_string(),
+            openai_api_key: "key".to_string(),
+            openai_custom_url: "url".to_string(),
+            repos_to_poll: vec!["org/repo1".to_string()],
+            log_level: "debug".to_string(),
+            bot_username: "gitbot".to_string(),
+            ..Default::default()
+        };
 
         let settings_arc = Arc::new(settings.clone());
         let gitlab_client = Arc::new(GitlabApiClient::new(settings_arc.clone()).unwrap());
@@ -1098,15 +1103,16 @@ fn decode_jwt(token: &str) -> Result<Claims> {
 
     #[test]
     fn test_weighted_file_context_formatting() {
-        let mut settings = AppSettings::default();
-        // Set only the non-default fields
-        settings.gitlab_url = "https://gitlab.com".to_string();
-        settings.gitlab_token = "test_token".to_string();
-        settings.openai_api_key = "key".to_string();
-        settings.openai_custom_url = "url".to_string();
-        settings.repos_to_poll = vec!["org/repo1".to_string()];
-        settings.log_level = "debug".to_string();
-        settings.bot_username = "gitbot".to_string();
+        let settings = AppSettings {
+            gitlab_url: "https://gitlab.com".to_string(),
+            gitlab_token: "test_token".to_string(),
+            openai_api_key: "key".to_string(),
+            openai_custom_url: "url".to_string(),
+            repos_to_poll: vec!["org/repo1".to_string()],
+            log_level: "debug".to_string(),
+            bot_username: "gitbot".to_string(),
+            ..Default::default()
+        };
 
         let settings_arc = Arc::new(settings.clone());
         let gitlab_client = Arc::new(GitlabApiClient::new(settings_arc.clone()).unwrap());
