@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
 use crate::config::AppSettings;
-use crate::gitlab::{GitlabApiClient, IssueQueryOptions};
+use crate::gitlab::{GitlabApiClient, IssueQueryOptions, LabelOperation};
 use crate::models::GitlabIssue;
 use crate::openai::{ChatRequestBuilder, OpenAIApiClient};
 
@@ -470,11 +470,7 @@ pub async fn triage_unlabeled_issues(
 
         if let Err(e) = triage_service
             .gitlab_client
-            .add_issue_labels(
-                project_id,
-                issue.iid,
-                &labels.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
-            )
+            .update_issue_labels(project_id, issue.iid, LabelOperation::Add(labels.clone()))
             .await
         {
             error!("Failed to apply labels to issue #{}: {}", issue.iid, e);

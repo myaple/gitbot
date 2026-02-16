@@ -5,7 +5,7 @@ use tracing::{debug, error, info, trace, warn};
 
 use crate::config::AppSettings;
 use crate::file_indexer::FileIndexManager;
-use crate::gitlab::{GitlabApiClient, GitlabError};
+use crate::gitlab::{GitlabApiClient, GitlabError, LabelOperation};
 use crate::mention_cache::MentionCache;
 use crate::models::{GitlabNoteAttributes, GitlabNoteEvent, OpenAIChatMessage, ToolChoice};
 use crate::openai::{ChatRequestBuilder, OpenAIApiClient};
@@ -1522,7 +1522,14 @@ async fn extract_issue_details_and_handle_stale(
                     .any(|label| label == "stale")
                 {
                     info!("Issue #{} has 'stale' label and received a comment from user {}. Attempting to remove 'stale' label.", issue_iid, event.user.username);
-                    match gitlab_client.remove_issue_label(project_id, issue_iid, "stale").await {
+                    match gitlab_client
+                        .update_issue_labels(
+                            project_id,
+                            issue_iid,
+                            LabelOperation::Remove(vec!["stale".to_string()]),
+                        )
+                        .await
+                    {
                         Ok(_) => info!("Successfully removed 'stale' label from issue #{}", issue_iid),
                         Err(e) => warn!("Failed to remove 'stale' label from issue #{}: {}. Processing will continue.", issue_iid, e),
                     }

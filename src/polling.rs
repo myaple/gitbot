@@ -9,7 +9,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::config::AppSettings;
 use crate::file_indexer::FileIndexManager;
-use crate::gitlab::{GitlabApiClient, IssueQueryOptions};
+use crate::gitlab::{GitlabApiClient, IssueQueryOptions, LabelOperation};
 use crate::handlers::process_mention;
 use crate::mention_cache::MentionCache;
 use crate::models::{
@@ -631,7 +631,11 @@ async fn manage_stale_label(
                 issue.iid, stale_label_name
             );
             if let Err(e) = gitlab_client
-                .add_issue_label(project_id, issue.iid, stale_label_name)
+                .update_issue_labels(
+                    project_id,
+                    issue.iid,
+                    LabelOperation::Add(vec![stale_label_name.to_string()]),
+                )
                 .await
             {
                 error!(
@@ -648,7 +652,11 @@ async fn manage_stale_label(
                 issue.iid, stale_label_name
             );
             if let Err(e) = gitlab_client
-                .remove_issue_label(project_id, issue.iid, stale_label_name)
+                .update_issue_labels(
+                    project_id,
+                    issue.iid,
+                    LabelOperation::Remove(vec![stale_label_name.to_string()]),
+                )
                 .await
             {
                 error!(

@@ -1,5 +1,5 @@
 use crate::config::AppSettings;
-use crate::gitlab::{GitlabApiClient, GitlabError, IssueQueryOptions};
+use crate::gitlab::{GitlabApiClient, GitlabError, IssueQueryOptions, LabelOperation};
 use mockito;
 use reqwest::StatusCode;
 use serde_json::json;
@@ -493,7 +493,9 @@ async fn test_add_issue_label_success() {
         .create_async()
         .await;
 
-    let result = client.add_issue_label(1, 101, label_to_add).await;
+    let result = client
+        .update_issue_labels(1, 101, LabelOperation::Add(vec![label_to_add.to_string()]))
+        .await;
 
     mock.assert_async().await;
     assert!(result.is_ok());
@@ -539,7 +541,13 @@ async fn test_remove_issue_label_success() {
         .create_async()
         .await;
 
-    let result = client.remove_issue_label(1, 101, label_to_remove).await;
+    let result = client
+        .update_issue_labels(
+            1,
+            101,
+            LabelOperation::Remove(vec![label_to_remove.to_string()]),
+        )
+        .await;
 
     mock.assert_async().await;
     assert!(result.is_ok());
@@ -566,7 +574,9 @@ async fn test_add_issue_label_not_found() {
         .create_async()
         .await;
 
-    let result = client.add_issue_label(99, 999, label_to_add).await;
+    let result = client
+        .update_issue_labels(99, 999, LabelOperation::Add(vec![label_to_add.to_string()]))
+        .await;
     assert!(result.is_err());
     match result.err().unwrap() {
         GitlabError::Api { status, body } => {
@@ -595,7 +605,13 @@ async fn test_remove_issue_label_not_found() {
         .create_async()
         .await;
 
-    let result = client.remove_issue_label(88, 888, label_to_remove).await;
+    let result = client
+        .update_issue_labels(
+            88,
+            888,
+            LabelOperation::Remove(vec![label_to_remove.to_string()]),
+        )
+        .await;
     assert!(result.is_err());
     match result.err().unwrap() {
         GitlabError::Api { status, body } => {

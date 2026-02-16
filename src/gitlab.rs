@@ -49,6 +49,17 @@ pub struct IssueQueryOptions {
     pub sort: Option<String>,
 }
 
+/// Label operation type for updating issue labels
+#[derive(Debug, Clone)]
+pub enum LabelOperation {
+    /// Add labels to an issue (preserves existing labels)
+    Add(Vec<String>),
+    /// Remove labels from an issue (preserves other labels)
+    Remove(Vec<String>),
+    /// Set labels on an issue (replaces all existing labels)
+    Set(Vec<String>),
+}
+
 #[derive(Debug)]
 pub struct GitlabApiClient {
     client: Client,
@@ -595,28 +606,58 @@ impl GitlabApiClient {
         Ok(changes)
     }
 
-    #[instrument(skip(self), fields(project_id, issue_iid, label_name))]
-    pub async fn add_issue_label(
+    /// Update labels on an issue
+    ///
+    /// This is the consolidated method for all label operations.
+    /// Use LabelOperation to specify whether to add, remove, or set labels.
+    ///
+    /// # Examples
+    /// ```ignore
+    /// // Add a single label
+    /// client.update_issue_labels(
+    ///     project_id,
+    ///     issue_iid,
+    ///     LabelOperation::Add(vec!["bug".to_string()])
+    /// ).await?;
+    ///
+    /// // Remove multiple labels
+    /// client.update_issue_labels(
+    ///     project_id,
+    ///     issue_iid,
+    ///     LabelOperation::Remove(vec!["wontfix".to_string(), "duplicate".to_string()])
+    /// ).await?;
+    ///
+    /// // Replace all labels
+    /// client.update_issue_labels(
+    ///     project_id,
+    ///     issue_iid,
+    ///     LabelOperation::Set(vec!["feature".to_string(), "priority".to_string()])
+    /// ).await?;
+    /// ```
+    #[instrument(skip(self, operation), fields(project_id, issue_iid))]
+    pub async fn update_issue_labels(
         &self,
         project_id: i64,
         issue_iid: i64,
-        label_name: &str,
+        operation: LabelOperation,
     ) -> Result<GitlabIssue, GitlabError> {
         let path = format!("/api/v4/projects/{project_id}/issues/{issue_iid}");
-        let body = serde_json::json!({ "add_labels": label_name });
-        self.send_request(Method::PUT, &path, None, Some(body))
-            .await
-    }
 
-    #[instrument(skip(self), fields(project_id, issue_iid, label_name))]
-    pub async fn remove_issue_label(
-        &self,
-        project_id: i64,
-        issue_iid: i64,
-        label_name: &str,
-    ) -> Result<GitlabIssue, GitlabError> {
-        let path = format!("/api/v4/projects/{project_id}/issues/{issue_iid}");
-        let body = serde_json::json!({ "remove_labels": label_name });
+        let body = match operation {
+            LabelOperation::Add(labels) => {
+                let labels_str = labels.join(",");
+                serde_json::json!({ "add_labels": labels_str })
+            }
+            LabelOperation::Remove(labels) => {
+                let labels_str = labels.join(",");
+                serde_json::json!({ "remove_labels": labels_str })
+            }
+            LabelOperation::Set(labels) => {
+                let labels_str = labels.join(",");
+                serde_json::json!({ "labels": labels_str })
+            }
+        };
+
         self.send_request(Method::PUT, &path, None, Some(body))
             .await
     }
@@ -684,33 +725,4 @@ impl GitlabApiClient {
     }
 
 
-    /// Set multiple labels on an issue (replaces all existing labels)
-    #[instrument(skip(self), fields(project_id, issue_iid))]
-    pub async fn set_issue_labels(
-        &self,
-        project_id: i64,
-        issue_iid: i64,
-        labels: &[&str],
-    ) -> Result<GitlabIssue, GitlabError> {
-        let path = format!("/api/v4/projects/{project_id}/issues/{issue_iid}");
-        let labels_str = labels.join(",");
-        let body = serde_json::json!({ "labels": labels_str });
-        self.send_request(Method::PUT, &path, None, Some(body))
-            .await
-    }
-
-    /// Add multiple labels to an issue (preserves existing labels)
-    #[instrument(skip(self), fields(project_id, issue_iid))]
-    pub async fn add_issue_labels(
-        &self,
-        project_id: i64,
-        issue_iid: i64,
-        labels: &[&str],
-    ) -> Result<GitlabIssue, GitlabError> {
-        let path = format!("/api/v4/projects/{project_id}/issues/{issue_iid}");
-        let labels_str = labels.join(",");
-        let body = serde_json::json!({ "add_labels": labels_str });
-        self.send_request(Method::PUT, &path, None, Some(body))
-            .await
-    }
 }
