@@ -69,6 +69,17 @@ pub struct GitlabApiClient {
     repo_tree_cache: DashMap<i64, (Vec<String>, Instant)>,
 }
 
+/// Helper function to format a Unix timestamp into RFC3339 format
+fn format_timestamp(timestamp: u64) -> String {
+    DateTime::from_timestamp(timestamp as i64, 0)
+        .unwrap_or_else(|| {
+            Utc.timestamp_opt(0, 0)
+                .single()
+                .expect("Fallback timestamp failed for 0")
+        })
+        .to_rfc3339()
+}
+
 impl GitlabApiClient {
     pub fn new(settings: Arc<AppSettings>) -> Result<Self, GitlabError> {
         let gitlab_url = Url::parse(&settings.gitlab_url)?;
@@ -278,12 +289,7 @@ impl GitlabApiClient {
 
         // Add updated_after filter if specified
         if let Some(timestamp) = options.updated_after {
-            let dt = DateTime::from_timestamp(timestamp as i64, 0).unwrap_or_else(|| {
-                Utc.timestamp_opt(0, 0)
-                    .single()
-                    .expect("Fallback timestamp failed for 0")
-            });
-            query_params_values.push(("updated_after".to_string(), dt.to_rfc3339()));
+            query_params_values.push(("updated_after".to_string(), format_timestamp(timestamp)));
         }
 
         // Add state filter if specified
@@ -325,12 +331,7 @@ impl GitlabApiClient {
         since_timestamp: u64,
     ) -> Result<Vec<GitlabMergeRequest>, GitlabError> {
         let path = format!("/api/v4/projects/{project_id}/merge_requests");
-        let dt = DateTime::from_timestamp(since_timestamp as i64, 0).unwrap_or_else(|| {
-            Utc.timestamp_opt(0, 0)
-                .single()
-                .expect("Fallback timestamp failed for 0")
-        });
-        let formatted_timestamp_string = dt.to_rfc3339();
+        let formatted_timestamp_string = format_timestamp(since_timestamp);
 
         let query_params_values = [
             ("updated_after", formatted_timestamp_string),
@@ -367,13 +368,7 @@ impl GitlabApiClient {
             vec![("sort", "asc".to_string()), ("per_page", "100".to_string())];
 
         if let Some(timestamp) = since_timestamp {
-            let dt = DateTime::from_timestamp(timestamp as i64, 0).unwrap_or_else(|| {
-                Utc.timestamp_opt(0, 0)
-                    .single()
-                    .expect("Fallback timestamp failed for 0")
-            });
-            let formatted_timestamp_string = dt.to_rfc3339();
-            query_params_values.push(("created_after", formatted_timestamp_string));
+            query_params_values.push(("created_after", format_timestamp(timestamp)));
         }
 
         let params: Vec<(&str, &str)> = query_params_values
@@ -406,13 +401,7 @@ impl GitlabApiClient {
             vec![("sort", "asc".to_string()), ("per_page", "100".to_string())];
 
         if let Some(timestamp) = since_timestamp {
-            let dt = DateTime::from_timestamp(timestamp as i64, 0).unwrap_or_else(|| {
-                Utc.timestamp_opt(0, 0)
-                    .single()
-                    .expect("Fallback timestamp failed for 0")
-            });
-            let formatted_timestamp_string = dt.to_rfc3339();
-            query_params_values.push(("created_after", formatted_timestamp_string));
+            query_params_values.push(("created_after", format_timestamp(timestamp)));
         }
 
         let params: Vec<(&str, &str)> = query_params_values
