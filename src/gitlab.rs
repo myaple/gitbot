@@ -32,6 +32,23 @@ pub enum GitlabError {
 
 const REPO_TREE_CACHE_TTL: Duration = Duration::from_secs(300); // 5 minutes
 
+/// Options for querying issues from GitLab
+#[derive(Debug, Default, Clone)]
+pub struct IssueQueryOptions {
+    /// Filter issues updated after this timestamp
+    pub updated_after: Option<u64>,
+    /// Filter issues by state (e.g., "opened", "closed")
+    pub state: Option<String>,
+    /// Filter issues by labels (comma-separated)
+    pub labels: Option<String>,
+    /// Number of results per page (default: 100)
+    pub per_page: Option<usize>,
+    /// Field to order by (e.g., "created_at", "updated_at")
+    pub order_by: Option<String>,
+    /// Sort order ("asc" or "desc")
+    pub sort: Option<String>,
+}
+
 #[derive(Debug)]
 pub struct GitlabApiClient {
     client: Client,
@@ -217,57 +234,73 @@ impl GitlabApiClient {
             .await
     }
 
-    #[instrument(skip(self), fields(project_id, since_timestamp))]
+    /// Get issues from a project with flexible query options
+    ///
+    /// This is the consolidated method for all issue fetching operations.
+    /// Use IssueQueryOptions to specify filters like state, labels, timestamps, etc.
+    ///
+    /// # Examples
+    /// ```ignore
+    /// // Get all issues updated after timestamp
+    /// let options = IssueQueryOptions {
+    ///     updated_after: Some(timestamp),
+    ///     ..Default::default()
+    /// };
+    /// let issues = client.get_issues(project_id, options).await?;
+    ///
+    /// // Get opened issues only
+    /// let options = IssueQueryOptions {
+    ///     state: Some("opened".to_string()),
+    ///     ..Default::default()
+    /// };
+    /// let issues = client.get_issues(project_id, options).await?;
+    /// ```
+    #[instrument(skip(self, options), fields(project_id))]
     pub async fn get_issues(
         &self,
         project_id: i64,
-        since_timestamp: u64,
+        options: IssueQueryOptions,
     ) -> Result<Vec<GitlabIssue>, GitlabError> {
         let path = format!("/api/v4/projects/{project_id}/issues");
-        let dt = DateTime::from_timestamp(since_timestamp as i64, 0).unwrap_or_else(|| {
-            Utc.timestamp_opt(0, 0)
-                .single()
-                .expect("Fallback timestamp failed for 0")
-        });
-        let formatted_timestamp_string = dt.to_rfc3339();
 
-        let query_params_values = [
-            ("updated_after", formatted_timestamp_string),
-            ("sort", "asc".to_string()),
-            ("per_page", "100".to_string()),
-        ];
+        let mut query_params_values: Vec<(String, String)> = Vec::new();
+
+        // Add updated_after filter if specified
+        if let Some(timestamp) = options.updated_after {
+            let dt = DateTime::from_timestamp(timestamp as i64, 0).unwrap_or_else(|| {
+                Utc.timestamp_opt(0, 0)
+                    .single()
+                    .expect("Fallback timestamp failed for 0")
+            });
+            query_params_values.push(("updated_after".to_string(), dt.to_rfc3339()));
+        }
+
+        // Add state filter if specified
+        if let Some(state) = options.state {
+            query_params_values.push(("state".to_string(), state));
+        }
+
+        // Add labels filter if specified
+        if let Some(labels) = options.labels {
+            query_params_values.push(("labels".to_string(), labels));
+        }
+
+        // Add order_by if specified
+        if let Some(order_by) = options.order_by {
+            query_params_values.push(("order_by".to_string(), order_by));
+        }
+
+        // Add sort order (default: asc)
+        let sort = options.sort.unwrap_or_else(|| "asc".to_string());
+        query_params_values.push(("sort".to_string(), sort));
+
+        // Add per_page (default: 100)
+        let per_page = options.per_page.unwrap_or(100);
+        query_params_values.push(("per_page".to_string(), per_page.to_string()));
+
         let params: Vec<(&str, &str)> = query_params_values
             .iter()
-            .map(|(k, v)| (*k, v.as_str()))
-            .collect();
-
-        self.send_request(Method::GET, &path, Some(&params), None::<()>)
-            .await
-    }
-
-    #[instrument(skip(self), fields(project_id, since_timestamp))]
-    pub async fn get_opened_issues(
-        &self,
-        project_id: i64,
-        since_timestamp: u64,
-    ) -> Result<Vec<GitlabIssue>, GitlabError> {
-        let path = format!("/api/v4/projects/{project_id}/issues");
-        let dt = DateTime::from_timestamp(since_timestamp as i64, 0).unwrap_or_else(|| {
-            Utc.timestamp_opt(0, 0)
-                .single()
-                .expect("Fallback timestamp failed for 0")
-        });
-        let formatted_timestamp_string = dt.to_rfc3339();
-
-        let query_params_values = [
-            ("updated_after", formatted_timestamp_string),
-            ("state", "opened".to_string()),
-            ("sort", "asc".to_string()),
-            ("per_page", "100".to_string()),
-        ];
-        let params: Vec<(&str, &str)> = query_params_values
-            .iter()
-            .map(|(k, v)| (*k, v.as_str()))
+            .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();
 
         self.send_request(Method::GET, &path, Some(&params), None::<()>)
@@ -679,25 +712,6 @@ impl GitlabApiClient {
             .await
     }
 
-    /// Search for issues with a specific label
-    #[instrument(skip(self), fields(project_id, label))]
-    pub async fn get_issues_with_label(
-        &self,
-        project_id: i64,
-        label: &str,
-        limit: usize,
-    ) -> Result<Vec<GitlabIssue>, GitlabError> {
-        let path = format!("/api/v4/projects/{project_id}/issues");
-        let query_params = &[
-            ("labels", label),
-            ("state", "opened"),
-            ("per_page", &limit.to_string()),
-            ("order_by", "created_at"),
-            ("sort", "desc"),
-        ];
-        self.send_request(Method::GET, &path, Some(query_params), None::<()>)
-            .await
-    }
 
     /// Set multiple labels on an issue (replaces all existing labels)
     #[instrument(skip(self), fields(project_id, issue_iid))]

@@ -9,7 +9,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::config::AppSettings;
 use crate::file_indexer::FileIndexManager;
-use crate::gitlab::GitlabApiClient;
+use crate::gitlab::{GitlabApiClient, IssueQueryOptions};
 use crate::handlers::process_mention;
 use crate::mention_cache::MentionCache;
 use crate::models::{
@@ -150,7 +150,13 @@ impl PollingService {
         // Fetch issues covering both mentions and triage needs
         let recent_issues = match self
             .gitlab_client
-            .get_issues(project_id, fetch_recent_ts)
+            .get_issues(
+                project_id,
+                IssueQueryOptions {
+                    updated_after: Some(fetch_recent_ts),
+                    ..Default::default()
+                },
+            )
             .await
         {
             Ok(issues) => issues,
@@ -223,8 +229,19 @@ impl PollingService {
         // Fetch old issues for stale check (since 0)
         // We fetch separately because "sort=asc" means we get OLDEST updated issues with 0,
         // but recent ones with fetch_recent_ts.
-        // We use get_opened_issues to filter by state=opened server-side.
-        let open_stale_issues = match self.gitlab_client.get_opened_issues(project_id, 0).await {
+        // Filter by state=opened server-side.
+        let open_stale_issues = match self
+            .gitlab_client
+            .get_issues(
+                project_id,
+                IssueQueryOptions {
+                    updated_after: Some(0),
+                    state: Some("opened".to_string()),
+                    ..Default::default()
+                },
+            )
+            .await
+        {
             Ok(issues) => issues,
             Err(e) => {
                 error!(

@@ -1,5 +1,5 @@
 use crate::config::AppSettings;
-use crate::gitlab::{GitlabApiClient, GitlabError};
+use crate::gitlab::{GitlabApiClient, GitlabError, IssueQueryOptions};
 use mockito;
 use reqwest::StatusCode;
 use serde_json::json;
@@ -273,7 +273,16 @@ async fn test_get_issues() {
         .create_async()
         .await;
 
-    let issues = client.get_issues(1, 1620000000).await.unwrap();
+    let issues = client
+        .get_issues(
+            1,
+            IssueQueryOptions {
+                updated_after: Some(1620000000),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
     assert_eq!(issues.len(), 2);
     assert_eq!(issues[0].title, "Test Issue 1");
     assert_eq!(issues[0].updated_at, "2023-01-02T12:00:00Z");
@@ -1079,7 +1088,17 @@ async fn test_get_opened_issues() {
         .create_async()
         .await;
 
-    let issues = client.get_opened_issues(1, 1620000000).await.unwrap();
+    let issues = client
+        .get_issues(
+            1,
+            IssueQueryOptions {
+                updated_after: Some(1620000000),
+                state: Some("opened".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
     assert_eq!(issues.len(), 1);
     assert_eq!(issues[0].title, "Test Issue 1");
     assert_eq!(issues[0].state, "opened");
