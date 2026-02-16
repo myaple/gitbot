@@ -1,3 +1,5 @@
+#![allow(clippy::field_reassign_with_default)]
+
 use crate::config::AppSettings;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};

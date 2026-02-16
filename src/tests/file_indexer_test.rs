@@ -1,4 +1,5 @@
 #[cfg(test)]
+#[allow(clippy::field_reassign_with_default)]
 mod tests {
     use crate::file_indexer::{FileContentIndex, FileIndexManager};
     use crate::gitlab::GitlabApiClient;

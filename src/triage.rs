@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
 use crate::config::AppSettings;
-use crate::gitlab::GitlabApiClient;
+use crate::gitlab::{GitlabApiClient, IssueQueryOptions, LabelOperation};
 use crate::models::GitlabIssue;
 use crate::openai::{ChatRequestBuilder, OpenAIApiClient};
 
@@ -154,7 +154,17 @@ impl TriageService {
         // Get sample issues with this label
         let sample_issues = self
             .gitlab_client
-            .get_issues_with_label(project_id, &label.name, self.config.label_learning_samples)
+            .get_issues(
+                project_id,
+                IssueQueryOptions {
+                    labels: Some(label.name.clone()),
+                    state: Some("opened".to_string()),
+                    per_page: Some(self.config.label_learning_samples),
+                    order_by: Some("created_at".to_string()),
+                    sort: Some("desc".to_string()),
+                    ..Default::default()
+                },
+            )
             .await
             .map_err(|e| anyhow::anyhow!("Failed to fetch sample issues: {}", e))?;
 
@@ -460,11 +470,7 @@ pub async fn triage_unlabeled_issues(
 
         if let Err(e) = triage_service
             .gitlab_client
-            .add_issue_labels(
-                project_id,
-                issue.iid,
-                &labels.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
-            )
+            .update_issue_labels(project_id, issue.iid, LabelOperation::Add(labels.clone()))
             .await
         {
             error!("Failed to apply labels to issue #{}: {}", issue.iid, e);

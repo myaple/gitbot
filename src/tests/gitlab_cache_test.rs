@@ -1,3 +1,5 @@
+#![allow(clippy::field_reassign_with_default)]
+
 use crate::config::AppSettings;
 use crate::gitlab::GitlabApiClient;
 use mockito;

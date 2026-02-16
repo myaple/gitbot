@@ -1,5 +1,7 @@
+#![allow(clippy::field_reassign_with_default)]
+
 use crate::config::AppSettings;
-use crate::gitlab::{GitlabApiClient, GitlabError};
+use crate::gitlab::{GitlabApiClient, GitlabError, IssueQueryOptions, LabelOperation};
 use mockito;
 use reqwest::StatusCode;
 use serde_json::json;
@@ -273,7 +275,16 @@ async fn test_get_issues() {
         .create_async()
         .await;
 
-    let issues = client.get_issues(1, 1620000000).await.unwrap();
+    let issues = client
+        .get_issues(
+            1,
+            IssueQueryOptions {
+                updated_after: Some(1620000000),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
     assert_eq!(issues.len(), 2);
     assert_eq!(issues[0].title, "Test Issue 1");
     assert_eq!(issues[0].updated_at, "2023-01-02T12:00:00Z");
@@ -377,7 +388,10 @@ async fn test_get_issue_notes() {
         .create_async()
         .await;
 
-    let notes = client.get_issue_notes(1, 101, 1620000000).await.unwrap();
+    let notes = client
+        .get_issue_notes(1, 101, Some(1620000000))
+        .await
+        .unwrap();
     assert_eq!(notes.len(), 2);
     assert_eq!(notes[0].note, "This is a test note 1");
     assert_eq!(notes[0].updated_at, "2023-01-05T10:00:00Z");
@@ -434,7 +448,7 @@ async fn test_get_merge_request_notes() {
         .await;
 
     let notes = client
-        .get_merge_request_notes(1, 5, 1620000000)
+        .get_merge_request_notes(1, 5, Some(1620000000))
         .await
         .unwrap();
     assert_eq!(notes.len(), 2);
@@ -481,7 +495,9 @@ async fn test_add_issue_label_success() {
         .create_async()
         .await;
 
-    let result = client.add_issue_label(1, 101, label_to_add).await;
+    let result = client
+        .update_issue_labels(1, 101, LabelOperation::Add(vec![label_to_add.to_string()]))
+        .await;
 
     mock.assert_async().await;
     assert!(result.is_ok());
@@ -527,7 +543,13 @@ async fn test_remove_issue_label_success() {
         .create_async()
         .await;
 
-    let result = client.remove_issue_label(1, 101, label_to_remove).await;
+    let result = client
+        .update_issue_labels(
+            1,
+            101,
+            LabelOperation::Remove(vec![label_to_remove.to_string()]),
+        )
+        .await;
 
     mock.assert_async().await;
     assert!(result.is_ok());
@@ -554,7 +576,9 @@ async fn test_add_issue_label_not_found() {
         .create_async()
         .await;
 
-    let result = client.add_issue_label(99, 999, label_to_add).await;
+    let result = client
+        .update_issue_labels(99, 999, LabelOperation::Add(vec![label_to_add.to_string()]))
+        .await;
     assert!(result.is_err());
     match result.err().unwrap() {
         GitlabError::Api { status, body } => {
@@ -583,7 +607,13 @@ async fn test_remove_issue_label_not_found() {
         .create_async()
         .await;
 
-    let result = client.remove_issue_label(88, 888, label_to_remove).await;
+    let result = client
+        .update_issue_labels(
+            88,
+            888,
+            LabelOperation::Remove(vec![label_to_remove.to_string()]),
+        )
+        .await;
     assert!(result.is_err());
     match result.err().unwrap() {
         GitlabError::Api { status, body } => {
@@ -874,7 +904,7 @@ async fn test_get_all_issue_notes() {
         .create_async()
         .await;
 
-    let notes = client.get_all_issue_notes(1, 10).await.unwrap();
+    let notes = client.get_issue_notes(1, 10, None).await.unwrap();
     assert_eq!(notes.len(), 2);
     assert_eq!(notes[0].id, 1);
     assert_eq!(notes[0].note, "First comment");
@@ -921,7 +951,7 @@ async fn test_get_all_merge_request_notes() {
         .create_async()
         .await;
 
-    let notes = client.get_all_merge_request_notes(1, 20).await.unwrap();
+    let notes = client.get_merge_request_notes(1, 20, None).await.unwrap();
     assert_eq!(notes.len(), 1);
     assert_eq!(notes[0].id, 3);
     assert_eq!(notes[0].note, "First MR comment");
@@ -975,23 +1005,23 @@ async fn test_get_branches() {
     // Check main branch (default branch)
     let main_branch = &branches[0];
     assert_eq!(main_branch.name, "main");
-    assert_eq!(main_branch.default, true);
-    assert_eq!(main_branch.protected, true);
-    assert_eq!(main_branch.can_push, false);
+    assert!(main_branch.default);
+    assert!(main_branch.protected);
+    assert!(!main_branch.can_push);
 
     // Check feature branch
     let feature_branch = &branches[1];
     assert_eq!(feature_branch.name, "feature/new-feature");
-    assert_eq!(feature_branch.default, false);
-    assert_eq!(feature_branch.protected, false);
-    assert_eq!(feature_branch.can_push, true);
+    assert!(!feature_branch.default);
+    assert!(!feature_branch.protected);
+    assert!(feature_branch.can_push);
 
     // Check develop branch
     let develop_branch = &branches[2];
     assert_eq!(develop_branch.name, "develop");
-    assert_eq!(develop_branch.default, false);
-    assert_eq!(develop_branch.protected, false);
-    assert_eq!(develop_branch.can_push, true);
+    assert!(!develop_branch.default);
+    assert!(!develop_branch.protected);
+    assert!(develop_branch.can_push);
 }
 
 #[tokio::test]
@@ -1029,7 +1059,7 @@ async fn test_search_files() {
             mockito::Matcher::UrlEncoded("scope".into(), "blobs".into()),
             mockito::Matcher::UrlEncoded("search".into(), "query".into()),
             mockito::Matcher::UrlEncoded("ref".into(), "main".into()),
-            mockito::Matcher::UrlEncoded("per_page".into(), "20".into()),
+            mockito::Matcher::UrlEncoded("per_page".into(), "100".into()),
         ]))
         .with_status(200)
         .with_header("content-type", "application/json")
@@ -1037,17 +1067,13 @@ async fn test_search_files() {
         .create_async()
         .await;
 
-    // Test search_files_by_name
-    let results = client.search_files_by_name(1, "query").await.unwrap();
+    // Test search_code (consolidated search method)
+    let results = client.search_code(1, "query", "main").await.unwrap();
     assert_eq!(results.len(), 2);
-    assert!(results.contains(&"src/main.rs".to_string()));
-    assert!(results.contains(&"src/utils.rs".to_string()));
-
-    // Test search_files_by_content
-    let results = client.search_files_by_content(1, "query").await.unwrap();
-    assert_eq!(results.len(), 2);
-    assert!(results.contains(&"src/main.rs".to_string()));
-    assert!(results.contains(&"src/utils.rs".to_string()));
+    assert_eq!(results[0].path, "src/main.rs");
+    assert_eq!(results[0].basename, "main.rs");
+    assert_eq!(results[1].path, "src/utils.rs");
+    assert_eq!(results[1].basename, "utils.rs");
 }
 
 #[tokio::test]
@@ -1083,7 +1109,17 @@ async fn test_get_opened_issues() {
         .create_async()
         .await;
 
-    let issues = client.get_opened_issues(1, 1620000000).await.unwrap();
+    let issues = client
+        .get_issues(
+            1,
+            IssueQueryOptions {
+                updated_after: Some(1620000000),
+                state: Some("opened".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
     assert_eq!(issues.len(), 1);
     assert_eq!(issues[0].title, "Test Issue 1");
     assert_eq!(issues[0].state, "opened");
