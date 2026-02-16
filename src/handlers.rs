@@ -600,7 +600,7 @@ async fn fetch_all_issue_comments(
     issue_iid: i64,
 ) -> Result<Vec<GitlabNoteAttributes>> {
     gitlab_client
-        .get_all_issue_notes(project_id, issue_iid)
+        .get_issue_notes(project_id, issue_iid, None)
         .await
         .map_err(|e| anyhow!("Failed to get all issue comments: {}", e))
 }
@@ -612,7 +612,7 @@ async fn fetch_all_merge_request_comments(
     mr_iid: i64,
 ) -> Result<Vec<GitlabNoteAttributes>> {
     gitlab_client
-        .get_all_merge_request_notes(project_id, mr_iid)
+        .get_merge_request_notes(project_id, mr_iid, None)
         .await
         .map_err(|e| anyhow!("Failed to get all merge request comments: {}", e))
 }
@@ -648,7 +648,7 @@ async fn fetch_subsequent_notes_by_type(
                 "Fetching subsequent notes for issue to check for prior bot replies."
             );
             gitlab_client
-                .get_issue_notes(project_id, issue_iid, timestamp_u64)
+                .get_issue_notes(project_id, issue_iid, Some(timestamp_u64))
                 .await
                 .map_err(|e| anyhow!("Failed to get issue notes: {}", e))
         }
@@ -670,7 +670,7 @@ async fn fetch_subsequent_notes_by_type(
                 "Fetching subsequent notes for merge request to check for prior bot replies."
             );
             gitlab_client
-                .get_merge_request_notes(project_id, mr_iid, timestamp_u64)
+                .get_merge_request_notes(project_id, mr_iid, Some(timestamp_u64))
                 .await
                 .map_err(|e| anyhow!("Failed to get merge request notes: {}", e))
         }

@@ -335,20 +335,16 @@ impl GitlabApiClient {
             .await
     }
 
+    /// Get notes from an issue
+    ///
+    /// Optionally filter by creation timestamp. Pass None to get all notes.
+    ///
+    /// # Arguments
+    /// * `project_id` - The project ID
+    /// * `issue_iid` - The issue IID
+    /// * `since_timestamp` - Optional timestamp filter (notes created after this time)
     #[instrument(skip(self), fields(project_id, issue_iid, since_timestamp))]
     pub async fn get_issue_notes(
-        &self,
-        project_id: i64,
-        issue_iid: i64,
-        since_timestamp: u64,
-    ) -> Result<Vec<GitlabNoteAttributes>, GitlabError> {
-        self.get_issue_notes_with_options(project_id, issue_iid, Some(since_timestamp))
-            .await
-    }
-
-    /// Get all issue notes or notes since a timestamp
-    #[instrument(skip(self), fields(project_id, issue_iid, since_timestamp))]
-    pub async fn get_issue_notes_with_options(
         &self,
         project_id: i64,
         issue_iid: i64,
@@ -378,19 +374,16 @@ impl GitlabApiClient {
             .await
     }
 
-    pub async fn get_merge_request_notes(
-        &self,
-        project_id: i64,
-        mr_iid: i64,
-        since_timestamp: u64,
-    ) -> Result<Vec<GitlabNoteAttributes>, GitlabError> {
-        self.get_merge_request_notes_with_options(project_id, mr_iid, Some(since_timestamp))
-            .await
-    }
-
-    /// Get all merge request notes or notes since a timestamp
+    /// Get notes from a merge request
+    ///
+    /// Optionally filter by creation timestamp. Pass None to get all notes.
+    ///
+    /// # Arguments
+    /// * `project_id` - The project ID
+    /// * `mr_iid` - The merge request IID
+    /// * `since_timestamp` - Optional timestamp filter (notes created after this time)
     #[instrument(skip(self), fields(project_id, mr_iid, since_timestamp))]
-    pub async fn get_merge_request_notes_with_options(
+    pub async fn get_merge_request_notes(
         &self,
         project_id: i64,
         mr_iid: i64,
@@ -417,28 +410,6 @@ impl GitlabApiClient {
             .collect();
 
         self.send_request(Method::GET, &path, Some(&params), None::<()>)
-            .await
-    }
-
-    /// Get all issue notes (without timestamp filtering)
-    #[instrument(skip(self), fields(project_id, issue_iid))]
-    pub async fn get_all_issue_notes(
-        &self,
-        project_id: i64,
-        issue_iid: i64,
-    ) -> Result<Vec<GitlabNoteAttributes>, GitlabError> {
-        self.get_issue_notes_with_options(project_id, issue_iid, None)
-            .await
-    }
-
-    /// Get all merge request notes (without timestamp filtering)
-    #[instrument(skip(self), fields(project_id, mr_iid))]
-    pub async fn get_all_merge_request_notes(
-        &self,
-        project_id: i64,
-        mr_iid: i64,
-    ) -> Result<Vec<GitlabNoteAttributes>, GitlabError> {
-        self.get_merge_request_notes_with_options(project_id, mr_iid, None)
             .await
     }
 

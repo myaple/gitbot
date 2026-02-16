@@ -344,7 +344,7 @@ impl PollingService {
                 async move {
                     // Get notes for this issue
                     match gitlab_client
-                        .get_issue_notes(project_id, issue.iid, since_timestamp)
+                        .get_issue_notes(project_id, issue.iid, Some(since_timestamp))
                         .await
                     {
                         Ok(notes) => {
@@ -421,7 +421,7 @@ impl PollingService {
                 async move {
                     // Get notes for this merge request
                     match gitlab_client
-                        .get_merge_request_notes(project_id, mr.iid, since_timestamp)
+                        .get_merge_request_notes(project_id, mr.iid, Some(since_timestamp))
                         .await
                     {
                         Ok(notes) => {
@@ -573,9 +573,9 @@ async fn determine_last_activity(
         );
         Vec::new()
     } else {
-        // Fetch all notes for the issue (since_timestamp = 0 to get all)
+        // Fetch all notes for the issue
         match gitlab_client
-            .get_issue_notes(project_id, issue.iid, 0)
+            .get_issue_notes(project_id, issue.iid, Some(0))
             .await
         {
             Ok(n) => n,

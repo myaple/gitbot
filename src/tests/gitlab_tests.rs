@@ -386,7 +386,10 @@ async fn test_get_issue_notes() {
         .create_async()
         .await;
 
-    let notes = client.get_issue_notes(1, 101, 1620000000).await.unwrap();
+    let notes = client
+        .get_issue_notes(1, 101, Some(1620000000))
+        .await
+        .unwrap();
     assert_eq!(notes.len(), 2);
     assert_eq!(notes[0].note, "This is a test note 1");
     assert_eq!(notes[0].updated_at, "2023-01-05T10:00:00Z");
@@ -443,7 +446,7 @@ async fn test_get_merge_request_notes() {
         .await;
 
     let notes = client
-        .get_merge_request_notes(1, 5, 1620000000)
+        .get_merge_request_notes(1, 5, Some(1620000000))
         .await
         .unwrap();
     assert_eq!(notes.len(), 2);
@@ -883,7 +886,7 @@ async fn test_get_all_issue_notes() {
         .create_async()
         .await;
 
-    let notes = client.get_all_issue_notes(1, 10).await.unwrap();
+    let notes = client.get_issue_notes(1, 10, None).await.unwrap();
     assert_eq!(notes.len(), 2);
     assert_eq!(notes[0].id, 1);
     assert_eq!(notes[0].note, "First comment");
@@ -930,7 +933,10 @@ async fn test_get_all_merge_request_notes() {
         .create_async()
         .await;
 
-    let notes = client.get_all_merge_request_notes(1, 20).await.unwrap();
+    let notes = client
+        .get_merge_request_notes(1, 20, None)
+        .await
+        .unwrap();
     assert_eq!(notes.len(), 1);
     assert_eq!(notes[0].id, 3);
     assert_eq!(notes[0].note, "First MR comment");

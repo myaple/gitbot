@@ -881,7 +881,7 @@ impl ToolTrait for GetIssueNotesTool {
 
         match self
             .gitlab_client
-            .get_all_issue_notes(project_id, issue_iid)
+            .get_issue_notes(project_id, issue_iid, None)
             .await
         {
             Ok(notes) => {
