@@ -395,9 +395,7 @@ impl FileIndexManager {
 
         let fetch_futures = files_to_fetch.iter().map(|file_path| {
             let client = self.gitlab_client.clone();
-            async move {
-                client.get_file_content(project_id, file_path, None).await
-            }
+            async move { client.get_file_content(project_id, file_path, None).await }
         });
 
         let results = futures::future::join_all(fetch_futures).await;
