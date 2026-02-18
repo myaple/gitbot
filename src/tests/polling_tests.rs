@@ -485,8 +485,13 @@ mod tests {
         let file_index_manager = Arc::new(FileIndexManager::new(gitlab_client.clone(), 3600));
         let openai_client = Arc::new(crate::openai::OpenAIApiClient::new(&settings_obj).unwrap());
 
-        let polling_service =
-            PollingService::new(gitlab_client, openai_client, settings_obj, file_index_manager, None);
+        let polling_service = PollingService::new(
+            gitlab_client,
+            openai_client,
+            settings_obj,
+            file_index_manager,
+            None,
+        );
 
         let last_checked = *polling_service.last_checked.lock().await;
         let now = SystemTime::now()

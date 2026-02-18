@@ -12,12 +12,12 @@ use crate::file_indexer::FileIndexManager;
 use crate::gitlab::{GitlabApiClient, IssueQueryOptions, LabelOperation};
 use crate::handlers::process_mention;
 use crate::log_dedup::LogDeduplicator;
-use crate::openai::OpenAIApiClient;
 use crate::mention_cache::MentionCache;
 use crate::models::{
     GitlabIssue, GitlabNoteAttributes, GitlabNoteEvent, GitlabNoteObject, GitlabProject,
     GitlabProjectEvent,
 };
+use crate::openai::OpenAIApiClient;
 use crate::triage::{triage_unlabeled_issues, TriageService};
 
 #[derive(Clone)]

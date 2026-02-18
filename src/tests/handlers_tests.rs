@@ -217,8 +217,15 @@ mod tests {
         let openai_client = Arc::new(OpenAIApiClient::new(&config).unwrap());
 
         // Process the mention
-        let result =
-            process_mention(event, gitlab_client, openai_client, config, &cache, file_index_manager).await; // Pass as reference
+        let result = process_mention(
+            event,
+            gitlab_client,
+            openai_client,
+            config,
+            &cache,
+            file_index_manager,
+        )
+        .await; // Pass as reference
 
         // Should return Ok since we're ignoring comments without mentions
         assert!(result.is_ok());
@@ -261,8 +268,15 @@ mod tests {
         let openai_client = Arc::new(OpenAIApiClient::new(&config).unwrap());
 
         // Process the mention
-        let result =
-            process_mention(event, gitlab_client, openai_client, config, &cache, file_index_manager).await; // Pass as reference
+        let result = process_mention(
+            event,
+            gitlab_client,
+            openai_client,
+            config,
+            &cache,
+            file_index_manager,
+        )
+        .await; // Pass as reference
 
         // Should return Ok since we're ignoring comments without mentions
         assert!(result.is_ok());
@@ -491,8 +505,15 @@ mod tests {
 
         let openai_client = Arc::new(OpenAIApiClient::new(&config).unwrap());
 
-        let result =
-            process_mention(event, gitlab_client, openai_client, config, &cache, file_index_manager).await; // Pass as reference
+        let result = process_mention(
+            event,
+            gitlab_client,
+            openai_client,
+            config,
+            &cache,
+            file_index_manager,
+        )
+        .await; // Pass as reference
 
         assert!(result.is_ok());
         m_get_notes_uncalled.expect(0).assert_async().await; // Explicitly assert not called
@@ -564,8 +585,15 @@ mod tests {
 
         let openai_client = Arc::new(OpenAIApiClient::new(&config).unwrap());
 
-        let result =
-            process_mention(event, gitlab_client, openai_client, config, &cache, file_index_manager).await; // Pass as reference
+        let result = process_mention(
+            event,
+            gitlab_client,
+            openai_client,
+            config,
+            &cache,
+            file_index_manager,
+        )
+        .await; // Pass as reference
 
         assert!(result.is_ok());
         assert!(cache.check(TEST_MENTION_ID).await); // Original mention ID added to cache
@@ -621,8 +649,15 @@ mod tests {
 
         let openai_client = Arc::new(OpenAIApiClient::new(&config).unwrap());
 
-        let result =
-            process_mention(event, gitlab_client, openai_client, config, &cache, file_index_manager).await; // Pass as reference
+        let result = process_mention(
+            event,
+            gitlab_client,
+            openai_client,
+            config,
+            &cache,
+            file_index_manager,
+        )
+        .await; // Pass as reference
 
         assert!(result.is_err());
         assert!(!cache.check(TEST_MENTION_ID).await); // Cache should NOT contain the ID
