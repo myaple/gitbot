@@ -31,6 +31,7 @@ pub enum GitlabError {
 }
 
 const REPO_TREE_CACHE_TTL: Duration = Duration::from_secs(300); // 5 minutes
+const PROJECT_CACHE_TTL: Duration = Duration::from_secs(3600); // 1 hour
 
 /// Options for querying issues from GitLab
 #[derive(Debug, Default, Clone)]
@@ -68,6 +69,7 @@ pub struct GitlabApiClient {
     private_token: String,
     settings: Arc<AppSettings>,
     repo_tree_cache: DashMap<i64, (Vec<String>, Instant)>,
+    project_cache: DashMap<String, (GitlabProject, Instant)>,
 }
 
 /// Helper function to format a Unix timestamp into RFC3339 format
@@ -123,6 +125,7 @@ impl GitlabApiClient {
             private_token: settings.gitlab_token.clone(),
             settings,
             repo_tree_cache: DashMap::new(),
+            project_cache: DashMap::new(),
         })
     }
 
@@ -251,10 +254,25 @@ impl GitlabApiClient {
 
     #[instrument(skip(self), fields(repo_path))]
     pub async fn get_project_by_path(&self, repo_path: &str) -> Result<GitlabProject, GitlabError> {
+        // Check cache first
+        if let Some(entry) = self.project_cache.get(repo_path) {
+            let (project, timestamp) = entry.value();
+            if timestamp.elapsed() < PROJECT_CACHE_TTL {
+                debug!("Returning cached project for path {}", repo_path);
+                return Ok(project.clone());
+            }
+        }
+
         let encoded_path = urlencoding::encode(repo_path);
         let path = format!("/api/v4/projects/{encoded_path}");
-        self.send_request(Method::GET, &path, None, None::<()>)
-            .await
+        let project: GitlabProject = self
+            .send_request(Method::GET, &path, None, None::<()>)
+            .await?;
+
+        self.project_cache
+            .insert(repo_path.to_string(), (project.clone(), Instant::now()));
+
+        Ok(project)
     }
 
     /// Get issues from a project with flexible query options
