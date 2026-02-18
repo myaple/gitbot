@@ -359,7 +359,10 @@ impl PollingService {
                     let note_data = match event.note {
                         Some(note) => note,
                         None => {
-                            error!("Unexpected missing note in pre-filtered event for project {}", project.id);
+                            error!(
+                                "Unexpected missing note in pre-filtered event for project {}",
+                                project.id
+                            );
                             return;
                         }
                     };
