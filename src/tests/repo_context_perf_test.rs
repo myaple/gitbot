@@ -40,7 +40,9 @@ mod tests {
             if i % 1000 == 0 {
                 content.push_str("This line contains the magic keyword TARGET.\n");
             } else {
-                content.push_str("This is a regular line of code with some content that is not relevant.\n");
+                content.push_str(
+                    "This is a regular line of code with some content that is not relevant.\n",
+                );
             }
         }
 
