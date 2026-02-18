@@ -361,7 +361,16 @@ impl PollingService {
                 let project = project.clone();
                 let mention_count = mention_count.clone();
                 async move {
-                    let note_data = event.note.unwrap(); // safe: pre-filtered above
+                    let note_data = match event.note {
+                        Some(note) => note,
+                        None => {
+                            error!(
+                                "Unexpected missing note in pre-filtered event for project {}",
+                                project.id
+                            );
+                            return;
+                        }
+                    };
 
                     let noteable_iid = note_data.noteable_iid.unwrap_or(0);
                     let noteable_id = note_data.noteable_id.unwrap_or(0);
