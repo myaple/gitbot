@@ -1,11 +1,11 @@
+use crate::config::AppSettings;
 use crate::file_indexer::FileIndexManager;
 use crate::gitlab::GitlabApiClient;
-use crate::config::AppSettings;
 use std::sync::Arc;
-use wiremock::{Mock, MockServer, ResponseTemplate};
-use wiremock::matchers::{method, path, query_param};
 use std::time::{Duration, Instant};
 use urlencoding::encode;
+use wiremock::matchers::{method, path, query_param};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[tokio::test]
 async fn test_search_files_performance() {
@@ -28,7 +28,10 @@ async fn test_search_files_performance() {
         index.add_file(&file_path, "fn test() {}");
 
         let encoded_path = encode(&file_path);
-        let endpoint_path = format!("/api/v4/projects/{}/repository/files/{}", project_id, encoded_path);
+        let endpoint_path = format!(
+            "/api/v4/projects/{}/repository/files/{}",
+            project_id, encoded_path
+        );
 
         let content = base64::encode("fn test() {}");
         let response_body = serde_json::json!({
@@ -49,14 +52,17 @@ async fn test_search_files_performance() {
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_json(response_body)
-                    .set_delay(Duration::from_millis(100))
+                    .set_delay(Duration::from_millis(100)),
             )
             .mount(&mock_server)
             .await;
     }
 
     let start = Instant::now();
-    let results = manager.search_files(project_id, &["test".to_string()]).await.unwrap();
+    let results = manager
+        .search_files(project_id, &["test".to_string()])
+        .await
+        .unwrap();
     let duration = start.elapsed();
 
     println!("Search took {:?}", duration);
@@ -64,5 +70,9 @@ async fn test_search_files_performance() {
 
     // In concurrent mode, it should be close to the max delay of a single request (100ms)
     // We assert < 250ms to allow for some overhead (was ~500ms sequentially)
-    assert!(duration.as_millis() < 250, "Expected duration < 250ms (concurrent), got {:?}", duration);
+    assert!(
+        duration.as_millis() < 250,
+        "Expected duration < 250ms (concurrent), got {:?}",
+        duration
+    );
 }
