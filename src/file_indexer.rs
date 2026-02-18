@@ -390,13 +390,20 @@ impl FileIndexManager {
         // Fetch content for matching files and calculate relevance scores
         let mut files_with_content = Vec::new();
 
-        // Limit the number of files to fetch
-        for file_path in matching_files.iter().take(5) {
-            match self
-                .gitlab_client
-                .get_file_content(project_id, file_path, None)
-                .await
-            {
+        // Limit the number of files to fetch and run requests concurrently
+        let files_to_fetch: Vec<_> = matching_files.iter().take(5).collect();
+
+        let fetch_futures = files_to_fetch.iter().map(|file_path| {
+            let client = self.gitlab_client.clone();
+            async move {
+                client.get_file_content(project_id, file_path, None).await
+            }
+        });
+
+        let results = futures::future::join_all(fetch_futures).await;
+
+        for (result, file_path) in results.into_iter().zip(files_to_fetch) {
+            match result {
                 Ok(mut file) => {
                     // Calculate relevance score based on content
                     let content_score = if let Some(content) = &file.content {
