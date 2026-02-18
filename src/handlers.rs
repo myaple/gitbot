@@ -1041,8 +1041,8 @@ fn format_final_reply_body(
             "Hey @{event_user_username}, here's the information you requested:\n\n---\n\n{llm_reply}"
         )
     } else {
-        // For merge requests, include commit history only if no user context was provided
-        if user_provided_context.is_none() {
+        // For merge requests, include commit history block only when available and no user context
+        if user_provided_context.is_none() && !commit_history.is_empty() {
             format!(
                 "Hey @{event_user_username}, here's the information you requested:\n\n---\n\n{llm_reply}\n\n<details><summary>Additional Commit History</summary>\n\n{commit_history}</details>"
             )
