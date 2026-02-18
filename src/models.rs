@@ -270,7 +270,6 @@ pub struct GitlabLabel {
 
 /// A note object as returned inside a GitLab project event (events API).
 #[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
 pub struct GitlabEventNote {
     pub id: i64,
     pub body: String,
@@ -286,7 +285,6 @@ pub struct GitlabEventNote {
 
 /// An event from the GitLab project events API (`GET /projects/:id/events`).
 #[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
 pub struct GitlabProjectEvent {
     pub id: i64,
     pub project_id: i64,
