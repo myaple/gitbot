@@ -936,17 +936,20 @@ impl RepoContextExtractor {
         file_content: &str,
         keywords: &[String],
     ) -> Vec<FileContentMatch> {
-        let lines: Vec<String> = file_content.lines().map(|s| s.to_string()).collect();
+        let lines: Vec<&str> = file_content.lines().collect();
         if lines.is_empty() {
             return Vec::new();
         }
+
+        // Pre-calculate lowercased keywords to avoid repeated allocation
+        let keywords_lower: Vec<String> = keywords.iter().map(|k| k.to_lowercase()).collect();
 
         // Find line numbers that contain any of the keywords (case-insensitive)
         let mut matching_lines = HashSet::new();
         for (line_idx, line) in lines.iter().enumerate() {
             let line_lower = line.to_lowercase();
-            for keyword in keywords {
-                if line_lower.contains(&keyword.to_lowercase()) {
+            for keyword in &keywords_lower {
+                if line_lower.contains(keyword) {
                     matching_lines.insert(line_idx);
                     break; // Found a match, no need to check other keywords for this line
                 }
@@ -985,7 +988,8 @@ impl RepoContextExtractor {
         // Convert ranges to FileContentMatch structs
         let mut matches = Vec::new();
         for (start, end) in merged_ranges {
-            let range_lines = lines[start..=end].to_vec();
+            let range_lines: Vec<String> =
+                lines[start..=end].iter().map(|&s| s.to_string()).collect();
             matches.push(FileContentMatch {
                 start_line: start + 1, // Convert to 1-based line numbering
                 end_line: end + 1,     // Convert to 1-based line numbering
