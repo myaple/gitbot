@@ -577,7 +577,7 @@ impl RepoContextExtractor {
             // total_size += "\n--- Latest Pipeline Status ---\n[Pipeline status omitted due to context size limits]\n---".len();
         }
 
-        // Then add the diff context and file history
+        // Then add the diff context
         let diffs = match self
             .gitlab_client
             .get_merge_request_changes(project.id, mr.iid)
@@ -597,55 +597,7 @@ impl RepoContextExtractor {
         };
 
         for diff in diffs {
-            let mut file_context =
-                format!("\n--- Changes in {} ---\n{}\n", diff.new_path, diff.diff);
-
-            // Get commit history for this file
-            match self
-                .gitlab_client
-                .get_file_commits(project.id, &diff.new_path, Some(5))
-                .await
-            {
-                Ok(commits) => {
-                    // Add commit history to LLM context
-                    file_context.push_str("\n--- Recent Commit History ---\n");
-                    for commit in commits.iter() {
-                        file_context.push_str(&format!(
-                            "* {} ({}) - {}\n  {}\n",
-                            commit.short_id, commit.authored_date, commit.author_name, commit.title
-                        ));
-                    }
-                    file_context.push('\n');
-
-                    // Add commit history to comment in a more user-friendly format with hyperlinks
-                    context_for_comment
-                        .push_str(&format!("\n### Recent commits for `{}`:\n", diff.new_path));
-                    context_for_comment.push_str("| Commit | Author | Date | Title |\n");
-                    context_for_comment.push_str("|--------|---------|------|-------|\n");
-                    for commit in commits.iter() {
-                        let commit_url = format!("{}/commit/{}", project.web_url, commit.id);
-                        context_for_comment.push_str(&format!(
-                            "| [{}]({}) | {} | {} | {} |\n",
-                            &commit.short_id,
-                            commit_url,
-                            commit.author_name,
-                            commit
-                                .authored_date
-                                .split('T')
-                                .next()
-                                .unwrap_or(&commit.authored_date),
-                            commit.title
-                        ));
-                    }
-                    context_for_comment.push('\n');
-                }
-                Err(e) => {
-                    warn!(
-                        "Failed to get commit history for {}: {}. Continuing with other context.",
-                        diff.new_path, e
-                    );
-                }
-            }
+            let file_context = format!("\n--- Changes in {} ---\n{}\n", diff.new_path, diff.diff);
 
             // Check if adding this context would exceed our context limit
             if total_tokens + estimate_tokens(&file_context) > self.settings.max_context_size {
@@ -664,10 +616,6 @@ impl RepoContextExtractor {
             context_for_llm =
                 "Context gathering completed but no content was added due to size constraints."
                     .to_string();
-        }
-
-        if context_for_comment.is_empty() {
-            context_for_comment = "No commit history available for the changed files.".to_string();
         }
 
         Ok((context_for_llm, context_for_comment))
