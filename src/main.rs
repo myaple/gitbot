@@ -141,6 +141,7 @@ async fn main() -> Result<()> {
     // Create polling service
     let polling_service = PollingService::new(
         gitlab_client,
+        openai_client.clone(),
         config_arc.clone(),
         file_index_manager.clone(),
         triage_service,

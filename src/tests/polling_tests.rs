@@ -22,7 +22,7 @@ mod tests {
         settings.gitlab_url = base_url;
         settings.gitlab_token = "test_token".to_string();
         settings.openai_api_key = "key".to_string();
-        settings.openai_custom_url = "url".to_string();
+        settings.openai_custom_url = "http://url".to_string();
         settings.repos_to_poll = vec!["org/repo1".to_string()];
         settings.log_level = "debug".to_string();
         settings.bot_username = bot_username.to_string();
@@ -483,9 +483,15 @@ mod tests {
         let settings_obj = test_config(30, TEST_BOT_USERNAME, base_url.clone());
         let gitlab_client = Arc::new(GitlabApiClient::new(settings_obj.clone()).unwrap());
         let file_index_manager = Arc::new(FileIndexManager::new(gitlab_client.clone(), 3600));
+        let openai_client = Arc::new(crate::openai::OpenAIApiClient::new(&settings_obj).unwrap());
 
-        let polling_service =
-            PollingService::new(gitlab_client, settings_obj, file_index_manager, None);
+        let polling_service = PollingService::new(
+            gitlab_client,
+            openai_client,
+            settings_obj,
+            file_index_manager,
+            None,
+        );
 
         let last_checked = *polling_service.last_checked.lock().await;
         let now = SystemTime::now()
