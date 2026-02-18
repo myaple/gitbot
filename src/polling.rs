@@ -14,8 +14,8 @@ use crate::handlers::process_mention;
 use crate::log_dedup::LogDeduplicator;
 use crate::mention_cache::MentionCache;
 use crate::models::{
-    GitlabIssue, GitlabMergeRequest, GitlabNoteAttributes, GitlabNoteEvent, GitlabNoteObject,
-    GitlabProject, GitlabUser,
+    GitlabIssue, GitlabNoteAttributes, GitlabNoteEvent, GitlabNoteObject, GitlabProject,
+    GitlabProjectEvent,
 };
 use crate::triage::{triage_unlabeled_issues, TriageService};
 
@@ -28,6 +28,8 @@ pub struct PollingService {
     file_index_manager: Arc<FileIndexManager>,
     triage_service: Option<TriageService>,
     log_dedup: LogDeduplicator,
+    /// Tracks when the stale-issue check last ran per project_id (keyed by project_id).
+    last_stale_check: Arc<dashmap::DashMap<i64, std::time::Instant>>,
 }
 
 impl PollingService {
@@ -56,6 +58,7 @@ impl PollingService {
             file_index_manager,
             triage_service,
             log_dedup,
+            last_stale_check: Arc::new(dashmap::DashMap::new()),
         }
     }
 
@@ -148,34 +151,19 @@ impl PollingService {
             effective_timestamp, self.config.max_age_hours
         );
 
-        // Determine fetch timestamp for recent issues (covering mentions and triage)
-        let fetch_recent_ts = if self.triage_service.is_some() {
-            let triage_lookback_seconds = self.config.triage_lookback_hours * 3600;
-            let triage_cutoff = now.saturating_sub(triage_lookback_seconds);
-            std::cmp::min(effective_timestamp, triage_cutoff)
-        } else {
-            effective_timestamp
-        };
-
-        // Fetch issues covering both mentions and triage needs
-        let recent_issues = match self
+        // Fetch all note events for the project in a single API call.
+        // This replaces the previous pattern of fetching notes per-issue and per-MR.
+        let note_events = match self
             .gitlab_client
-            .get_issues(
-                project_id,
-                IssueQueryOptions {
-                    updated_after: Some(fetch_recent_ts),
-                    ..Default::default()
-                },
-            )
+            .get_project_note_events(project_id, effective_timestamp)
             .await
         {
-            Ok(issues) => issues,
+            Ok(events) => events,
             Err(e) => {
-                // Only log this error if we haven't logged it recently
-                let log_key = format!("fetch_issues_error_{}", project_id);
+                let log_key = format!("fetch_events_error_{}", project_id);
                 if self.log_dedup.should_log(&log_key).await {
                     error!(
-                        "Failed to fetch recent issues for project {}: {}",
+                        "Failed to fetch note events for project {}: {}",
                         project_id, e
                     );
                 }
@@ -183,135 +171,120 @@ impl PollingService {
             }
         };
 
-        // Filter for mentions: update >= effective_timestamp
-        let mention_issues: Vec<GitlabIssue> = recent_issues
-            .iter()
-            .filter(|i| match DateTime::parse_from_rfc3339(&i.updated_at) {
-                Ok(dt) => dt.timestamp() as u64 >= effective_timestamp,
-                Err(_) => false,
-            })
-            .cloned()
-            .collect();
-
-        // Filter for triage: open issues
-        let open_recent_issues: Vec<GitlabIssue> = recent_issues
-            .iter()
-            .filter(|i| i.state == "opened")
-            .cloned()
-            .collect();
-
-        // Start task for processing mentions
+        // Task for processing all mentions (issues + MRs) from the single events batch
         let mentions_task = {
             let self_clone = self.clone();
             let project_clone = project.clone();
-            let mention_issues_clone = mention_issues;
             tokio::spawn(async move {
                 if let Err(e) = self_clone
-                    .process_issues_for_mentions(
-                        project_id,
-                        &mention_issues_clone,
-                        effective_timestamp,
-                        &project_clone,
-                    )
+                    .process_note_events(project_id, note_events, &project_clone)
                     .await
                 {
                     error!(
-                        "Error processing mentions for project {}: {}",
+                        "Error processing note events for project {}: {}",
                         project_id, e
                     );
                 }
             })
         };
 
-        // Start task for polling merge requests
-        let mrs_task = {
-            let self_clone = self.clone();
-            let project_clone = project.clone();
-            tokio::spawn(async move {
-                if let Err(e) = self_clone
-                    .poll_merge_requests(project_id, effective_timestamp, &project_clone)
-                    .await
-                {
-                    error!(
-                        "Error polling merge requests for project {}: {}",
-                        project_id, e
-                    );
+        // Task for checking stale issues (only once per day per project)
+        let stale_check_task = if self.should_run_stale_check(project_id) {
+            self.update_last_stale_check(project_id);
+            let open_stale_issues = match self
+                .gitlab_client
+                .get_issues(
+                    project_id,
+                    IssueQueryOptions {
+                        updated_after: Some(0),
+                        state: Some("opened".to_string()),
+                        ..Default::default()
+                    },
+                )
+                .await
+            {
+                Ok(issues) => issues,
+                Err(e) => {
+                    let log_key = format!("stale_fetch_error_{}", project_id);
+                    if self.log_dedup.should_log(&log_key).await {
+                        error!(
+                            "Failed to fetch issues for stale check for project {}: {}",
+                            project_id, e
+                        );
+                    }
+                    Vec::new()
                 }
-            })
-        };
+            };
 
-        // Fetch old issues for stale check (since 0)
-        // We fetch separately because "sort=asc" means we get OLDEST updated issues with 0,
-        // but recent ones with fetch_recent_ts.
-        // Filter by state=opened server-side.
-        let open_stale_issues = match self
-            .gitlab_client
-            .get_issues(
-                project_id,
-                IssueQueryOptions {
-                    updated_after: Some(0),
-                    state: Some("opened".to_string()),
-                    ..Default::default()
-                },
-            )
-            .await
-        {
-            Ok(issues) => issues,
-            Err(e) => {
-                // Only log this error if we haven't logged it recently
-                let log_key = format!("stale_fetch_error_{}", project_id);
-                if self.log_dedup.should_log(&log_key).await {
-                    error!(
-                        "Failed to fetch issues for stale check for project {}: {}",
-                        project_id, e
-                    );
-                }
-                Vec::new()
-            }
-        };
-
-        // Task for checking stale issues
-        let stale_check_task = {
-            let project_id_clone = project_id;
             let gitlab_client_clone = self.gitlab_client.clone();
             let config_clone = self.config.clone();
-            let open_stale_issues_clone = open_stale_issues;
-            tokio::spawn(async move {
+            Some(tokio::spawn(async move {
                 if let Err(e) = check_stale_issues(
-                    project_id_clone,
+                    project_id,
                     gitlab_client_clone,
                     config_clone,
-                    &open_stale_issues_clone,
+                    &open_stale_issues,
                 )
                 .await
                 {
                     error!(
                         "Error checking stale issues for project {}: {}",
-                        project_id_clone, e
+                        project_id, e
                     );
                 }
-            })
+            }))
+        } else {
+            debug!(
+                "Skipping stale check for project {} (already ran within the last 24 hours)",
+                project_id
+            );
+            None
         };
 
         // Task for triaging unlabeled issues
         let triage_task = if let Some(triage) = &self.triage_service {
-            let triage_clone = triage.clone();
-            let project_id_clone = project_id;
-            let config_clone = self.config.clone();
-            let open_recent_issues_clone = open_recent_issues;
+            let triage_lookback_seconds = self.config.triage_lookback_hours * 3600;
+            let triage_cutoff = now.saturating_sub(triage_lookback_seconds);
 
+            let open_recent_issues = match self
+                .gitlab_client
+                .get_issues(
+                    project_id,
+                    IssueQueryOptions {
+                        updated_after: Some(triage_cutoff),
+                        state: Some("opened".to_string()),
+                        ..Default::default()
+                    },
+                )
+                .await
+            {
+                Ok(issues) => issues,
+                Err(e) => {
+                    let log_key = format!("triage_fetch_error_{}", project_id);
+                    if self.log_dedup.should_log(&log_key).await {
+                        error!(
+                            "Failed to fetch issues for triage for project {}: {}",
+                            project_id, e
+                        );
+                    }
+                    Vec::new()
+                }
+            };
+
+            let triage_clone = triage.clone();
+            let config_clone = self.config.clone();
             Some(tokio::spawn(async move {
                 if let Err(e) = triage_unlabeled_issues(
                     &triage_clone,
-                    project_id_clone,
-                    &open_recent_issues_clone,
+                    project_id,
+                    &open_recent_issues,
                     config_clone.triage_lookback_hours,
                 )
                 .await
                 {
                     error!(
                         "Error triaging unlabeled issues for project {}: {}",
-                        project_id_clone, e
+                        project_id, e
                     );
                 }
             }))
@@ -321,13 +294,12 @@ impl PollingService {
 
         // Wait for all tasks
         if let Err(e) = mentions_task.await {
-            error!("Task join error for mentions processing: {}", e);
+            error!("Task join error for note events processing: {}", e);
         }
-        if let Err(e) = mrs_task.await {
-            error!("Task join error for merge requests polling: {}", e);
-        }
-        if let Err(e) = stale_check_task.await {
-            error!("Task join error for stale issue checking: {}", e);
+        if let Some(task) = stale_check_task {
+            if let Err(e) = task.await {
+                error!("Task join error for stale issue checking: {}", e);
+            }
         }
         if let Some(task) = triage_task {
             if let Err(e) = task.await {
@@ -338,271 +310,153 @@ impl PollingService {
         Ok(())
     }
 
-    async fn process_issues_for_mentions(
+    /// Process all note events from the project events API, detecting bot mentions across
+    /// both issues and merge requests in a single pass.
+    async fn process_note_events(
         &self,
         project_id: i64,
-        issues: &[GitlabIssue],
-        since_timestamp: u64,
+        events: Vec<GitlabProjectEvent>,
         project: &GitlabProject,
     ) -> Result<()> {
-        if issues.is_empty() {
-            debug!(
-                "No issues to process for mentions in project ID: {}",
-                project_id
-            );
+        // Pre-filter synchronously: only non-system notes that mention the bot on issues/MRs
+        let bot_mention = format!("@{}", self.config.bot_username);
+        let mention_events: Vec<GitlabProjectEvent> = events
+            .into_iter()
+            .filter(|event| {
+                let Some(note) = &event.note else {
+                    return false;
+                };
+                !note.system
+                    && note.author.username != self.config.bot_username
+                    && note.body.contains(&bot_mention)
+                    && (note.noteable_type == "Issue" || note.noteable_type == "MergeRequest")
+            })
+            .collect();
+
+        if mention_events.is_empty() {
+            debug!("No bot mentions in note events for project {}", project_id);
             return Ok(());
         }
 
         debug!(
-            "Processing {} issues for mentions for project ID: {}",
-            issues.len(),
+            "Processing {} bot mention(s) from note events for project {}",
+            mention_events.len(),
             project_id
         );
 
         let mention_count = Arc::new(Mutex::new(0_u32));
 
-        // Process issues in parallel with controlled concurrency
-        let _issue_results: Vec<_> = stream::iter(issues.iter().cloned())
-            .map(|issue| {
+        // Process mentions in parallel with controlled concurrency
+        let _results: Vec<_> = stream::iter(mention_events.into_iter())
+            .map(|event| {
                 let gitlab_client = self.gitlab_client.clone();
                 let config = self.config.clone();
                 let processed_mentions_cache = self.processed_mentions_cache.clone();
                 let file_index_manager = self.file_index_manager.clone();
                 let project = project.clone();
                 let mention_count = mention_count.clone();
-                let log_dedup = self.log_dedup.clone();
                 async move {
-                    // Get notes for this issue
-                    match gitlab_client
-                        .get_issue_notes(project_id, issue.iid, Some(since_timestamp))
-                        .await
+                    let note_data = event.note.unwrap(); // safe: pre-filtered above
+
+                    let noteable_iid = note_data.noteable_iid.unwrap_or(0);
+                    let noteable_id = note_data.noteable_id.unwrap_or(0);
+
+                    let note_attrs = GitlabNoteAttributes {
+                        id: note_data.id,
+                        note: note_data.body.clone(),
+                        author: note_data.author.clone(),
+                        project_id,
+                        noteable_type: note_data.noteable_type.clone(),
+                        noteable_id: note_data.noteable_id,
+                        iid: Some(noteable_iid),
+                        url: note_data.url.clone(),
+                        updated_at: note_data.updated_at.clone(),
+                    };
+
+                    let noteable_obj = GitlabNoteObject {
+                        id: noteable_id,
+                        iid: noteable_iid,
+                        // title/description are not available from the events API;
+                        // downstream processing re-fetches the full issue/MR anyway.
+                        title: String::new(),
+                        description: None,
+                    };
+
+                    let gitlab_event = match note_data.noteable_type.as_str() {
+                        "Issue" => {
+                            info!(
+                                "Found mention in issue #{} note #{}",
+                                noteable_iid, note_data.id
+                            );
+                            GitlabNoteEvent {
+                                object_kind: "note".to_string(),
+                                event_type: "note".to_string(),
+                                user: note_data.author.clone(),
+                                project,
+                                object_attributes: note_attrs,
+                                issue: Some(noteable_obj),
+                                merge_request: None,
+                            }
+                        }
+                        "MergeRequest" => {
+                            info!(
+                                "Found mention in MR !{} note #{}",
+                                noteable_iid, note_data.id
+                            );
+                            GitlabNoteEvent {
+                                object_kind: "note".to_string(),
+                                event_type: "note".to_string(),
+                                user: note_data.author.clone(),
+                                project,
+                                object_attributes: note_attrs,
+                                issue: None,
+                                merge_request: Some(noteable_obj),
+                            }
+                        }
+                        _ => return,
+                    };
+
+                    *mention_count.lock().await += 1;
+
+                    if let Err(e) = process_mention(
+                        gitlab_event,
+                        gitlab_client,
+                        config,
+                        &processed_mentions_cache,
+                        file_index_manager,
+                    )
+                    .await
                     {
-                        Ok(notes) => {
-                            for note in notes {
-                                // Skip notes by the bot itself
-                                if note.author.username == config.bot_username {
-                                    continue;
-                                }
-
-                                // Check if note mentions the bot
-                                if note.note.contains(&format!("@{}", config.bot_username)) {
-                                    *mention_count.lock().await += 1;
-                                    info!(
-                                        "Found mention in issue #{} note #{}",
-                                        issue.iid, note.id
-                                    );
-
-                                    // Create a GitlabNoteEvent from the note
-                                    let event = Self::create_issue_note_event_static(
-                                        project.clone(),
-                                        note,
-                                        issue.clone(),
-                                    );
-
-                                    // Process the mention
-                                    if let Err(e) = process_mention(
-                                        event,
-                                        gitlab_client.clone(),
-                                        config.clone(),
-                                        &processed_mentions_cache,
-                                        file_index_manager.clone(),
-                                    )
-                                    .await
-                                    {
-                                        error!("Error processing mention: {}", e);
-                                    }
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            // Only log errors if we haven't logged them recently
-                            let log_key =
-                                format!("get_notes_error_issue_{}_{}", project_id, issue.iid);
-                            if log_dedup.should_log(&log_key).await {
-                                error!("Failed to get notes for issue #{}: {}", issue.iid, e);
-                            }
-                        }
+                        error!("Error processing mention: {}", e);
                     }
                 }
             })
-            .buffer_unordered(4) // Process 4 issues concurrently
+            .buffer_unordered(4)
             .collect()
             .await;
 
         let total_mentions = *mention_count.lock().await;
         if total_mentions > 0 {
             info!(
-                "Processed {} mention(s) in {} issue(s) for project {}",
-                total_mentions,
-                issues.len(),
-                project_id
+                "Processed {} mention(s) for project {}",
+                total_mentions, project_id
             );
         }
 
         Ok(())
     }
 
-    async fn poll_merge_requests(
-        &self,
-        project_id: i64,
-        since_timestamp: u64,
-        project: &GitlabProject,
-    ) -> Result<()> {
-        debug!("Polling merge requests for project ID: {}", project_id);
-
-        // Get merge requests updated since last check
-        let merge_requests = self
-            .gitlab_client
-            .get_merge_requests(project_id, since_timestamp)
-            .await?;
-
-        if merge_requests.is_empty() {
-            debug!(
-                "No merge requests to process for project ID: {}",
-                project_id
-            );
-            return Ok(());
-        }
-
-        let mention_count = Arc::new(Mutex::new(0_u32));
-
-        // Process merge requests in parallel with controlled concurrency
-        let _mr_results: Vec<_> = stream::iter(merge_requests.iter().cloned())
-            .map(|mr| {
-                let gitlab_client = self.gitlab_client.clone();
-                let config = self.config.clone();
-                let processed_mentions_cache = self.processed_mentions_cache.clone();
-                let file_index_manager = self.file_index_manager.clone();
-                let project = project.clone();
-                let mention_count = mention_count.clone();
-                let log_dedup = self.log_dedup.clone();
-                async move {
-                    // Get notes for this merge request
-                    match gitlab_client
-                        .get_merge_request_notes(project_id, mr.iid, Some(since_timestamp))
-                        .await
-                    {
-                        Ok(notes) => {
-                            for note in notes {
-                                // Skip notes by the bot itself
-                                if note.author.username == config.bot_username {
-                                    continue;
-                                }
-
-                                // Check if note mentions the bot
-                                if note.note.contains(&format!("@{}", config.bot_username)) {
-                                    *mention_count.lock().await += 1;
-                                    info!("Found mention in MR !{} note #{}", mr.iid, note.id);
-
-                                    // Create a GitlabNoteEvent from the note
-                                    let event = Self::create_mr_note_event_static(
-                                        project.clone(),
-                                        note,
-                                        mr.clone(),
-                                    );
-
-                                    // Process the mention
-                                    if let Err(e) = process_mention(
-                                        event,
-                                        gitlab_client.clone(),
-                                        config.clone(),
-                                        &processed_mentions_cache,
-                                        file_index_manager.clone(),
-                                    )
-                                    .await
-                                    {
-                                        error!("Error processing mention: {}", e);
-                                    }
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            // Only log errors if we haven't logged them recently
-                            let log_key = format!("get_notes_error_mr_{}_{}", project_id, mr.iid);
-                            if log_dedup.should_log(&log_key).await {
-                                error!("Failed to get notes for MR !{}: {}", mr.iid, e);
-                            }
-                        }
-                    }
-                }
-            })
-            .buffer_unordered(4) // Process 4 MRs concurrently
-            .collect()
-            .await;
-
-        let total_mentions = *mention_count.lock().await;
-        if total_mentions > 0 {
-            info!(
-                "Processed {} mention(s) in {} merge request(s) for project {}",
-                total_mentions,
-                merge_requests.len(),
-                project_id
-            );
-        }
-
-        Ok(())
-    }
-
-    fn create_issue_note_event_static(
-        project: GitlabProject,
-        note: GitlabNoteAttributes,
-        issue: GitlabIssue,
-    ) -> GitlabNoteEvent {
-        // Clone the author data to avoid ownership issues
-        let author = GitlabUser {
-            id: note.author.id,
-            username: note.author.username.clone(),
-            name: note.author.name.clone(),
-            avatar_url: note.author.avatar_url.clone(),
-        };
-
-        let issue_object = GitlabNoteObject {
-            id: issue.id,
-            iid: issue.iid,
-            title: issue.title.clone(),
-            description: issue.description.clone(),
-        };
-
-        GitlabNoteEvent {
-            object_kind: "note".to_string(),
-            event_type: "note".to_string(),
-            user: author,
-            project,
-            object_attributes: note,
-            issue: Some(issue_object),
-            merge_request: None,
+    /// Returns true if the stale-issue check has not run in the last 24 hours for the given project.
+    fn should_run_stale_check(&self, project_id: i64) -> bool {
+        match self.last_stale_check.get(&project_id) {
+            Some(last) => last.elapsed() >= Duration::from_secs(86_400),
+            None => true,
         }
     }
 
-    fn create_mr_note_event_static(
-        project: GitlabProject,
-        note: GitlabNoteAttributes,
-        mr: GitlabMergeRequest,
-    ) -> GitlabNoteEvent {
-        // Clone the author data to avoid ownership issues
-        let author = GitlabUser {
-            id: note.author.id,
-            username: note.author.username.clone(),
-            name: note.author.name.clone(),
-            avatar_url: note.author.avatar_url.clone(),
-        };
-
-        let mr_object = GitlabNoteObject {
-            id: mr.id,
-            iid: mr.iid,
-            title: mr.title.clone(),
-            description: mr.description.clone(),
-        };
-
-        GitlabNoteEvent {
-            object_kind: "note".to_string(),
-            event_type: "note".to_string(),
-            user: author,
-            project,
-            object_attributes: note,
-            issue: None,
-            merge_request: Some(mr_object),
-        }
+    fn update_last_stale_check(&self, project_id: i64) {
+        self.last_stale_check
+            .insert(project_id, std::time::Instant::now());
     }
 }
 

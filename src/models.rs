@@ -266,3 +266,29 @@ pub struct GitlabLabel {
     pub description: Option<String>,
     pub text_color: Option<String>,
 }
+
+/// A note object as returned inside a GitLab project event (events API).
+#[derive(Debug, Clone, Deserialize)]
+pub struct GitlabEventNote {
+    pub id: i64,
+    pub body: String,
+    pub author: GitlabUser,
+    pub created_at: String,
+    pub updated_at: String,
+    pub system: bool,
+    pub noteable_id: Option<i64>,
+    pub noteable_type: String,
+    pub noteable_iid: Option<i64>,
+    pub url: Option<String>,
+}
+
+/// An event from the GitLab project events API (`GET /projects/:id/events`).
+#[derive(Debug, Clone, Deserialize)]
+pub struct GitlabProjectEvent {
+    pub id: i64,
+    pub project_id: i64,
+    pub action_name: String,
+    pub author: GitlabUser,
+    pub created_at: String,
+    pub note: Option<GitlabEventNote>,
+}

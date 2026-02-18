@@ -14,7 +14,7 @@ use urlencoding::encode;
 use crate::config::AppSettings;
 use crate::models::{
     GitlabBranch, GitlabCommit, GitlabIssue, GitlabLabel, GitlabMergeRequest, GitlabNoteAttributes,
-    GitlabProject, GitlabSearchResult,
+    GitlabProject, GitlabProjectEvent, GitlabSearchResult,
 };
 use crate::repo_context::{GitlabDiff, GitlabFile};
 
@@ -701,6 +701,28 @@ impl GitlabApiClient {
     pub async fn get_branches(&self, project_id: i64) -> Result<Vec<GitlabBranch>, GitlabError> {
         let path = format!("/api/v4/projects/{project_id}/repository/branches");
         self.send_request(Method::GET, &path, None, None::<()>)
+            .await
+    }
+
+    /// Fetch all note (comment) events for a project since a given timestamp.
+    ///
+    /// Uses the project events API with `action=commented`, returning a single page of up to 100
+    /// events. This replaces per-issue and per-MR note fetching in the polling loop.
+    #[instrument(skip(self), fields(project_id, since_timestamp))]
+    pub async fn get_project_note_events(
+        &self,
+        project_id: i64,
+        since_timestamp: u64,
+    ) -> Result<Vec<GitlabProjectEvent>, GitlabError> {
+        let path = format!("/api/v4/projects/{project_id}/events");
+        let formatted_ts = format_timestamp(since_timestamp);
+        let query_params = &[
+            ("action", "commented"),
+            ("after", formatted_ts.as_str()),
+            ("sort", "asc"),
+            ("per_page", "100"),
+        ];
+        self.send_request(Method::GET, &path, Some(query_params), None::<()>)
             .await
     }
 
