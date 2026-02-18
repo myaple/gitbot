@@ -12,6 +12,7 @@ use crate::file_indexer::FileIndexManager;
 use crate::gitlab::{GitlabApiClient, IssueQueryOptions, LabelOperation};
 use crate::handlers::process_mention;
 use crate::log_dedup::LogDeduplicator;
+use crate::openai::OpenAIApiClient;
 use crate::mention_cache::MentionCache;
 use crate::models::{
     GitlabIssue, GitlabNoteAttributes, GitlabNoteEvent, GitlabNoteObject, GitlabProject,
@@ -22,6 +23,7 @@ use crate::triage::{triage_unlabeled_issues, TriageService};
 #[derive(Clone)]
 pub struct PollingService {
     gitlab_client: Arc<GitlabApiClient>,
+    openai_client: Arc<OpenAIApiClient>,
     config: Arc<AppSettings>,
     pub(crate) last_checked: Arc<Mutex<u64>>,
     processed_mentions_cache: MentionCache,
@@ -35,6 +37,7 @@ pub struct PollingService {
 impl PollingService {
     pub fn new(
         gitlab_client: Arc<GitlabApiClient>,
+        openai_client: Arc<OpenAIApiClient>,
         config: Arc<AppSettings>,
         file_index_manager: Arc<FileIndexManager>,
         triage_service: Option<TriageService>,
@@ -52,6 +55,7 @@ impl PollingService {
 
         Self {
             gitlab_client,
+            openai_client,
             config,
             last_checked: Arc::new(Mutex::new(initial_time)),
             processed_mentions_cache: MentionCache::new(),
@@ -350,6 +354,7 @@ impl PollingService {
         let _results: Vec<_> = stream::iter(mention_events.into_iter())
             .map(|event| {
                 let gitlab_client = self.gitlab_client.clone();
+                let openai_client = self.openai_client.clone();
                 let config = self.config.clone();
                 let processed_mentions_cache = self.processed_mentions_cache.clone();
                 let file_index_manager = self.file_index_manager.clone();
@@ -421,6 +426,7 @@ impl PollingService {
                     if let Err(e) = process_mention(
                         gitlab_event,
                         gitlab_client,
+                        openai_client,
                         config,
                         &processed_mentions_cache,
                         file_index_manager,

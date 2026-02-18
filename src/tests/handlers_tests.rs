@@ -10,6 +10,7 @@ mod tests {
         GitlabIssue, GitlabNoteAttributes, GitlabNoteEvent, GitlabNoteObject, GitlabProject,
         GitlabUser,
     };
+    use crate::openai::OpenAIApiClient;
     use chrono::{Duration as ChronoDuration, Utc};
     use mockito::Matcher;
     use serde_json::json;
@@ -213,9 +214,11 @@ mod tests {
         // Create a file index manager for the test
         let file_index_manager = Arc::new(FileIndexManager::new(gitlab_client.clone(), 3600));
 
+        let openai_client = Arc::new(OpenAIApiClient::new(&config).unwrap());
+
         // Process the mention
         let result =
-            process_mention(event, gitlab_client, config, &cache, file_index_manager).await; // Pass as reference
+            process_mention(event, gitlab_client, openai_client, config, &cache, file_index_manager).await; // Pass as reference
 
         // Should return Ok since we're ignoring comments without mentions
         assert!(result.is_ok());
@@ -255,9 +258,11 @@ mod tests {
         let gitlab_client = Arc::new(GitlabApiClient::new(Arc::new(settings.clone())).unwrap());
         let file_index_manager = Arc::new(FileIndexManager::new(gitlab_client.clone(), 3600));
 
+        let openai_client = Arc::new(OpenAIApiClient::new(&config).unwrap());
+
         // Process the mention
         let result =
-            process_mention(event, gitlab_client, config, &cache, file_index_manager).await; // Pass as reference
+            process_mention(event, gitlab_client, openai_client, config, &cache, file_index_manager).await; // Pass as reference
 
         // Should return Ok since we're ignoring comments without mentions
         assert!(result.is_ok());
@@ -434,9 +439,12 @@ mod tests {
             .await;
         let file_index_manager = Arc::new(FileIndexManager::new(gitlab_client.clone(), 3600));
 
+        let openai_client = Arc::new(OpenAIApiClient::new(&config).unwrap());
+
         let result = process_mention(
             event,
             gitlab_client.clone(),
+            openai_client,
             config.clone(),
             &cache,
             file_index_manager,
@@ -481,8 +489,10 @@ mod tests {
             .await;
         let file_index_manager = Arc::new(FileIndexManager::new(gitlab_client.clone(), 3600));
 
+        let openai_client = Arc::new(OpenAIApiClient::new(&config).unwrap());
+
         let result =
-            process_mention(event, gitlab_client, config, &cache, file_index_manager).await; // Pass as reference
+            process_mention(event, gitlab_client, openai_client, config, &cache, file_index_manager).await; // Pass as reference
 
         assert!(result.is_ok());
         m_get_notes_uncalled.expect(0).assert_async().await; // Explicitly assert not called
@@ -552,8 +562,10 @@ mod tests {
             .await;
         let file_index_manager = Arc::new(FileIndexManager::new(gitlab_client.clone(), 3600));
 
+        let openai_client = Arc::new(OpenAIApiClient::new(&config).unwrap());
+
         let result =
-            process_mention(event, gitlab_client, config, &cache, file_index_manager).await; // Pass as reference
+            process_mention(event, gitlab_client, openai_client, config, &cache, file_index_manager).await; // Pass as reference
 
         assert!(result.is_ok());
         assert!(cache.check(TEST_MENTION_ID).await); // Original mention ID added to cache
@@ -607,8 +619,10 @@ mod tests {
             .await;
         let file_index_manager = Arc::new(FileIndexManager::new(gitlab_client.clone(), 3600));
 
+        let openai_client = Arc::new(OpenAIApiClient::new(&config).unwrap());
+
         let result =
-            process_mention(event, gitlab_client, config, &cache, file_index_manager).await; // Pass as reference
+            process_mention(event, gitlab_client, openai_client, config, &cache, file_index_manager).await; // Pass as reference
 
         assert!(result.is_err());
         assert!(!cache.check(TEST_MENTION_ID).await); // Cache should NOT contain the ID
@@ -975,9 +989,12 @@ mod tests {
 
         let file_index_manager = Arc::new(FileIndexManager::new(gitlab_client.clone(), 3600));
 
+        let openai_client = Arc::new(OpenAIApiClient::new(&config).unwrap());
+
         let result = process_mention(
             event,
             gitlab_client.clone(),
+            openai_client,
             config.clone(),
             &cache,
             file_index_manager,
@@ -1144,9 +1161,12 @@ mod tests {
 
         let file_index_manager = Arc::new(FileIndexManager::new(gitlab_client.clone(), 3600));
 
+        let openai_client = Arc::new(OpenAIApiClient::new(&config).unwrap());
+
         let result = process_mention(
             event,
             gitlab_client.clone(),
+            openai_client,
             config.clone(),
             &cache,
             file_index_manager,

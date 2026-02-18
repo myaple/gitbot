@@ -893,6 +893,7 @@ struct ReplyContext<'a> {
 async fn generate_and_post_reply(
     event: &GitlabNoteEvent,
     gitlab_client: &Arc<GitlabApiClient>,
+    openai_client: &OpenAIApiClient,
     config: &Arc<AppSettings>,
     project_id: i64,
     reply_context: ReplyContext<'_>,
@@ -906,15 +907,11 @@ async fn generate_and_post_reply(
     trace!("Formatted prompt for LLM:\n{}", final_prompt_text);
     trace!("Full prompt for LLM (debug):\n{}", final_prompt_text);
 
-    // Create OpenAI client
-    let openai_client = OpenAIApiClient::new(config)
-        .map_err(|e| anyhow!("Failed to create OpenAI client: {}", e))?;
-
     // Use tool-enabled version if tool context is provided
     let llm_reply = if let Some(tool_ctx) = tool_context {
-        get_llm_reply_with_tools(&openai_client, config, &final_prompt_text, tool_ctx).await
+        get_llm_reply_with_tools(openai_client, config, &final_prompt_text, tool_ctx).await
     } else {
-        get_llm_reply(&openai_client, config, &final_prompt_text).await
+        get_llm_reply(openai_client, config, &final_prompt_text).await
     }?;
 
     // Format final comment
@@ -940,6 +937,7 @@ async fn generate_and_post_reply(
 pub async fn process_mention(
     event: GitlabNoteEvent,
     gitlab_client: Arc<GitlabApiClient>,
+    openai_client: Arc<OpenAIApiClient>,
     config: Arc<AppSettings>,
     processed_mentions_cache: &MentionCache, // Changed type
     file_index_manager: Arc<FileIndexManager>,
@@ -1015,6 +1013,7 @@ pub async fn process_mention(
     generate_and_post_reply(
         &event,
         &gitlab_client,
+        &openai_client,
         &config,
         project_id,
         reply_context,
