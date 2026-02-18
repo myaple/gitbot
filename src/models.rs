@@ -222,17 +222,26 @@ pub struct OpenAIChatResponse {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[allow(dead_code)]
 pub struct GitlabCommit {
+    #[allow(dead_code)]
     pub id: String,
+    #[allow(dead_code)]
     pub short_id: String,
+    #[allow(dead_code)]
     pub title: String,
+    #[allow(dead_code)]
     pub author_name: String,
+    #[allow(dead_code)]
     pub author_email: String,
+    #[allow(dead_code)]
     pub authored_date: String,
+    #[allow(dead_code)]
     pub committer_name: String,
+    #[allow(dead_code)]
     pub committer_email: String,
+    #[allow(dead_code)]
     pub committed_date: String,
+    #[allow(dead_code)]
     pub message: String,
 }
 
@@ -274,6 +283,7 @@ pub struct GitlabEventNote {
     pub id: i64,
     pub body: String,
     pub author: GitlabUser,
+    #[allow(dead_code)]
     pub created_at: String,
     pub updated_at: String,
     pub system: bool,
@@ -286,10 +296,15 @@ pub struct GitlabEventNote {
 /// An event from the GitLab project events API (`GET /projects/:id/events`).
 #[derive(Debug, Clone, Deserialize)]
 pub struct GitlabProjectEvent {
+    #[allow(dead_code)]
     pub id: i64,
+    #[allow(dead_code)]
     pub project_id: i64,
+    #[allow(dead_code)]
     pub action_name: String,
+    #[allow(dead_code)]
     pub author: GitlabUser,
+    #[allow(dead_code)]
     pub created_at: String,
     pub note: Option<GitlabEventNote>,
 }

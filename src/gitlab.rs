@@ -52,13 +52,13 @@ pub struct IssueQueryOptions {
 
 /// Label operation type for updating issue labels
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub enum LabelOperation {
     /// Add labels to an issue (preserves existing labels)
     Add(Vec<String>),
     /// Remove labels from an issue (preserves other labels)
     Remove(Vec<String>),
     /// Set labels on an issue (replaces all existing labels)
+    #[allow(dead_code)]
     Set(Vec<String>),
 }
 

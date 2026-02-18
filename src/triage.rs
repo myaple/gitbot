@@ -11,12 +11,14 @@ use crate::openai::{ChatRequestBuilder, OpenAIApiClient};
 
 /// Learned information about a label
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct LabelKnowledge {
     pub name: String,
+    #[allow(dead_code)]
     pub description: Option<String>,
+    #[allow(dead_code)]
     pub color: String,
     pub learned_summary: String,
+    #[allow(dead_code)]
     pub sample_issues: Vec<IssueSample>,
 }
 
