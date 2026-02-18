@@ -792,30 +792,38 @@ impl RepoContextExtractor {
 
     /// Extract keywords from issue title and description
     pub(crate) fn extract_keywords(&self, issue: &GitlabIssue) -> Vec<String> {
-        let mut text = issue.title.clone();
-        if let Some(desc) = &issue.description {
-            text.push(' ');
-            text.push_str(desc);
-        }
-
-        // Convert to lowercase and split by non-alphanumeric characters
-        let words: Vec<String> = text
-            .to_lowercase()
-            .split(|c: char| !c.is_alphanumeric())
-            .filter(|s| !s.is_empty() && s.len() > 2) // Filter out empty strings and very short words
-            .map(|s| s.to_string())
-            .collect();
-
-        // Remove common words
-        let common_words = [
+        const COMMON_WORDS: &[&str] = &[
             "the", "and", "for", "this", "that", "with", "from", "have", "not", "but", "what",
             "all", "are", "when", "your", "can", "has", "been",
         ];
 
-        words
-            .into_iter()
-            .filter(|word| !common_words.contains(&word.as_str()))
-            .collect()
+        // Allocate with a heuristic size to avoid reallocations
+        let estimated_size =
+            issue.title.len() / 5 + issue.description.as_ref().map_or(0, |d| d.len() / 10);
+        let mut keywords = Vec::with_capacity(estimated_size.min(50));
+
+        // Helper to process text without allocating
+        let mut process_text = |text: &str| {
+            for word in text.split(|c: char| !c.is_alphanumeric()) {
+                if word.len() > 2 {
+                    // Check common words efficiently without allocation
+                    let is_common = COMMON_WORDS
+                        .iter()
+                        .any(|&common| word.eq_ignore_ascii_case(common));
+
+                    if !is_common {
+                        keywords.push(word.to_lowercase());
+                    }
+                }
+            }
+        };
+
+        process_text(&issue.title);
+        if let Some(desc) = &issue.description {
+            process_text(desc);
+        }
+
+        keywords
     }
 
     /// Calculate relevance score of a file to the keywords
