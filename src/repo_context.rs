@@ -480,7 +480,7 @@ impl RepoContextExtractor {
         );
 
         let mut context_for_llm = String::new();
-        let mut context_for_comment = String::new();
+        let context_for_comment = String::new();
         let mut total_tokens = 0;
         let mut has_any_content = false;
 

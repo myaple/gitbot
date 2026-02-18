@@ -747,10 +747,7 @@ mod tests {
             "LLM context should not contain diff changes. Full: {}",
             context_llm
         );
-        assert_eq!(
-            context_comment,
-            "No commit history available for the changed files."
-        );
+        assert_eq!(context_comment, "");
         // Ensure the default "No source files or changes found..." message is NOT there because we have source files and AGENTS.md
         assert!(
             !context_llm.contains("No source files or changes found"),
