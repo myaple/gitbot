@@ -1,0 +1,19 @@
+   Compiling gitbot v0.1.0 (/app)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.18s
+     Running unittests src/main.rs (target/debug/deps/gitbot-658c8d9a94fc9785)
+
+running 12 tests
+test tests::repo_context_tests::tests::test_estimate_tokens ... ok
+test tests::repo_context_tests::tests::test_calculate_relevance_score ... ok
+test tests::repo_context_tests::tests::test_calculate_content_relevance_score ... ok
+test tests::repo_context_tests::tests::test_extract_context_for_issue_with_agents_md ... ok
+test tests::repo_context_tests::tests::test_configurable_context_lines ... ok
+test tests::repo_context_tests::tests::test_extract_keywords ... ok
+test tests::repo_context_tests::tests::test_extract_context_for_mr_with_agents_md ... ok
+test tests::repo_context_tests::tests::test_extract_context_for_issue_with_agents_md_in_context_repo ... ok
+test tests::repo_context_tests::tests::test_extract_relevant_file_sections ... ok
+test tests::repo_context_tests::tests::test_file_indexing_in_find_relevant_files_for_issue ... ok
+test tests::repo_context_tests::tests::test_weighted_file_context_formatting ... ok
+test tests::repo_context_tests::tests::test_token_usage_reduction ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 128 filtered out; finished in 0.81s

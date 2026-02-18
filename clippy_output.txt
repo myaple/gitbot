@@ -1,0 +1,50 @@
+    Checking gitbot v0.1.0 (/app)
+warning: variable does not need to be mutable
+   --> src/repo_context.rs:483:13
+    |
+483 |         let mut context_for_comment = String::new();
+    |             ----^^^^^^^^^^^^^^^^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: struct `GitlabCommit` is never constructed
+   --> src/models.rs:225:12
+    |
+225 | pub struct GitlabCommit {
+    |            ^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `created_at` is never read
+   --> src/models.rs:276:9
+    |
+272 | pub struct GitlabEventNote {
+    |            --------------- field in this struct
+...
+276 |     pub created_at: String,
+    |         ^^^^^^^^^^
+    |
+    = note: `GitlabEventNote` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: fields `id`, `project_id`, `action_name`, `author`, and `created_at` are never read
+   --> src/models.rs:288:9
+    |
+287 | pub struct GitlabProjectEvent {
+    |            ------------------ fields in this struct
+288 |     pub id: i64,
+    |         ^^
+289 |     pub project_id: i64,
+    |         ^^^^^^^^^^
+290 |     pub action_name: String,
+    |         ^^^^^^^^^^^
+291 |     pub author: GitlabUser,
+    |         ^^^^^^
+292 |     pub created_at: String,
+    |         ^^^^^^^^^^
+    |
+    = note: `GitlabProjectEvent` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: `gitbot` (bin "gitbot") generated 4 warnings (run `cargo clippy --fix --bin "gitbot" -p gitbot` to apply 1 suggestion)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 12.18s
