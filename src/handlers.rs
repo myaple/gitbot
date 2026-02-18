@@ -1512,42 +1512,41 @@ async fn extract_issue_details_and_handle_stale(
         issue_iid, project_id
     );
 
-    // Check and remove "stale" label if a user (not the bot) comments on a stale issue
-    if event.user.username != config.bot_username {
-        match gitlab_client.get_issue(project_id, issue_iid).await {
-            Ok(issue_details_for_stale_check) => {
-                if issue_details_for_stale_check
-                    .labels
-                    .iter()
-                    .any(|label| label == "stale")
-                {
-                    info!("Issue #{} has 'stale' label and received a comment from user {}. Attempting to remove 'stale' label.", issue_iid, event.user.username);
-                    match gitlab_client
-                        .update_issue_labels(
-                            project_id,
-                            issue_iid,
-                            LabelOperation::Remove(vec!["stale".to_string()]),
-                        )
-                        .await
-                    {
-                        Ok(_) => info!("Successfully removed 'stale' label from issue #{}", issue_iid),
-                        Err(e) => warn!("Failed to remove 'stale' label from issue #{}: {}. Processing will continue.", issue_iid, e),
-                    }
-                }
-            }
-            Err(e) => {
-                warn!("Failed to fetch issue details for stale check on issue #{}: {}. Stale label check will be skipped.", issue_iid, e);
-            }
-        }
-    }
-
+    // Fetch issue once; reuse for both the stale-label check and downstream processing.
     let issue = gitlab_client
         .get_issue(project_id, issue_iid)
         .await
         .map_err(|e| {
-            error!("Failed to get issue details for summary: {}", e);
+            error!("Failed to get issue details: {}", e);
             anyhow!("Failed to fetch issue details from GitLab: {}", e)
         })?;
+
+    // Check and remove "stale" label if a user (not the bot) comments on a stale issue
+    if event.user.username != config.bot_username
+        && issue.labels.iter().any(|label| label == "stale")
+    {
+        info!(
+            "Issue #{} has 'stale' label and received a comment from user {}. Attempting to remove 'stale' label.",
+            issue_iid, event.user.username
+        );
+        match gitlab_client
+            .update_issue_labels(
+                project_id,
+                issue_iid,
+                LabelOperation::Remove(vec!["stale".to_string()]),
+            )
+            .await
+        {
+            Ok(_) => info!(
+                "Successfully removed 'stale' label from issue #{}",
+                issue_iid
+            ),
+            Err(e) => warn!(
+                "Failed to remove 'stale' label from issue #{}: {}. Processing will continue.",
+                issue_iid, e
+            ),
+        }
+    }
 
     Ok((issue_iid, issue))
 }
@@ -1653,24 +1652,18 @@ pub(crate) async fn build_issue_prompt_with_context(
         ));
     }
 
-    let issue_details = context
-        .gitlab_client
-        .get_issue(context.project_id, context.issue_iid)
-        .await
-        .map_err(|e| {
-            error!("Failed to get issue details for context: {}", e);
-            anyhow!("Failed to fetch issue details from GitLab: {}", e)
-        })?;
+    // Use the already-fetched issue instead of making another get_issue call.
+    let issue = context.issue;
 
-    prompt_parts.push(format!("Title: {}", issue_details.title));
+    prompt_parts.push(format!("Title: {}", issue.title));
     prompt_parts.push(format!(
         "Description: {}",
-        issue_details.description.as_deref().unwrap_or("N/A")
+        issue.description.as_deref().unwrap_or("N/A")
     ));
 
-    prompt_parts.push(format!("State: {}", context.issue.state));
-    if !context.issue.labels.is_empty() {
-        prompt_parts.push(format!("Labels: {}", context.issue.labels.join(", ")));
+    prompt_parts.push(format!("State: {}", issue.state));
+    if !issue.labels.is_empty() {
+        prompt_parts.push(format!("Labels: {}", issue.labels.join(", ")));
     }
 
     // Add repository context
@@ -1678,7 +1671,7 @@ pub(crate) async fn build_issue_prompt_with_context(
         context.gitlab_client,
         context.config,
         context.file_index_manager,
-        context.issue,
+        issue,
         &context.event.project,
         prompt_parts,
     )
@@ -1711,7 +1704,7 @@ pub(crate) async fn build_issue_prompt_with_context(
     // Add timeline for postmortem command
     if let Some((slash_command, _)) = parse_slash_command(user_context) {
         if matches!(slash_command, SlashCommand::Postmortem) {
-            let timeline = format_incident_timeline(&issue_details, &comments);
+            let timeline = format_incident_timeline(issue, &comments);
             prompt_parts.push(timeline);
         }
     }
