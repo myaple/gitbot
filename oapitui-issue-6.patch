@@ -1,0 +1,696 @@
+From 0f9f5ee82cc8804c2c09db1050950feed8a11be7 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 3 Mar 2026 21:08:00 +0000
+Subject: [PATCH] feat: add keyboard shortcuts from issue #6
+
+- Add 'q' quit universally across all pages (endpoint list, request
+  builder, response viewer) - previously only on server list
+- Add Home/End key support on server list and endpoint list
+- Add PageUp/PageDown on server list, endpoint list, and response viewer;
+  page size is tracked from the rendered area height via Cell<u16>
+- Add endpoint list sorting with 's' key (cycles: none -> method -> path)
+  with the active sort mode shown in the title bar
+- Add curl command popup on endpoint list with 'c' key showing a template
+  curl command for the selected endpoint
+- Add save-to-file dialog on response viewer with 's' key; Enter saves
+  the response body to the typed filename
+- Update all help bars to reflect the new keybindings
+- Fix pre-existing clippy::manual_div_ceil warning in ui/mod.rs
+
+Closes #6
+---
+ crates/tui/src/app.rs                   | 119 ++++++++++++++++++++++++
+ crates/tui/src/ui/endpoint_list.rs      |  58 ++++++++++--
+ crates/tui/src/ui/mod.rs                |  29 +++++-
+ crates/tui/src/ui/response_viewer.rs    |  22 ++++-
+ crates/tui/src/ui/server_list.rs        |  19 ++--
+ crates/tui/src/views/endpoint_list.rs   |  97 +++++++++++++++++--
+ crates/tui/src/views/response_viewer.rs |  23 ++++-
+ crates/tui/src/views/server_list.rs     |  14 ++-
+ 8 files changed, 348 insertions(+), 33 deletions(-)
+
+diff --git a/crates/tui/src/app.rs b/crates/tui/src/app.rs
+index a8c48b6..51b58b3 100644
+--- a/crates/tui/src/app.rs
++++ b/crates/tui/src/app.rs
+@@ -198,6 +198,24 @@ impl App {
+                     self.server_list.selected -= 1;
+                 }
+             }
++            KeyCode::Home => {
++                self.server_list.selected = 0;
++            }
++            KeyCode::End => {
++                if n > 0 {
++                    self.server_list.selected = n - 1;
++                }
++            }
++            KeyCode::PageUp => {
++                let page = self.server_list.page_size.get().max(1) as usize;
++                self.server_list.selected = self.server_list.selected.saturating_sub(page);
++            }
++            KeyCode::PageDown => {
++                if n > 0 {
++                    let page = self.server_list.page_size.get().max(1) as usize;
++                    self.server_list.selected = (self.server_list.selected + page).min(n - 1);
++                }
++            }
+             KeyCode::Char('a') => {
+                 self.add_server = AddServerState::default();
+                 self.screen = Screen::AddServer;
+@@ -320,6 +338,15 @@ impl App {
+     fn handle_endpoint_list(&mut self, code: KeyCode) {
+         let el = &mut self.endpoint_list;
+ 
++        // Curl popup: Esc or 'c' closes it; all other keys are swallowed
++        if el.show_curl {
++            match code {
++                KeyCode::Esc | KeyCode::Char('c') => el.show_curl = false,
++                _ => {}
++            }
++            return;
++        }
++
+         // Detail panel focus: j/k scroll the detail, Tab or Esc unfocuses
+         if el.detail_focused {
+             match code {
+@@ -348,12 +375,26 @@ impl App {
+                 el.selected = 0;
+             }
+             KeyCode::Esc => self.screen = Screen::ServerList,
++            KeyCode::Char('q') if !el.filter_active => self.should_quit = true,
+             KeyCode::Char('j') | KeyCode::Down if !el.filter_active => el.next(),
+             KeyCode::Char('k') | KeyCode::Up if !el.filter_active => el.prev(),
++            KeyCode::Home if !el.filter_active => el.home(),
++            KeyCode::End if !el.filter_active => el.end(),
++            KeyCode::PageUp if !el.filter_active => el.page_up(),
++            KeyCode::PageDown if !el.filter_active => el.page_down(),
+             KeyCode::Tab if !el.filter_active => {
+                 el.detail_focused = true;
+                 el.detail_scroll = 0;
+             }
++            KeyCode::Char('s') if !el.filter_active => {
++                el.sort_mode = el.sort_mode.next();
++                el.selected = 0;
++            }
++            KeyCode::Char('c') if !el.filter_active => {
++                if el.selected_endpoint().is_some() {
++                    el.show_curl = true;
++                }
++            }
+             KeyCode::Char('/') if !el.filter_active => {
+                 el.filter_active = true;
+                 el.filter.clear();
+@@ -403,6 +444,7 @@ impl App {
+             // ── Top pane: navigating param rows ──────────────────────────────
+             FocusedPane::ParamsNav => match code {
+                 KeyCode::Esc => self.screen = Screen::EndpointList,
++                KeyCode::Char('q') => self.should_quit = true,
+                 KeyCode::Char('j') | KeyCode::Down => rb.next_row(),
+                 KeyCode::Char('k') | KeyCode::Up => rb.prev_row(),
+                 KeyCode::Char('e') => {
+@@ -506,11 +548,57 @@ impl App {
+ 
+     fn handle_response_viewer(&mut self, code: KeyCode) {
+         let rv = &mut self.response_viewer;
++
++        // Save dialog: handle filename input
++        if rv.save_dialog.is_some() {
++            match code {
++                KeyCode::Esc => rv.save_dialog = None,
++                KeyCode::Backspace => {
++                    if let Some(ref mut name) = rv.save_dialog {
++                        name.pop();
++                    }
++                }
++                KeyCode::Char(c) => {
++                    if let Some(ref mut name) = rv.save_dialog {
++                        name.push(c);
++                    }
++                }
++                KeyCode::Enter => {
++                    if let Some(ref name) = rv.save_dialog {
++                        let path = name.trim().to_string();
++                        if !path.is_empty() {
++                            if let Err(e) = std::fs::write(&path, &rv.body) {
++                                self.error = Some(format!("Failed to save '{path}': {e}"));
++                            }
++                        }
++                    }
++                    rv.save_dialog = None;
++                }
++                _ => {}
++            }
++            return;
++        }
++
+         match code {
+             KeyCode::Esc => self.screen = Screen::RequestBuilder,
++            KeyCode::Char('q') => self.should_quit = true,
+             KeyCode::Char('j') | KeyCode::Down => rv.scroll = rv.scroll.saturating_add(1),
+             KeyCode::Char('k') | KeyCode::Up => rv.scroll = rv.scroll.saturating_sub(1),
++            KeyCode::PageDown => {
++                let page = rv.page_size.get().max(1);
++                rv.scroll = rv.scroll.saturating_add(page);
++            }
++            KeyCode::PageUp => {
++                let page = rv.page_size.get().max(1);
++                rv.scroll = rv.scroll.saturating_sub(page);
++            }
++            KeyCode::Home => rv.scroll = 0,
++            KeyCode::End => {
++                let total = rv.body.lines().count() as u16;
++                rv.scroll = total.saturating_sub(rv.page_size.get());
++            }
+             KeyCode::Char('h') => rv.show_headers = !rv.show_headers,
++            KeyCode::Char('s') => rv.save_dialog = Some(String::new()),
+             _ => {}
+         }
+     }
+@@ -567,3 +655,34 @@ fn non_empty(s: &str) -> Option<String> {
+         Some(t.to_string())
+     }
+ }
++
++/// Build a template curl command for an endpoint.
++pub fn build_curl_command(server_base: &str, ep: &oapitui_openapi::Endpoint) -> String {
++    let base = server_base.trim_end_matches('/');
++    let url = format!("{base}{}", ep.path);
++
++    let mut lines: Vec<String> = vec![format!("curl -X {} \\", ep.method)];
++    lines.push(format!("  '{url}' \\"));
++
++    for param in &ep.parameters {
++        if param.location == "header" {
++            lines.push(format!("  -H '{}: <value>' \\", param.name));
++        }
++    }
++
++    if let Some(body) = &ep.request_body {
++        lines.push(format!("  -H 'Content-Type: {}' \\", body.content_type));
++        let example =
++            serde_json::to_string_pretty(&body.example).unwrap_or_else(|_| "{}".to_string());
++        // Escape single quotes in the body example
++        let escaped = example.replace('\'', "'\\''");
++        lines.push(format!("  -d '{escaped}'"));
++    } else {
++        // Remove trailing backslash from the last line
++        if let Some(last) = lines.last_mut() {
++            *last = last.trim_end_matches(" \\").to_string();
++        }
++    }
++
++    lines.join("\n")
++}
+diff --git a/crates/tui/src/ui/endpoint_list.rs b/crates/tui/src/ui/endpoint_list.rs
+index 6480b10..d7fa328 100644
+--- a/crates/tui/src/ui/endpoint_list.rs
++++ b/crates/tui/src/ui/endpoint_list.rs
+@@ -1,18 +1,26 @@
+-use crate::app::App;
++use crate::app::{build_curl_command, App};
+ use crate::theme::Theme;
+ use oapitui_openapi::Endpoint;
+ use ratatui::{
+     layout::{Constraint, Direction, Layout, Rect},
+     style::{Modifier, Style},
+     text::{Line, Span},
+-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap},
++    widgets::{
++        Block, Borders, Clear, List, ListItem, ListState, Paragraph, Scrollbar,
++        ScrollbarOrientation, ScrollbarState, Wrap,
++    },
+     Frame,
+ };
+ 
+ pub fn render(f: &mut Frame, app: &App, area: Rect) {
+     let el = &app.endpoint_list;
+ 
+-    let title = format!(" {} — Endpoints ", el.server_name);
++    let sort_label = el.sort_mode.label();
++    let title = if sort_label == "none" {
++        format!(" {} — Endpoints ", el.server_name)
++    } else {
++        format!(" {} — Endpoints  [sort: {}] ", el.server_name, sort_label)
++    };
+     let outer = Block::default()
+         .borders(Borders::ALL)
+         .title(Span::styled(title, super::title_style(&app.theme)));
+@@ -43,6 +51,9 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
+             .split(list_area)
+     };
+ 
++    // Update page_size so keyboard handler can page correctly
++    el.page_size.set(list_chunks[0].height);
++
+     let filtered = el.filtered();
+ 
+     let items: Vec<ListItem> = filtered
+@@ -144,10 +155,9 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
+         // Scrollbar on the right edge of the detail inner area
+         if total_lines > detail_inner.height {
+             let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight);
+-            let mut scrollbar_state = ScrollbarState::new(
+-                total_lines.saturating_sub(detail_inner.height) as usize,
+-            )
+-            .position(el.detail_scroll as usize);
++            let mut scrollbar_state =
++                ScrollbarState::new(total_lines.saturating_sub(detail_inner.height) as usize)
++                    .position(el.detail_scroll as usize);
+             f.render_stateful_widget(scrollbar, detail_inner, &mut scrollbar_state);
+         }
+     } else {
+@@ -157,6 +167,30 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
+         ));
+         f.render_widget(placeholder, detail_inner);
+     }
++
++    // ── Curl popup ────────────────────────────────────────────────────────────
++    if el.show_curl {
++        if let Some(ep) = filtered.get(el.selected) {
++            let curl = build_curl_command(&el.server_base, ep);
++            let lines: Vec<Line> = curl.lines().map(|l| Line::from(l.to_string())).collect();
++            let line_count = lines.len() as u16;
++            let popup_height = (line_count + 2).min(area.height.saturating_sub(4));
++            let popup_area = super::centered_rect_fixed(70, popup_height, area);
++
++            f.render_widget(Clear, popup_area);
++            let block = Block::default()
++                .borders(Borders::ALL)
++                .border_style(Style::default().fg(app.theme.border_focused))
++                .title(Span::styled(
++                    " curl command (Esc/c to close) ",
++                    super::title_style(&app.theme),
++                ));
++            let para = Paragraph::new(lines)
++                .block(block)
++                .wrap(Wrap { trim: false });
++            f.render_widget(para, popup_area);
++        }
++    }
+ }
+ 
+ fn build_detail_lines(ep: &Endpoint, theme: &Theme) -> Vec<Line<'static>> {
+@@ -283,13 +317,19 @@ fn build_detail_lines(ep: &Endpoint, theme: &Theme) -> Vec<Line<'static>> {
+         lines.push(Line::from(""));
+         lines.push(Line::from(vec![
+             Span::styled("Content-Type  ", Style::default().fg(theme.text_secondary)),
+-            Span::styled(body.content_type.clone(), Style::default().fg(theme.text_accent)),
++            Span::styled(
++                body.content_type.clone(),
++                Style::default().fg(theme.text_accent),
++            ),
+         ]));
+ 
+         if !body.description.is_empty() {
+             lines.push(Line::from(vec![
+                 Span::styled("Description   ", Style::default().fg(theme.text_secondary)),
+-                Span::styled(body.description.clone(), Style::default().fg(theme.text_primary)),
++                Span::styled(
++                    body.description.clone(),
++                    Style::default().fg(theme.text_primary),
++                ),
+             ]));
+         }
+ 
+diff --git a/crates/tui/src/ui/mod.rs b/crates/tui/src/ui/mod.rs
+index 59610f2..930a103 100644
+--- a/crates/tui/src/ui/mod.rs
++++ b/crates/tui/src/ui/mod.rs
+@@ -42,11 +42,13 @@ fn render_help_bar(f: &mut Frame, app: &App, area: Rect) {
+     let keys: &[(&str, &str)] = match app.screen {
+         Screen::ServerList => &[
+             ("↑/k↓/j", "navigate"),
++            ("PgUp/PgDn", "page"),
++            ("Home/End", "first/last"),
+             ("Enter", "open"),
+             ("a", "add"),
+             ("d", "delete"),
+             ("r", "refresh"),
+-            ("^C", "quit"),
++            ("q/^C", "quit"),
+         ],
+         Screen::AddServer => &[
+             ("Tab", "switch field"),
+@@ -55,21 +57,29 @@ fn render_help_bar(f: &mut Frame, app: &App, area: Rect) {
+         ],
+         Screen::EndpointList => &[
+             ("↑/k↓/j", "navigate"),
++            ("PgUp/PgDn", "page"),
++            ("Home/End", "first/last"),
+             ("/", "filter"),
+-            ("Tab", "focus detail"),
++            ("s", "sort"),
++            ("c", "curl"),
++            ("Tab", "detail"),
+             ("Enter", "open"),
+-            ("Esc", "back"),
++            ("q", "quit"),
+         ],
+         Screen::RequestBuilder => &[
+             ("↑/k↓/j", "navigate rows"),
+             ("e", "edit"),
+             ("Esc", "stop edit / back"),
+             ("Enter", "send"),
++            ("q", "quit"),
+         ],
+         Screen::ResponseViewer => &[
+             ("↑/k↓/j", "scroll"),
++            ("PgUp/PgDn", "page"),
++            ("Home/End", "top/bottom"),
+             ("h", "toggle headers"),
+-            ("Esc", "back"),
++            ("s", "save"),
++            ("q", "quit"),
+         ],
+     };
+ 
+@@ -96,7 +106,7 @@ fn render_error(f: &mut Frame, app: &App, area: Rect) {
+             1
+         } else {
+             err.lines()
+-                .map(|line| (line.len().max(1) + inner_width - 1) / inner_width)
++                .map(|line| line.len().max(1).div_ceil(inner_width))
+                 .sum::<usize>()
+                 .max(1)
+         };
+@@ -118,6 +128,15 @@ fn render_error(f: &mut Frame, app: &App, area: Rect) {
+     }
+ }
+ 
++/// Centered rectangle with fixed dimensions (in columns / rows).
++pub fn centered_rect_fixed(width: u16, height: u16, r: Rect) -> Rect {
++    let width = width.min(r.width);
++    let height = height.min(r.height);
++    let x = r.x + (r.width.saturating_sub(width)) / 2;
++    let y = r.y + (r.height.saturating_sub(height)) / 2;
++    Rect::new(x, y, width, height)
++}
++
+ /// Centered rectangle helper.
+ pub fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
+     let popup_layout = Layout::default()
+diff --git a/crates/tui/src/ui/response_viewer.rs b/crates/tui/src/ui/response_viewer.rs
+index 4dd1627..30cb488 100644
+--- a/crates/tui/src/ui/response_viewer.rs
++++ b/crates/tui/src/ui/response_viewer.rs
+@@ -4,7 +4,7 @@ use ratatui::{
+     layout::{Constraint, Direction, Layout, Rect},
+     style::{Modifier, Style},
+     text::{Line, Span},
+-    widgets::{Block, Borders, Paragraph, Wrap},
++    widgets::{Block, Borders, Clear, Paragraph, Wrap},
+     Frame,
+ };
+ 
+@@ -52,8 +52,28 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
+         f.render_widget(headers_widget, chunks[0]);
+ 
+         render_body(f, rv, chunks[1], &app.theme);
++        rv.page_size.set(chunks[1].height);
+     } else {
+         render_body(f, rv, inner, &app.theme);
++        rv.page_size.set(inner.height);
++    }
++
++    // ── Save-to-file dialog ───────────────────────────────────────────────────
++    if let Some(ref filename) = rv.save_dialog {
++        let popup_area = super::centered_rect_fixed(50, 5, area);
++        f.render_widget(Clear, popup_area);
++        let block = Block::default()
++            .borders(Borders::ALL)
++            .border_style(Style::default().fg(app.theme.border_focused))
++            .title(Span::styled(
++                " Save response body to file ",
++                super::title_style(&app.theme),
++            ));
++        let text = format!("Filename: {filename}_");
++        let para = Paragraph::new(text)
++            .block(block)
++            .style(Style::default().fg(app.theme.text_primary));
++        f.render_widget(para, popup_area);
+     }
+ }
+ 
+diff --git a/crates/tui/src/ui/server_list.rs b/crates/tui/src/ui/server_list.rs
+index b3b0f56..0d2c08c 100644
+--- a/crates/tui/src/ui/server_list.rs
++++ b/crates/tui/src/ui/server_list.rs
+@@ -9,9 +9,10 @@ use ratatui::{
+ };
+ 
+ pub fn render(f: &mut Frame, app: &App, area: Rect) {
+-    let block = Block::default()
+-        .borders(Borders::ALL)
+-        .title(Span::styled(" oapitui — Servers ", super::title_style(&app.theme)));
++    let block = Block::default().borders(Borders::ALL).title(Span::styled(
++        " oapitui — Servers ",
++        super::title_style(&app.theme),
++    ));
+ 
+     let inner = block.inner(area);
+     f.render_widget(block, area);
+@@ -67,6 +68,8 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
+         .highlight_style(super::selected_style(&app.theme))
+         .block(Block::default().borders(Borders::RIGHT));
+ 
++    // Update page_size so keyboard handler can page correctly
++    app.server_list.page_size.set(chunks[0].height);
+     f.render_stateful_widget(list, chunks[0], &mut list_state);
+ 
+     // --- Detail panel ---
+@@ -99,7 +102,10 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
+             header.push(Line::from(""));
+             header.push(Line::from(vec![
+                 Span::styled("Endpoints: ", bold),
+-                Span::styled(ep_count.to_string(), Style::default().fg(app.theme.text_key)),
++                Span::styled(
++                    ep_count.to_string(),
++                    Style::default().fg(app.theme.text_key),
++                ),
+             ]));
+             if let Some(refreshed) = app.last_refreshed.get(&server.name) {
+                 header.push(Line::from(vec![
+@@ -274,10 +280,7 @@ fn markdown_to_lines(input: &str, theme: &Theme) -> Vec<Line<'static>> {
+             Event::HardBreak => flush!(),
+             Event::Rule => {
+                 flush!();
+-                lines.push(Line::styled(
+-                    "─".repeat(40),
+-                    Style::default().fg(md_quote),
+-                ));
++                lines.push(Line::styled("─".repeat(40), Style::default().fg(md_quote)));
+                 lines.push(Line::from(""));
+             }
+             _ => {}
+diff --git a/crates/tui/src/views/endpoint_list.rs b/crates/tui/src/views/endpoint_list.rs
+index 247b3f1..a424bc8 100644
+--- a/crates/tui/src/views/endpoint_list.rs
++++ b/crates/tui/src/views/endpoint_list.rs
+@@ -1,6 +1,32 @@
+ use oapitui_openapi::Endpoint;
++use std::cell::Cell;
++
++#[derive(Default, Clone, Copy, PartialEq)]
++pub enum SortMode {
++    #[default]
++    None,
++    ByMethod,
++    ByPath,
++}
++
++impl SortMode {
++    pub fn next(self) -> Self {
++        match self {
++            Self::None => Self::ByMethod,
++            Self::ByMethod => Self::ByPath,
++            Self::ByPath => Self::None,
++        }
++    }
++
++    pub fn label(self) -> &'static str {
++        match self {
++            Self::None => "none",
++            Self::ByMethod => "method",
++            Self::ByPath => "path",
++        }
++    }
++}
+ 
+-#[derive(Default)]
+ pub struct EndpointListState {
+     pub endpoints: Vec<Endpoint>,
+     pub server_name: String,
+@@ -10,25 +36,44 @@ pub struct EndpointListState {
+     pub filter_active: bool,
+     pub detail_scroll: u16,
+     pub detail_focused: bool,
++    pub sort_mode: SortMode,
++    pub show_curl: bool,
++    /// Height of the visible list area — updated by the UI renderer each frame.
++    pub page_size: Cell<u16>,
+ }
+ 
+-impl EndpointListState {
+-    pub fn new(endpoints: Vec<Endpoint>, server_name: String, server_base: String) -> Self {
++impl Default for EndpointListState {
++    fn default() -> Self {
+         Self {
+-            endpoints,
+-            server_name,
+-            server_base,
++            endpoints: Vec::new(),
++            server_name: String::new(),
++            server_base: String::new(),
+             selected: 0,
+             filter: String::new(),
+             filter_active: false,
+             detail_scroll: 0,
+             detail_focused: false,
++            sort_mode: SortMode::None,
++            show_curl: false,
++            page_size: Cell::new(10),
++        }
++    }
++}
++
++impl EndpointListState {
++    pub fn new(endpoints: Vec<Endpoint>, server_name: String, server_base: String) -> Self {
++        Self {
++            endpoints,
++            server_name,
++            server_base,
++            ..Default::default()
+         }
+     }
+ 
+     pub fn filtered(&self) -> Vec<&Endpoint> {
+         let q = self.filter.to_lowercase();
+-        self.endpoints
++        let mut list: Vec<&Endpoint> = self
++            .endpoints
+             .iter()
+             .filter(|e| {
+                 q.is_empty()
+@@ -37,7 +82,15 @@ impl EndpointListState {
+                     || e.summary.to_lowercase().contains(&q)
+                     || e.tags.iter().any(|t| t.to_lowercase().contains(&q))
+             })
+-            .collect()
++            .collect();
++
++        match self.sort_mode {
++            SortMode::None => {}
++            SortMode::ByMethod => list.sort_by(|a, b| a.method.cmp(&b.method)),
++            SortMode::ByPath => list.sort_by(|a, b| a.path.cmp(&b.path)),
++        }
++
++        list
+     }
+ 
+     pub fn selected_endpoint(&self) -> Option<&Endpoint> {
+@@ -59,4 +112,32 @@ impl EndpointListState {
+             self.detail_scroll = 0;
+         }
+     }
++
++    pub fn home(&mut self) {
++        self.selected = 0;
++        self.detail_scroll = 0;
++    }
++
++    pub fn end(&mut self) {
++        let n = self.filtered().len();
++        if n > 0 {
++            self.selected = n - 1;
++            self.detail_scroll = 0;
++        }
++    }
++
++    pub fn page_up(&mut self) {
++        let page = self.page_size.get().max(1) as usize;
++        self.selected = self.selected.saturating_sub(page);
++        self.detail_scroll = 0;
++    }
++
++    pub fn page_down(&mut self) {
++        let n = self.filtered().len();
++        let page = self.page_size.get().max(1) as usize;
++        if n > 0 {
++            self.selected = (self.selected + page).min(n - 1);
++            self.detail_scroll = 0;
++        }
++    }
+ }
+diff --git a/crates/tui/src/views/response_viewer.rs b/crates/tui/src/views/response_viewer.rs
+index 481e7e9..f21d24e 100644
+--- a/crates/tui/src/views/response_viewer.rs
++++ b/crates/tui/src/views/response_viewer.rs
+@@ -1,6 +1,6 @@
+ use oapitui_client::ResponseResult;
++use std::cell::Cell;
+ 
+-#[derive(Default)]
+ pub struct ResponseViewerState {
+     pub status: u16,
+     pub elapsed_ms: u128,
+@@ -8,6 +8,25 @@ pub struct ResponseViewerState {
+     pub body: String,
+     pub scroll: u16,
+     pub show_headers: bool,
++    /// When `Some(s)`, the save-to-file dialog is open and `s` is the typed filename.
++    pub save_dialog: Option<String>,
++    /// Height of the visible body area — updated by the UI renderer each frame.
++    pub page_size: Cell<u16>,
++}
++
++impl Default for ResponseViewerState {
++    fn default() -> Self {
++        Self {
++            status: 0,
++            elapsed_ms: 0,
++            headers: Vec::new(),
++            body: String::new(),
++            scroll: 0,
++            show_headers: false,
++            save_dialog: None,
++            page_size: Cell::new(10),
++        }
++    }
+ }
+ 
+ impl ResponseViewerState {
+@@ -24,6 +43,8 @@ impl ResponseViewerState {
+             body,
+             scroll: 0,
+             show_headers: false,
++            save_dialog: None,
++            page_size: Cell::new(10),
+         }
+     }
+ }
+diff --git a/crates/tui/src/views/server_list.rs b/crates/tui/src/views/server_list.rs
+index f499cc0..3f3a2bc 100644
+--- a/crates/tui/src/views/server_list.rs
++++ b/crates/tui/src/views/server_list.rs
+@@ -1,4 +1,16 @@
+-#[derive(Default)]
++use std::cell::Cell;
++
+ pub struct ServerListState {
+     pub selected: usize,
++    /// Height of the visible list area — updated by the UI renderer each frame.
++    pub page_size: Cell<u16>,
++}
++
++impl Default for ServerListState {
++    fn default() -> Self {
++        Self {
++            selected: 0,
++            page_size: Cell::new(10),
++        }
++    }
+ }
+-- 
+2.43.0
+
